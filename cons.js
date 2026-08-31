@@ -135,7 +135,7 @@ const csNeedCfg = title => head(title, '先在「合并设置」里定合并范�
 /* ============ 合并设置 ============ */
 S['cs-set'] = () => {
   const cfg = csCfg();
-  const entOpts = sel => ENTITIES.map(e => `<option value="${e.id}" ${sel === e.id ? 'selected' : ''}>${H(e.full)}</option>`).join('');
+  const entOpts = sel => ENTITIES.filter(e => !e.off).map(e => `<option value="${e.id}" ${sel === e.id ? 'selected' : ''}>${H(e.full)}</option>`).join('');
   const rows = cfg.subs.map((s, i) => {
     // 长投参考值：母公司账上 1511 余额（多个子公司时需人工拆）
     return [H(csEntName(s.ent)), (s.share * 100).toFixed(0) + '%', money(+s.inv || 0),

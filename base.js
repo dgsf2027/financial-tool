@@ -291,22 +291,40 @@ S['bs-proj'] = () => {
 /* ============ 主体档案（主体名录维护） ============ */
 /* 主体名录从代码写死改成可维护（2026-08-31 负责人拍板）：预置只是首次种子，
    之后以 fsc_entities_v1 为准。规矩照科目/账户台账的惯例：
-   - id 是数据的根（所有存储键都拼着它），建了就不许改；删过的 id 序号不复用
-   - 有数据的主体不许删，只能停用——停用不进主体下拉，数据原样保留
+   - id 是数据的根（所有存储键都拼着它），建了就不许改
+   - 有数据的主体不许删，只能停用——停用不进各处主体下拉，数据原样保留
    - 删除只对「一处数据都没有」的主体开放 */
 const ENT_ADM = { edit: '' };
+/* 存储键里的固定段——新主体 id 撞上任何一个，entHasData 的 `_<id>_` 匹配
+   会把全公司的数据都算到它头上（比如 id 取 'ar' 会命中 fsc_rec_ar_e05_v1 里的 _ar_） */
+const ENT_RESERVED = new Set(['ar', 'ap', 'hx', 'rec', 'cfg', 'cust', 'supp', 'dept', 'staff', 'proj',
+  'dim', 'iv', 'in', 'out', 'noinv', 'prof', 'adj', 'iit', 'fa', 'vch', 'pay', 'emp', 'sal',
+  'rset', 'rules', 't1', 't2', 't3', 't4', 'cur', 'ac', 'cons', 'reg', 'entities', 'accounts',
+  'daily', 'balsrc', 'txns', 'log', 'tpl', 'data']);
 function entHasData(id) {
   let n = 0;
   for (let i = 0; i < localStorage.length; i++) {
     const k = localStorage.key(i);
     if (k && k.startsWith('fsc_') && k.includes('_' + id + '_')) n++;
   }
+  // localStorage 键之外还有三处「该主体的数据」，漏了会在鲜浏览器上把 youqi 都放行删掉：
+  // ①代码内置规则集 ②T1 账户台账（按主体全称挂）③合并范围配置
+  try { if (typeof RULE_SETS !== 'undefined' && RULE_SETS[id]) n++; } catch (e) { /* 忽略 */ }
+  try {
+    const full = (ENTITIES.find(x => x.id === id) || {}).full;
+    if (full && typeof T1_ACC !== 'undefined' && T1_ACC.some(a => a.ent === full)) n++;
+  } catch (e) { /* 忽略 */ }
+  try {
+    const cc = localStorage.getItem('fsc_cons_cfg_v1');
+    if (cc && cc.includes('"' + id + '"')) n++;
+  } catch (e) { /* 忽略 */ }
   return n;
 }
 function entNextId() {
-  let max = 25;   // 预置到 e25，从 e26 起顺延；扫全量防删号复用
+  // 扫现存最大序号 +1。只防「现存主体」撞号——删掉的零数据主体序号可能复用（它名下本就没数据，无害）
+  let max = 0;
   ENTITIES.forEach(e => { const m = /^e(\d+)$/.exec(e.id); if (m) max = Math.max(max, +m[1]); });
-  return 'e' + String(max + 1).padStart(2, '0');
+  return 'e' + String(Math.max(max, 25) + 1).padStart(2, '0');
 }
 S['p-entity'] = () => {
   const list = ENTITIES;
@@ -335,7 +353,7 @@ S['p-entity'] = () => {
       x.off ? pill('停用', 'wa') : pill('在管', 'ok'),
       `<button class="btn sm" data-enedit="${H(x.id)}">编辑</button>
        ${x.off ? `<button class="btn sm" data-enon="${H(x.id)}">启用</button>` : `<button class="btn sm" data-enoff="${H(x.id)}">停用</button>`}
-       ${!n ? `<button class="btn sm" data-endel="${H(x.id)}">删除</button>` : ''}`,
+       <button class="btn sm" data-endel="${H(x.id)}">删除</button>`,
     ];
   });
   return head('主体档案', `全集团主体名录：新主体在这里加，右上角主体下拉、T2、往来对账等所有按主体的功能立即可用。<b>有数据的主体不能删，只能停用</b>（数据保留，下拉里不再出现）。`, '基础 · 主体',
@@ -346,8 +364,9 @@ S['p-entity'] = () => {
       { k: '停用', v: String(list.length - onN), u: '个', t: (list.length - onN) ? 'w' : '' },
       { k: '有数据的主体', v: String(list.filter(x => entHasData(x.id)).length), u: '个' },
     ])
-    + `<div class="note"><b>主体编号是数据的根</b>（台账/凭证/名册的存储都按它隔离），建好就不能改；
-      「数据」列统计该主体名下的存储项数——有一处都不许删，防误删带走整套账。停用的主体随时可启用，数据原样都在。</div>`
+    + `<div class="note"><b>主体编号是数据的根</b>（台账/凭证/名册的存储都按它隔离），建好就不能改。
+      无数据的主体一键删除；<b>有数据的主体也能删，但会连名下数据一起彻底删掉</b>——要先看清数据清单、再手输主体全称双重确认，删了找不回来。
+      只是不想让它出现在下拉里的话，用「停用」：数据原样保留，随时启用。</div>`
     + form
     + card('主体名录', table(
       [{ t: '编号' }, { t: '主体全称' }, { t: '业务线' }, { t: '数据' }, { t: '状态' }, { t: '' }], rows));
@@ -375,13 +394,39 @@ document.addEventListener('click', e => {
   if (dl) {
     const x = ENTITIES.find(v => v.id === dl.dataset.endel);
     if (!x) return;
+    const done = why => {
+      entSaveAll(ENTITIES.filter(v => v.id !== x.id));
+      if (CUR_ENT === x.id) pickEnt('');
+      if (ENT_ADM.edit === x.id) ENT_ADM.edit = '';
+      toast(why, 5600); go('p-entity');
+    };
     const n = entHasData(x.id);
-    if (n) { toast(`「${x.full}」名下有 ${n} 处数据，不能删，只能停用`); return; }
-    if (!confirm(`确认删除主体「${x.full}」（${x.id}）？它名下没有任何数据。`)) return;
-    entSaveAll(ENTITIES.filter(v => v.id !== x.id));
-    if (CUR_ENT === x.id) pickEnt('');
-    if (ENT_ADM.edit === x.id) ENT_ADM.edit = '';
-    toast('已删除'); go('p-entity'); return;
+    if (!n) {
+      if (!confirm(`确认删除主体「${x.full}」（${x.id}）？它名下没有任何数据。`)) return;
+      done('已删除'); return;
+    }
+    // 有数据也允许删（2026-08-31 负责人要求），但要看清删什么 + 手输全称双确认——
+    // 删的是这套账本身，手滑没有回头路
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('fsc_') && k.includes('_' + x.id + '_')) keys.push(k);
+    }
+    let t1n = 0;
+    try { if (typeof T1_ACC !== 'undefined') t1n = T1_ACC.filter(a => a.ent === x.full).length; } catch (e2) { /* 忽略 */ }
+    if (!confirm(`「${x.full}」名下有 ${keys.length} 处存储数据${t1n ? `、T1 台账 ${t1n} 个账户` : ''}。\n\n要连同这些数据一起彻底删除吗？删了找不回来。\n（只是不想让它出现在下拉里的话，用「停用」就够了，数据能保住）`)) return;
+    const typed = prompt(`危险操作最后确认：请原样输入主体全称\n${x.full}`);
+    if (typed === null) return;
+    if (typed.trim() !== x.full) { toast('输入的全称对不上，没有删'); return; }
+    keys.forEach(k => { try { localStorage.removeItem(k); } catch (e2) { /* 忽略 */ } });
+    try {
+      if (t1n && typeof T1_ACC !== 'undefined') {
+        T1_ACC = T1_ACC.filter(a => a.ent !== x.full);
+        if (typeof t1SaveAcc === 'function') t1SaveAcc(T1_ACC);
+      }
+    } catch (e2) { /* 忽略 */ }
+    done(`已彻底删除「${x.full}」及其 ${keys.length} 处数据${t1n ? `、${t1n} 个 T1 账户` : ''}`);
+    return;
   }
   const a0 = e.target.closest('[data-act]');
   if (a0 && a0.dataset.act === 'enCancel') { ENT_ADM.edit = ''; go('p-entity'); return; }
@@ -393,16 +438,28 @@ document.addEventListener('click', e => {
       const x = ENTITIES.find(v => v.id === ENT_ADM.edit);
       if (x) {
         if (ENTITIES.some(v => v.id !== x.id && v.full === full)) { toast('已有同名主体：' + full); return; }
+        const oldFull = x.full;
         x.full = full; x.line = line;
         entSaveAll(ENTITIES); ENT_ADM.edit = '';
+        // T1 账户台账按「主体全称」挂账户（T2 认户、资金日报都靠字字相同）——
+        // 改名必须把台账里的旧全称一起改掉，否则该主体的账户全部失联
+        let nAcc = 0;
+        try {
+          if (oldFull !== full && typeof T1_ACC !== 'undefined') {
+            T1_ACC.forEach(a => { if (a.ent === oldFull) { a.ent = full; nAcc++; } });
+            if (nAcc && typeof t1SaveAcc === 'function') t1SaveAcc(T1_ACC);
+          }
+        } catch (e) { /* 忽略 */ }
         renderEntBar();   // 顶栏显示的当前主体名可能改了
-        toast('已保存'); go('p-entity'); return;
+        toast('已保存' + (nAcc ? `；T1 台账 ${nAcc} 个账户的主体名已同步` : ''), nAcc ? 5200 : 2600);
+        go('p-entity'); return;
       }
       ENT_ADM.edit = '';
     }
     let id = (($('enId') || {}).value || '').trim().toLowerCase();
     if (!id) id = entNextId();
     else if (!/^[a-z][a-z0-9]{1,15}$/.test(id)) { toast('编号要小写字母开头、字母数字 2-16 位，如 ' + entNextId()); return; }
+    if (ENT_RESERVED.has(id)) { toast('「' + id + '」是系统保留字（会跟存储键撞车），换一个，比如 ' + entNextId()); return; }
     if (ENTITIES.some(v => v.id === id)) { toast('编号已存在：' + id); return; }
     if (ENTITIES.some(v => v.full === full)) { toast('已有同名主体：' + full); return; }
     entSaveAll(ENTITIES.concat([{ id, full, line }]));

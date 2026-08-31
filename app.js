@@ -830,7 +830,7 @@ S['tool-rules'] = () => {
   if (!CUR_ENT) {
     return head('规则库', '规则库<b>按主体隔离</b>——不同主体业务不同，共用一套规则必然记错账。', '工具箱 · T2')
       + `<div class="note"><b>请先在顶栏选一个主体。</b>选好之后在这里维护它的科目表与规则。</div>`
-      + `<div class="tgrid">${ENTITIES.map(e => { const s = loadRSet(e.id); return `
+      + `<div class="tgrid">${ENTITIES.filter(e => !e.off).map(e => { const s = loadRSet(e.id); return `
           <button class="tcard ${s ? '' : 'soon'}" data-useent="${e.id}">
           <span class="tc-h"><span class="tc-n">${H(entShort(e))}</span><span class="tc-sp"></span>
           <span class="tc-sv">${s ? s.rules.length : 0}<small> 条规则</small></span></span>
@@ -1203,7 +1203,7 @@ function t2Step2() {
     ${cardp('这批流水属于', `
       <div class="cols c2">
         <div><div class="field"><label class="fl">主体 <span class="red">*</span></label>
-          <select id="entSel2"><option value="">— 请选择 —</option>${ENTITIES.map(e => `<option value="${e.id}" ${T2.entId === e.id ? 'selected' : ''}>${e.full}${RULE_SETS[e.id] ? '' : '（无规则库）'}</option>`).join('')}</select></div>
+          <select id="entSel2"><option value="">— 请选择 —</option>${ENTITIES.filter(e => !e.off).map(e => `<option value="${e.id}" ${T2.entId === e.id ? 'selected' : ''}>${H(e.full)}${RULE_SETS[e.id] ? '' : '（无规则库）'}</option>`).join('')}</select></div>
           <div class="field"><label class="fl">业务线</label>
           <select id="lineSel"><option value="">— 不指定 —</option>${LINES.map(e => `<option ${T2.line === e ? 'selected' : ''}>${e}</option>`).join('')}</select></div>
           <div class="field"><label class="fl">默认项目（摘要与户名都认不出时用）</label>
