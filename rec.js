@@ -140,7 +140,7 @@ S['p-rec-ar'] = () => {
     `<button class="btn sm" data-recedit="${H(x.id)}">编辑</button>
      <button class="btn sm" data-recdel="${H(x.id)}">删除</button>`,
   ]);
-  return head('应收账款台账', `${H(entName())} · 期末余额 = 期初 + 本期应收 − 本期收款；核销状态与逾期标志按数字现算，不用手填。收到款就编辑那张单、改「本期收款」。`, '往来对账',
+  return head('应收账款台账', `${H(entName())} · 期末余额 = 期初 + 本期应收 − 本期收款；逾期标志按数字现算，不用手填。收到款就编辑那张单、改「本期收款」；核销去「应收及应付核销」页做。`, '往来对账',
     `<button class="btn" data-act="recTpl">下载模板</button>
      <button class="btn" data-act="recUp">导入台账(Excel)</button>
      <button class="btn" data-go="p-rec-ap">应付台账</button>
@@ -248,7 +248,9 @@ S['p-rec-ap'] = () => {
       recDueOk(x) ? H(x.due) : (x.due ? `<span class="red" title="${H(x.due)}">无效日期</span>` : '<span class="red">未填</span>'),
       H(x.ccy || 'RMB'),
       money(+x.open || 0), money(+x.ap || 0), money(+x.pay || 0), money(+x.offset || 0),
-      `<b>${money(recApEnd(x))}</b>`, unhx > 0.005 ? money(unhx) : `<span class="mut">${money(Math.max(0, unhx))}</span>`,
+      `<b>${money(recApEnd(x))}</b>`,
+      unhx < -0.005 ? `<b class="red" title="已核销累计超过原币余额——多半是导入覆盖调小了金额，去核销页撤多余的">超核 ${money(-unhx)}</b>`
+        : unhx > 0.005 ? money(unhx) : `<span class="mut">${money(0)}</span>`,
       H(recAgeBand(x.date)), H(x.buyer || '—'),
       `<button class="btn sm" data-apedit="${H(x.id)}">编辑</button>
        <button class="btn sm" data-apdel="${H(x.id)}">删除</button>`,
@@ -319,7 +321,7 @@ S['p-rec-hx'] = () => {
     + kpis([
       { k: (isAp ? '待核销单据' : '待核销单据'), v: String(docs.length), u: '张' },
       { k: '原币余额合计', v: money(tGross) },
-      { k: '已核销累计合计', v: money(tDone), t: tDone > 0.005 ? 'g' : '' },
+      { k: '本页单据已核销', v: money(tDone), d: '核满的单不在本页', t: tDone > 0.005 ? 'g' : '' },
       { k: '未核销合计', v: money(+(tGross - tDone).toFixed(2)), t: (tGross - tDone) > 0.005 ? 'w' : 'g' },
     ])
     + card((isAp ? '应付' : '应收') + '核销台账（只列还没核完的单据）', rows.length ? table(
@@ -447,7 +449,7 @@ document.addEventListener('click', e => {
   const dl = e.target.closest('[data-recdel]');
   if (dl && CUR_ENT) {
     const list = recLoad(); const x = list.find(v => v.id === dl.dataset.recdel);
-    if (!x || !confirm(`确认删除单据 ${x.no || ''}（${x.name}）？`)) return;
+    if (!x || !confirm(`确认删除单据 ${x.no || ''}（${x.name}）？其核销记录保留在核销页可撤。`)) return;
     if (RECV.edit === x.id) RECV.edit = '';   // 正在编辑的单被删，编辑态一起清，防吞掉后续新增
     recSave(list.filter(v => v.id !== x.id));
     toast('已删除'); go('p-rec-ar'); return;
@@ -596,15 +598,16 @@ document.addEventListener('click', e => {
     const kind = RECV.hxKind === 'ap' ? 'ap' : 'ar';
     const docs = kind === 'ap' ? recApLoad() : recLoad();
     const flows = recHxLoad();
-    let n = 0, tot = 0;
+    let n = 0, tot = 0, neg = 0, gone = 0;
     const bad = [];
     const pend = [];
     document.querySelectorAll('[data-hxamt]').forEach(inp => {
       const amt = +(+inp.value || 0).toFixed(2);
-      if (amt <= 0) return;
+      if (amt < 0) { neg++; return; }   // 跳过要说出来，静默跳与整批拒绝的哲学不符
+      if (amt === 0) return;
       const id = inp.dataset.hxamt;
       const x = docs.find(y => y.id === id);
-      if (!x) return;
+      if (!x) { gone++; return; }
       const left = +(recGross(kind, x) - recHxSum(kind, x.id)).toFixed(2);
       if (amt > left + 0.005) { bad.push(`${x.name || ''} 超核 ${money(+(amt - left).toFixed(2))}`); return; }
       const memoEl = document.querySelector(`[data-hxmemo="${id}"]`);
@@ -613,6 +616,7 @@ document.addEventListener('click', e => {
     });
     // 有超核行就整批不存——存一半会让「保存成功」掩盖没存进去的那几行
     if (bad.length) { toast('有行超过核销后余额，本次全部未保存：' + bad.join('；'), 6800); return; }
+    if (neg || gone) { toast(`有 ${neg + gone} 行没法核（${neg ? '金额为负 ' + neg + ' 行' : ''}${neg && gone ? '、' : ''}${gone ? '单据已不存在 ' + gone + ' 行' : ''}），本次全部未保存`, 6200); return; }
     if (!n) { toast('没有填本次核销金额'); return; }
     recHxSave(flows.concat(pend));
     toast(`已核销 ${n} 笔、合计 ${money(tot)}`, 4600); go('p-rec-hx'); return;
