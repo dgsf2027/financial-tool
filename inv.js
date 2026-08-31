@@ -621,7 +621,7 @@ S['iv-portal'] = () => head('电子税务局', '报税直达。本系统的申�
    工资基数 = 本月 2211 应付职工薪酬贷方发生（计提数）
             + 名称含「工资/薪酬」的费用科目借方发生（未走计提、直接进费用的部分）
    这条数就是利润表「管理费用」里的工资，申报、报表、账三处永远一个数。
-   逐人明细系统里没有（没有员工档案），在官方端做——页面只备底数与勾稽。 */
+   逐人算税在「员工与工资表」页（pay.js）或官方扣缴端做——本页只备底数与勾稽。 */
 function ivWageBase(m) {
   const a = m + '-01';
   const b = m + '-' + String(new Date(+m.slice(0, 4), +m.slice(5, 7), 0).getDate()).padStart(2, '0');
@@ -652,7 +652,8 @@ const ivTieNote = w => `<div class="note"><b>与三大报表的勾稽：</b>本�
 /* 扣缴端申报数导入（学自澳乐 2026-01〜07 真实《综合所得预扣预缴申报明细表》）：
    自然人电子税务局导出的明细逐人逐月，列含 税款所属期（202607）/姓名/所得项目/本期收入/…。
    这里只按月汇总「人数 + 本期收入合计」留存，同月重复导入=覆盖；
-   逐人明细（姓名/证照号）不进 localStorage——系统没有员工档案，隐私数据不落盘。 */
+   逐人明细（姓名/证照号）不进本页的留存——员工档案在「员工与工资表」页
+   单独维护（也只存本机 localStorage），本页导入的申报明细只留月度汇总。 */
 const IV_IIT_KEY = e => 'fsc_iv_iit_' + e + '_v1';
 function ivIitLoad() { try { return JSON.parse(localStorage.getItem(IV_IIT_KEY(CUR_ENT)) || '{}'); } catch (e) { return {}; } }
 async function ivIitImport(file) {

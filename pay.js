@@ -80,14 +80,17 @@ async function payImport(file) {
       const name = g('name'); if (!name) return;
       let e = emps.find(x => x.name === name);
       if (!e) { e = { id: uid(), name, idno: g('idno'), dept: g('dept'), on: 1 }; emps.push(e); nEmp++; }
-      else if (!e.idno && g('idno')) e.idno = g('idno');
+      else {
+        if (!e.idno && g('idno')) e.idno = g('idno');
+        if (!e.on) { e.on = 1; nEmp++; }   // 移除过的人重新出现在工资表里 = 重新在职
+      }
       if (sal[e.id]) dup++;
       sal[e.id] = { gross: numOf(g('gross')), pension: numOf(g('pension')), medical: numOf(g('medical')),
         unemp: numOf(g('unemp')), fund: numOf(g('fund')), sf: numOf(g('sf')), other: numOf(g('other')) };
       nSal++;
     });
     payEmpSave(emps); paySalSave(IV.month, sal);
-    toast(`导入 ${IV.month} 工资表：${nSal} 人` + (nEmp ? `（新增员工 ${nEmp}）` : '') + (dup ? `，覆盖已有 ${dup} 人` : ''), 5200);
+    toast(`导入 ${IV.month} 工资表：${nSal} 人` + (nEmp ? `（新增/恢复员工 ${nEmp}）` : '') + (dup ? `，覆盖已有 ${dup} 人` : ''), 5200);
     go('iv-pay');
   } catch (e) { toast('读取失败：' + e.message, 4200); }
 }
@@ -176,12 +179,26 @@ document.addEventListener('click', e => {
   }
   if (act === 'payVch') {
     const sal = harvest();
-    const total = +Object.values(sal).reduce((s, x) => s + (+x.gross || 0), 0).toFixed(2);
+    // 只算在册员工——移除是软删，全量求和会让凭证金额悄悄大于页面合计和导出模板
+    const on = new Set(payEmp().filter(x => x.on).map(x => x.id));
+    const ids = Object.keys(sal).filter(k => on.has(k) && +sal[k].gross > 0);
+    const total = +ids.reduce((s, k) => s + (+sal[k].gross || 0), 0).toFixed(2);
     if (!total) { toast('工资表是空的'); return; }
-    const memo = IV.month + ' 工资计提（工资表 ' + Object.keys(sal).filter(k => sal[k].gross).length + ' 人）';
+    const memo = IV.month + ' 工资计提（工资表 ' + ids.length + ' 人）';
+    // 科目必须带「工资」字样：ivWageBase 的勾稽只认名字含 工资|薪酬|薪金 的费用科目，
+    // 挂 5602 管理费用会让本页与个税页的账-报勾稽永远闭不上。
+    // 主体科目表里没有这两个末级时先自建——否则 acctName 查不到名（rptNet 的
+    // 聚合名又会截掉「_工资」后缀），标准表主体的勾稽还是闭不上
+    if (typeof bsFind === 'function' && typeof saveRSet === 'function') {
+      if (!RS) RS = initRSet(CUR_ENT);
+      let added = 0;
+      if (!bsFind('560209')) { RS.accounts.push(['560209', '管理费用_工资']); added++; }
+      if (!bsFind('221101')) { RS.accounts.push(['221101', '应付职工薪酬_工资']); added++; }
+      if (added) saveRSet(CUR_ENT, RS);
+    }
     ivPushVoucher('__pay_' + IV.month + '__', ivMonthEnd(IV.month), [
-      IVL('5602', '管理费用', total, 0, memo),
-      IVL('2211', '应付职工薪酬', 0, total, memo)]);
+      IVL('560209', '管理费用_工资', total, 0, memo),
+      IVL('221101', '应付职工薪酬_工资', 0, total, memo)]);
     return;
   }
   if (act === 'payExp') {
