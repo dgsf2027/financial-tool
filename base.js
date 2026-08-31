@@ -288,6 +288,133 @@ S['bs-proj'] = () => {
       : `<div style="padding:26px;text-align:center;color:var(--text-3)">还没有项目</div>`);
 };
 
+/* ============ 主体档案（主体名录维护） ============ */
+/* 主体名录从代码写死改成可维护（2026-08-31 负责人拍板）：预置只是首次种子，
+   之后以 fsc_entities_v1 为准。规矩照科目/账户台账的惯例：
+   - id 是数据的根（所有存储键都拼着它），建了就不许改；删过的 id 序号不复用
+   - 有数据的主体不许删，只能停用——停用不进主体下拉，数据原样保留
+   - 删除只对「一处数据都没有」的主体开放 */
+const ENT_ADM = { edit: '' };
+function entHasData(id) {
+  let n = 0;
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith('fsc_') && k.includes('_' + id + '_')) n++;
+  }
+  return n;
+}
+function entNextId() {
+  let max = 25;   // 预置到 e25，从 e26 起顺延；扫全量防删号复用
+  ENTITIES.forEach(e => { const m = /^e(\d+)$/.exec(e.id); if (m) max = Math.max(max, +m[1]); });
+  return 'e' + String(max + 1).padStart(2, '0');
+}
+S['p-entity'] = () => {
+  const list = ENTITIES;
+  const editing = ENT_ADM.edit ? list.find(x => x.id === ENT_ADM.edit) : null;
+  const e0 = editing || {};
+  const onN = list.filter(x => !x.off).length;
+  const form = cardp(editing ? `编辑主体 ${H(editing.id)}` : '新增主体', `
+    <div class="cols c4">
+      <div class="field"><label class="fl">主体编号${editing ? '（不可改——所有数据都挂在它上）' : '（空=自动编号，或小写字母数字 2-16 位）'}</label>
+        <input id="enId" value="${H(e0.id || '')}" ${editing ? 'disabled' : ''} placeholder="如 ${entNextId()}"></div>
+      <div class="field"><label class="fl">主体全称 *</label>
+        <input id="enFull" value="${H(e0.full || '')}" placeholder="如：广州XX科技有限公司"></div>
+      <div class="field"><label class="fl">业务线（选填）</label>
+        <input id="enLine" value="${H(e0.line || '')}" placeholder="如：出租屋 / 电商"></div>
+    </div>
+    <div style="text-align:right;margin-top:9px">
+      ${editing ? '<button class="btn" data-act="enCancel">取消</button> ' : ''}
+      <button class="btn pri" data-act="enSave">${editing ? '保存修改' : '新增主体'}</button></div>`);
+  const rows = list.map(x => {
+    const n = entHasData(x.id);
+    return [
+      `<span class="code">${H(x.id)}</span>`,
+      `<span style="${x.off ? 'text-decoration:line-through;color:var(--text-3)' : ''}">${H(x.full)}</span>${x.id === CUR_ENT ? ' ' + pill('当前', 'ok') : ''}`,
+      H(x.line || '—'),
+      n ? pill(`${n} 处数据`, 'ok') : '<span class="mut">无数据</span>',
+      x.off ? pill('停用', 'wa') : pill('在管', 'ok'),
+      `<button class="btn sm" data-enedit="${H(x.id)}">编辑</button>
+       ${x.off ? `<button class="btn sm" data-enon="${H(x.id)}">启用</button>` : `<button class="btn sm" data-enoff="${H(x.id)}">停用</button>`}
+       ${!n ? `<button class="btn sm" data-endel="${H(x.id)}">删除</button>` : ''}`,
+    ];
+  });
+  return head('主体档案', `全集团主体名录：新主体在这里加，右上角主体下拉、T2、往来对账等所有按主体的功能立即可用。<b>有数据的主体不能删，只能停用</b>（数据保留，下拉里不再出现）。`, '基础 · 主体',
+    `<button class="btn pri" data-act="enExp">导出名录</button>`)
+    + kpis([
+      { k: '主体总数', v: String(list.length), u: '个' },
+      { k: '在管', v: String(onN), u: '个', t: 'g' },
+      { k: '停用', v: String(list.length - onN), u: '个', t: (list.length - onN) ? 'w' : '' },
+      { k: '有数据的主体', v: String(list.filter(x => entHasData(x.id)).length), u: '个' },
+    ])
+    + `<div class="note"><b>主体编号是数据的根</b>（台账/凭证/名册的存储都按它隔离），建好就不能改；
+      「数据」列统计该主体名下的存储项数——有一处都不许删，防误删带走整套账。停用的主体随时可启用，数据原样都在。</div>`
+    + form
+    + card('主体名录', table(
+      [{ t: '编号' }, { t: '主体全称' }, { t: '业务线' }, { t: '数据' }, { t: '状态' }, { t: '' }], rows));
+};
+
+/* ============ 主体档案事件 ============ */
+document.addEventListener('click', e => {
+  const ed = e.target.closest('[data-enedit]');
+  if (ed) { ENT_ADM.edit = ed.dataset.enedit; go('p-entity'); return; }
+  const off = e.target.closest('[data-enoff]');
+  if (off) {
+    const x = ENTITIES.find(v => v.id === off.dataset.enoff);
+    if (!x || !confirm(`停用「${x.full}」？它不再出现在主体下拉里，数据原样保留，随时可启用。`)) return;
+    x.off = 1; entSaveAll(ENTITIES);
+    if (CUR_ENT === x.id) { pickEnt(''); }   // 停的是当前主体 → 切到未选
+    toast('已停用'); go('p-entity'); return;
+  }
+  const on = e.target.closest('[data-enon]');
+  if (on) {
+    const x = ENTITIES.find(v => v.id === on.dataset.enon);
+    if (x) { delete x.off; entSaveAll(ENTITIES); toast('已启用'); }
+    go('p-entity'); return;
+  }
+  const dl = e.target.closest('[data-endel]');
+  if (dl) {
+    const x = ENTITIES.find(v => v.id === dl.dataset.endel);
+    if (!x) return;
+    const n = entHasData(x.id);
+    if (n) { toast(`「${x.full}」名下有 ${n} 处数据，不能删，只能停用`); return; }
+    if (!confirm(`确认删除主体「${x.full}」（${x.id}）？它名下没有任何数据。`)) return;
+    entSaveAll(ENTITIES.filter(v => v.id !== x.id));
+    if (CUR_ENT === x.id) pickEnt('');
+    if (ENT_ADM.edit === x.id) ENT_ADM.edit = '';
+    toast('已删除'); go('p-entity'); return;
+  }
+  const a0 = e.target.closest('[data-act]');
+  if (a0 && a0.dataset.act === 'enCancel') { ENT_ADM.edit = ''; go('p-entity'); return; }
+  if (a0 && a0.dataset.act === 'enSave') {
+    const full = (($('enFull') || {}).value || '').trim();
+    if (!full) { toast('主体全称不能为空'); return; }
+    const line = (($('enLine') || {}).value || '').trim();
+    if (ENT_ADM.edit) {
+      const x = ENTITIES.find(v => v.id === ENT_ADM.edit);
+      if (x) {
+        if (ENTITIES.some(v => v.id !== x.id && v.full === full)) { toast('已有同名主体：' + full); return; }
+        x.full = full; x.line = line;
+        entSaveAll(ENTITIES); ENT_ADM.edit = '';
+        renderEntBar();   // 顶栏显示的当前主体名可能改了
+        toast('已保存'); go('p-entity'); return;
+      }
+      ENT_ADM.edit = '';
+    }
+    let id = (($('enId') || {}).value || '').trim().toLowerCase();
+    if (!id) id = entNextId();
+    else if (!/^[a-z][a-z0-9]{1,15}$/.test(id)) { toast('编号要小写字母开头、字母数字 2-16 位，如 ' + entNextId()); return; }
+    if (ENTITIES.some(v => v.id === id)) { toast('编号已存在：' + id); return; }
+    if (ENTITIES.some(v => v.full === full)) { toast('已有同名主体：' + full); return; }
+    entSaveAll(ENTITIES.concat([{ id, full, line }]));
+    toast(`已新增主体 ${full}（${id}），右上角下拉即可选用`, 5200); go('p-entity'); return;
+  }
+  if (a0 && a0.dataset.act === 'enExp') {
+    download('主体名录.csv', toCSV([['编号', '主体全称', '业务线', '状态', '数据项数']]
+      .concat(ENTITIES.map(x => [x.id, x.full, x.line || '', x.off ? '停用' : '在管', entHasData(x.id)]))));
+    toast('已导出'); return;
+  }
+});
+
 /* ============ 客商/项目事件 ============ */
 document.addEventListener('click', e => {
   const kindOf = () => (CURS === 'bs-cust' ? 'cust' : CURS === 'bs-supp' ? 'supp'

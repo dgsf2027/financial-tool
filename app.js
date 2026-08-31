@@ -97,7 +97,9 @@ const DOMS = [
 /* 法人主体 —— 与 T1 账户台账同源（《银行资料信息/银行.xlsx》）。
    用法人全称做匹配键：T2 的账户下拉靠它去 T1 取账户，两边必须字字相同。
    优栖的 id 保持 'youqi'，否则它的规则库会丢。 */
-const ENTITIES = [
+/* 预置主体名录（首次启动的种子）。之后以 localStorage（fsc_entities_v1）为准，
+   在「基础 → 主体档案」里增删改——增删主体不再改代码。 */
+const ENT_PRESET = [
   { id: 'e01', full: '广州乐时婴童用品有限公司', line: '' },
   { id: 'e02', full: '广州星逸文化有限公司', line: '' },
   { id: 'e03', full: '广州澳乐电子商务科技有限公司', line: '' },
@@ -136,6 +138,16 @@ const ENTITIES = [
   { id: 'e36', full: '广州闪租数码贸易有限公司', line: '' },
   { id: 'e37', full: '中山市木同日用品有限公司', line: '' },
 ];
+const ENT_KEY = 'fsc_entities_v1';
+function entLoadAll() {
+  try { const l = JSON.parse(localStorage.getItem(ENT_KEY) || 'null'); if (l && l.length) return l; } catch (e) { /* 忽略 */ }
+  return ENT_PRESET.map(e => Object.assign({}, e));
+}
+function entSaveAll(list) {
+  try { localStorage.setItem(ENT_KEY, JSON.stringify(list)); } catch (e) { toast('主体名录保存失败'); }
+  ENTITIES = list;
+}
+let ENTITIES = entLoadAll();
 
 /** 从法人全称提取简称：去地区前缀、去括号、去常见后缀 */
 function entShort(e) {
@@ -1353,7 +1365,6 @@ const PHASE2 = {
   'p-tax-cal': ['申报日历', 'M6', '征期前 3 工作日红线预警'],
   'p-daily': ['日损益', 'M7', '平台数据自动抓取算毛利'],
   'p-project': ['项目盈利', 'M7', '项目/合同级盈利与成本分摊'],
-  'p-entity': ['主体档案', 'M0', '多主体统一登记'],
   'p-match': ['跨系统对码', 'M0', '销售端与采购端主数据映射'],
   'p-perm': ['用户与权限', '权限', '功能权限 + 数据权限 + 操作权限三维'],
 };
@@ -1408,7 +1419,7 @@ function setRange(k, v) {
 function renderEntBar(filter) {
   const inp = $('entSel'), list = $('entList'); if (!inp || !list) return;
   const t = String(filter == null ? '' : filter).trim();
-  const items = ENTITIES.filter(e => !t || e.full.includes(t));
+  const items = ENTITIES.filter(e => !e.off && (!t || e.full.includes(t)));
   list.innerHTML = (items.length ? items.map(e =>
     `<div class="ci ${e.id === CUR_ENT ? 'on' : ''}" data-entpick="${e.id}">${H(e.full)}${loadRSet(e.id) ? '' : ' <span class="cimut">无规则</span>'}</div>`).join('')
     : '<div class="ci cimut">没有匹配的主体</div>');
@@ -1432,9 +1443,10 @@ function pickEnt(id) {
 function resolveEnt(txt) {
   const t = String(txt || '').trim();
   if (!t) return { empty: 1 };
-  const exact = ENTITIES.find(e => e.full === t);
+  const on = ENTITIES.filter(e => !e.off);
+  const exact = on.find(e => e.full === t);
   if (exact) return { hit: exact };
-  const hits = ENTITIES.filter(e => e.full.includes(t));
+  const hits = on.filter(e => e.full.includes(t));
   if (hits.length === 1) return { hit: hits[0] };
   return hits.length ? { multi: hits.length } : { none: 1 };
 }
