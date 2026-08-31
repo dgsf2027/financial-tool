@@ -133,7 +133,7 @@ S['p-rec-ar'] = () => {
   const e0 = editing || {};
   const form = cardp(editing ? `编辑单据 ${H(editing.no || '')}` : '新增应收单', `
     <div class="cols c4">
-      ${F('rcCust', '客户编码（选了名称自动带出）', e0.cust)}
+      ${F('rcCust', '客户编码（选了名称且此格为空时自动带出）', e0.cust)}
       <div class="field"><label class="fl">客户名称 *（可从名册选）</label>
         <input id="rcName" list="recNames" value="${e0.name == null ? '' : H(String(e0.name))}"></div>
       ${recDatalist('recNames', 'ar')}
@@ -246,7 +246,7 @@ S['p-rec-ap'] = () => {
   const e0 = editing || {};
   const form = cardp(editing ? `编辑单据 ${H(editing.no || '')}` : '新增应付单', `
     <div class="cols c4">
-      ${F('apCust', '供应商编码（选了名称自动带出）', e0.cust)}
+      ${F('apCust', '供应商编码（选了名称且此格为空时自动带出）', e0.cust)}
       <div class="field"><label class="fl">供应商名称 *（可从名册选）</label>
         <input id="apName" list="apNames" value="${e0.name == null ? '' : H(String(e0.name))}"></div>
       ${recDatalist('apNames', 'ap')}
