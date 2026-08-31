@@ -311,8 +311,18 @@ function entHasData(id) {
   // ①代码内置规则集 ②T1 账户台账（按主体全称挂）③合并范围配置
   try { if (typeof RULE_SETS !== 'undefined' && RULE_SETS[id]) n++; } catch (e) { /* 忽略 */ }
   try {
+    // T1 账户只有「用过」才算数据：账户 id 在日报/余额来源/流水里出现过才计。
+    // 预置的空壳账户不算——37 个主体全带预置壳，把壳当数据会让谁都没法一键删
     const full = (ENTITIES.find(x => x.id === id) || {}).full;
-    if (full && typeof T1_ACC !== 'undefined' && T1_ACC.some(a => a.ent === full)) n++;
+    if (full && typeof T1_ACC !== 'undefined') {
+      const ids = T1_ACC.filter(a => a.ent === full).map(a => '"' + a.id + '"');
+      if (ids.length) {
+        const blob = (localStorage.getItem('fsc_t1_daily_v1') || '')
+          + (localStorage.getItem('fsc_t1_balsrc_v1') || '')
+          + (localStorage.getItem('fsc_t1_txns_v1') || '');
+        if (ids.some(q => blob.includes(q))) n++;
+      }
+    }
   } catch (e) { /* 忽略 */ }
   try {
     const cc = localStorage.getItem('fsc_cons_cfg_v1');
@@ -404,9 +414,21 @@ document.addEventListener('click', e => {
       if (ENT_ADM.edit === x.id) ENT_ADM.edit = '';
       toast(why, 5600); go('p-entity');
     };
+    // 空壳账户（预置的、从没用过的）跟着主体走，不算数据但也不能留成孤儿
+    const shellWipe = () => {
+      try {
+        if (typeof T1_ACC !== 'undefined' && T1_ACC.some(a => a.ent === x.full)) {
+          T1_ACC = T1_ACC.filter(a => a.ent !== x.full);
+          if (typeof t1SaveAcc === 'function') t1SaveAcc(T1_ACC);
+        }
+      } catch (e2) { /* 忽略 */ }
+    };
     const n = entHasData(x.id);
     if (!n) {
-      if (!confirm(`确认删除主体「${x.full}」（${x.id}）？它名下没有任何数据。`)) return;
+      let shells = 0;
+      try { if (typeof T1_ACC !== 'undefined') shells = T1_ACC.filter(a => a.ent === x.full).length; } catch (e2) { /* 忽略 */ }
+      if (!confirm(`确认删除主体「${x.full}」（${x.id}）？它名下没有业务数据${shells ? `（${shells} 个从未用过的预置空账户会一起删掉）` : ''}。`)) return;
+      shellWipe();
       done('已删除'); return;
     }
     // 有数据也允许删（2026-08-31 负责人要求），但要看清删什么 + 手输全称双确认——
