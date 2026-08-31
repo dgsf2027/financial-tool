@@ -157,6 +157,12 @@ const T4_CFG_FIELDS = [
   ['sharedRentMonth', '房租水电公摊/月', 'money'], ['sharedOtherMonth', '其他公摊/月', 'money'],
 ];
 
+/* 管理费分摊页只管这 6 个项目：前 3 项合计为直接管理费用，后 3 项合计为间接管理费用 */
+const T4_MGMT_FIELDS = [
+  ['directLaborMonth', '直接人工'], ['directRentMonth', '直接租金物业'], ['directOtherMonth', '直接其他管理'],
+  ['sharedLaborMonth', '人力公摊'], ['sharedRentMonth', '房租水电公摊'], ['sharedOtherMonth', '其他公摊'],
+];
+
 const T4_FILE_DEFS = {
   daily: { fields: [
     ['date', '日期', ['日期', '业务日期', '统计日期']],
@@ -361,7 +367,7 @@ S.t4 = () => {
        <button class="btn sm" data-t4go="man:${c.id}">录入</button>`];
   });
   return head('T4　日损益表', `按底稿完整科目重算 ${T4_CH.length} 个渠道，并分别归集到大电商、拼多多和经销事业部。`, '工具箱 · 已更新',
-    t4PeriodControl('<button class="btn" data-t4go="sumimp">汇总导入</button><button class="btn" data-t4go="summan">汇总录入</button><button class="btn" data-t4go="rules">取数口径</button><button class="btn" data-t4go="cfg">参数</button><button class="btn pri" data-t4go="sheet">看损益表</button>'))
+    t4PeriodControl('<button class="btn" data-t4go="sumimp">汇总导入</button><button class="btn" data-t4go="summan">汇总录入</button><button class="btn" data-t4go="rules">取数口径</button><button class="btn" data-t4go="mgmt">管理费分摊</button><button class="btn" data-t4go="cfg">参数</button><button class="btn pri" data-t4go="sheet">看损益表</button>'))
     + kpis([
       { k: '渠道', v: String(T4_CH.length), u: '个' },
       { k: '大电商', v: String(T4_BIG_ECOM.length), u: '个渠道' },
@@ -658,6 +664,24 @@ S['t4-cfg'] = () => {
     + '<div class="note w"><b>修改会影响所有对应日期的派生结果。</b>人工录入的同名科目优先于参数值。</div>' + blocks;
 };
 
+S['t4-mgmt'] = () => {
+  t4Load();
+  const days = t4Days();
+  const rows = T4_CH.map(c => {
+    const cfg = T4.cfg[c.id] || {};
+    const cells = T4_MGMT_FIELDS.map(([k]) =>
+      `<input type="number" step="0.01" data-t4mgmt="${c.id}:${k}" data-t4orig="${cfg[k] != null ? cfg[k] : ''}" value="${cfg[k] != null ? cfg[k] : ''}" placeholder="—" style="width:104px">`);
+    const total = T4_MGMT_FIELDS.reduce((n, [k]) => n + (+cfg[k] || 0), 0);
+    return [t4BuPill(c.bu), `<b>${H(c.n)}</b>`, ...cells,
+      `<b class="mono">${money(total)}</b>`, `<span class="mono">${money(total / days)}</span>`];
+  });
+  return head('T4 管理费用分摊', `按项目录入各渠道当月分摊金额，系统平均分摊到每一天（月度金额 ÷ 当月自然日，本期 ${days} 天）。留空表示该渠道该项目不分摊。`, '工具箱 · T4',
+    t4PeriodControl('<button class="btn" data-t4go="overview">← 返回</button><button class="btn pri" data-t4act="mgmtSave">保存分摊</button>'))
+    + card('月度分摊金额（元/月）', table(
+      [{t:'归属事业部'},{t:'渠道'}, ...T4_MGMT_FIELDS.map(([,n]) => ({t:n,n:1})), {t:'月合计',n:1},{t:'折算每日',n:1}], rows))
+    + '<div class="note"><b>口径：</b>直接管理费用 = 直接人工 + 直接租金物业 + 直接其他管理；间接管理费用 = 人力公摊 + 房租水电公摊 + 其他公摊。每日分摊额 = 月度金额 ÷ 当月自然日；某天人工或文件实填的同名科目优先于分摊值。修改立即影响本期全部日期的派生结果与汇总。</div>';
+};
+
 S['t4-rules'] = () => head('T4 取数口径', '以下规则来自用户提供的销售明细、平台推广明细和 2026-08 日损益底稿。', '工具箱 · T4', '<button class="btn" data-t4go="overview">← 返回</button>')
   + card('文件取数', table([{t:'渠道/文件'},{t:'落表规则'},{t:'控制'}], [
     ['汇总导入', '一个文件按渠道 + 日期导入全部渠道；归属事业部由系统配置确定', pill('批量导入','ok')],
@@ -735,6 +759,16 @@ document.addEventListener('click', e => {
     document.querySelectorAll('[data-t4cfg]').forEach(inp => { const [ch,k] = inp.dataset.t4cfg.split(':'); const meta = T4_CFG_FIELDS.find(x => x[0] === k); T4.cfg[ch][k] = (Number(inp.value) || 0) / (meta && meta[2] === 'rate' ? 100 : 1); });
     t4SaveCfg(); toast('参数已保存'); t4Go('overview');
   } else if (a.dataset.t4act === 'cfgReset') { T4.cfg = t4Clone(T4_CFG_DEFAULT); t4SaveCfg(); toast('已恢复底稿参数'); t4Go('cfg'); }
+  else if (a.dataset.t4act === 'mgmtSave') {
+    let changed = 0;
+    document.querySelectorAll('[data-t4mgmt]').forEach(inp => {
+      const [ch,k] = inp.dataset.t4mgmt.split(':'), val = inp.value.trim();
+      if (val === String(inp.dataset.t4orig == null ? '' : inp.dataset.t4orig)) return;
+      if (val === '') delete T4.cfg[ch][k]; else T4.cfg[ch][k] = Number(val) || 0;
+      changed++;
+    });
+    t4SaveCfg(); toast(`已保存管理费分摊，共 ${changed} 个变更`); t4Go('overview');
+  }
 });
 document.addEventListener('change', e => {
   if (e.target.id === 't4Period') { T4.period = e.target.value || T4.period; T4.imp = null; t4Go('overview'); }
