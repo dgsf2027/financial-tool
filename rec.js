@@ -53,6 +53,21 @@ const recGross = (kind, x) => kind === 'ap'
 function recHxSum(kind, docId) {
   return +recHxLoad().reduce((s, h) => s + ((h.kind === kind && h.docId === docId) ? (+h.amt || 0) : 0), 0).toFixed(2);
 }
+/* 客户/供应商候选名单：本主体的名册（基础→客户/供应商维护）∪ 台账里出现过的名字。
+   返回 Map(name → 编码)。名册和台账全都按主体存，切主体各是各的一套 */
+function recNameOptions(kind) {
+  const m = new Map();
+  try {
+    if (typeof dimLoad === 'function') {
+      dimLoad(kind === 'ap' ? 'supp' : 'cust').forEach(x => { if (x.name && !x.off) m.set(x.name, x.code || ''); });
+    }
+  } catch (e) { /* 名册模块不可用时只用台账名字 */ }
+  (kind === 'ap' ? recApLoad() : recLoad()).forEach(x => { if (x.name && !m.has(x.name)) m.set(x.name, x.cust || ''); });
+  return m;
+}
+const recDatalist = (id, kind) => `<datalist id="${id}">${
+  [...recNameOptions(kind).keys()].map(n => `<option value="${H(n)}">`).join('')}</datalist>`;
+
 /* 挂账账龄区间（应付台账列用）：今天 − 业务日期。与应收账龄页的「逾期天数」是两个口径 */
 function recAgeBand(date) {
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return '—';
@@ -118,7 +133,10 @@ S['p-rec-ar'] = () => {
   const e0 = editing || {};
   const form = cardp(editing ? `编辑单据 ${H(editing.no || '')}` : '新增应收单', `
     <div class="cols c4">
-      ${F('rcCust', '客户编码', e0.cust)}${F('rcName', '客户名称 *', e0.name)}
+      ${F('rcCust', '客户编码（选了名称自动带出）', e0.cust)}
+      <div class="field"><label class="fl">客户名称 *（可从名册选）</label>
+        <input id="rcName" list="recNames" value="${e0.name == null ? '' : H(String(e0.name))}"></div>
+      ${recDatalist('recNames', 'ar')}
       ${F('rcNo', '单据编号（空=自动编号）', e0.no)}${F('rcType', '单据类型', e0.type || '标准应收单')}
       ${FD('rcDate', '业务日期', e0.date || recToday())}${FD('rcDue', '到期日', e0.due)}
       ${F('rcCcy', '币别', e0.ccy || 'RMB')}${FN('rcOpen', '期初余额', e0.open)}
@@ -228,7 +246,10 @@ S['p-rec-ap'] = () => {
   const e0 = editing || {};
   const form = cardp(editing ? `编辑单据 ${H(editing.no || '')}` : '新增应付单', `
     <div class="cols c4">
-      ${F('apCust', '供应商编码', e0.cust)}${F('apName', '供应商名称 *', e0.name)}
+      ${F('apCust', '供应商编码（选了名称自动带出）', e0.cust)}
+      <div class="field"><label class="fl">供应商名称 *（可从名册选）</label>
+        <input id="apName" list="apNames" value="${e0.name == null ? '' : H(String(e0.name))}"></div>
+      ${recDatalist('apNames', 'ap')}
       ${F('apNo', '单据编号（空=自动编号）', e0.no)}${F('apType', '单据类型', e0.type || '标准采购应付')}
       ${FD('apDate', '业务日期', e0.date || recToday())}${FD('apDue', '到期日', e0.due)}
       ${F('apCcy', '币别', e0.ccy || 'RMB')}${FN('apOpen', '期初余额', e0.open)}
@@ -291,10 +312,12 @@ S['p-rec-hx'] = () => {
   if (!CUR_ENT) return needEnt('应收及应付核销');
   const kind = RECV.hxKind === 'ap' ? 'ap' : 'ar';
   const isAp = kind === 'ap';
+  const q = String(RECV.hxQ || '').trim().toLowerCase();
   const docs = (isAp ? recApLoad() : recLoad())
     .map(x => ({ x, gross: recGross(kind, x), done: recHxSum(kind, x.id) }))
     .map(d => Object.assign(d, { left: +(d.gross - d.done).toFixed(2) }))
     .filter(d => d.left > 0.005)
+    .filter(d => !q || `${d.x.name || ''}|${d.x.cust || ''}|${d.x.no || ''}`.toLowerCase().includes(q))
     .sort((a, b) => String(a.x.due || '9999').localeCompare(String(b.x.due || '9999')));
   const tGross = +docs.reduce((s, d) => s + d.gross, 0).toFixed(2);
   const tDone = +docs.reduce((s, d) => s + d.done, 0).toFixed(2);
@@ -316,6 +339,9 @@ S['p-rec-hx'] = () => {
     `<button class="btn sm" data-hxdel="${H(h.id)}">撤销</button>`]);
   return head('应收及应付核销', `${H(entName())} · 台账样式照核销样表。填「本次核销金额」点保存，一次可核多张；核销后余额 = 原币余额 − 已核销累计，<b>本次核销不能超过核销后余额</b>。`, '往来对账',
     `<select id="hxKind"><option value="ar" ${!isAp ? 'selected' : ''}>应收核销</option><option value="ap" ${isAp ? 'selected' : ''}>应付核销</option></select>
+     <input id="hxQ" list="hxNames" value="${H(RECV.hxQ || '')}" placeholder="搜${isAp ? '供应商' : '客户'}/编码/单号…" style="min-width:170px">
+     ${recDatalist('hxNames', kind)}
+     ${q ? '<button class="btn" data-act="hxQClear">清除筛选</button>' : ''}
      <button class="btn" data-go="${isAp ? 'p-rec-ap' : 'p-rec-ar'}">← ${isAp ? '应付' : '应收'}台账</button>
      <button class="btn pri" data-act="hxSave">保存本次核销</button>`)
     + kpis([
@@ -324,11 +350,12 @@ S['p-rec-hx'] = () => {
       { k: '本页单据已核销', v: money(tDone), d: '核满的单不在本页', t: tDone > 0.005 ? 'g' : '' },
       { k: '未核销合计', v: money(+(tGross - tDone).toFixed(2)), t: (tGross - tDone) > 0.005 ? 'w' : 'g' },
     ])
+    + (q ? `<div class="note">已按「<b>${H(RECV.hxQ)}</b>」筛选，命中 ${docs.length} 张——合计与 KPI 都只算筛出来的这些。名字可以从输入框的下拉里选（来自本主体的客户/供应商名册和台账）。</div>` : '')
     + card((isAp ? '应付' : '应收') + '核销台账（只列还没核完的单据）', rows.length ? table(
       [{ t: '序列号' }, { t: isAp ? '供应商名称' : '客户名称' }, { t: '业务日期' }, { t: '到期日' },
        { t: '原币余额', n: 1 }, { t: '本次核销金额', n: 1 }, { t: '核销后余额', n: 1 }, { t: '已核销累计', n: 1 }, { t: '备注' }], rows,
       ['<b>合计</b>', '', '', '', `<b>${money(tGross)}</b>`, '', `<b>${money(+(tGross - tDone).toFixed(2))}</b>`, `<b>${money(tDone)}</b>`, ''])
-      : `<div style="padding:26px;text-align:center;color:var(--text-3)">没有待核销的${isAp ? '应付' : '应收'}单据——台账里录了单才有得核</div>`)
+      : `<div style="padding:26px;text-align:center;color:var(--text-3)">${q ? `没有匹配「${H(RECV.hxQ)}」的待核销单据——试试清除筛选` : `没有待核销的${isAp ? '应付' : '应收'}单据——台账里录了单才有得核`}</div>`)
     + `<div class="note"><b>口径：</b>核销是「款项与单据的勾对确认」，独立于收付款：${isAp
       ? '付了款（台账「本期付款」）不等于核销过——两边都记，未结算金额才对'
       : '收了款（台账「本期收款」）不等于核销过——两边都记'}。撤销一笔核销即恢复该单的可核余额。</div>`
@@ -541,6 +568,7 @@ document.addEventListener('click', e => {
   const a = e.target.closest('[data-act]');
   if (!a || !CUR_ENT) return;
   const act = a.dataset.act;
+  if (act === 'hxQClear') { RECV.hxQ = ''; go('p-rec-hx'); return; }
   if (act === 'apCancel') { RECV.apEdit = ''; go('p-rec-ap'); return; }
   if (act === 'apSaveForm') {
     const v = id => (($(id) || {}).value || '').trim();
@@ -624,6 +652,15 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('change', e => {
   if (e.target.id === 'hxKind') { RECV.hxKind = e.target.value === 'ap' ? 'ap' : 'ar'; go('p-rec-hx'); return; }
+  if (e.target.id === 'hxQ') { RECV.hxQ = e.target.value; go('p-rec-hx'); return; }
+  // 从名册/台账选了名称 → 编码为空就自动带出（只补空，不覆盖手填的）
+  if (e.target.id === 'rcName' || e.target.id === 'apName') {
+    const isAp0 = e.target.id === 'apName';
+    const code = recNameOptions(isAp0 ? 'ap' : 'ar').get(e.target.value.trim());
+    const custEl = $(isAp0 ? 'apCust' : 'rcCust');
+    if (code && custEl && !custEl.value.trim()) custEl.value = code;
+    return;
+  }
   if (e.target.id === 'recAsof') { RECV.asof = e.target.value || recToday(); go('p-rec-aging'); return; }
   if (e.target.dataset && e.target.dataset.reccfg && CUR_ENT) {
     const c = recCfg();
