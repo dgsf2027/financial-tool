@@ -318,6 +318,10 @@ function entHasData(id) {
     const cc = localStorage.getItem('fsc_cons_cfg_v1');
     if (cc && cc.includes('"' + id + '"')) n++;
   } catch (e) { /* 忽略 */ }
+  try {
+    const reg = localStorage.getItem('fsc_cons_reg_v1');
+    if (reg && (reg.includes('"a":"' + id + '"') || reg.includes('"b":"' + id + '"'))) n++;
+  } catch (e) { /* 忽略 */ }
   return n;
 }
 function entNextId() {
@@ -412,9 +416,13 @@ document.addEventListener('click', e => {
       const k = localStorage.key(i);
       if (k && k.startsWith('fsc_') && k.includes('_' + x.id + '_')) keys.push(k);
     }
-    let t1n = 0;
-    try { if (typeof T1_ACC !== 'undefined') t1n = T1_ACC.filter(a => a.ent === x.full).length; } catch (e2) { /* 忽略 */ }
-    if (!confirm(`「${x.full}」名下有 ${keys.length} 处存储数据${t1n ? `、T1 台账 ${t1n} 个账户` : ''}。\n\n要连同这些数据一起彻底删除吗？删了找不回来。\n（只是不想让它出现在下拉里的话，用「停用」就够了，数据能保住）`)) return;
+    let accIds = [];
+    try { if (typeof T1_ACC !== 'undefined') accIds = T1_ACC.filter(a => a.ent === x.full).map(a => a.id); } catch (e2) { /* 忽略 */ }
+    const t1n = accIds.length;
+    const desc = [keys.length ? `${keys.length} 处存储数据` : '',
+      t1n ? `T1 台账 ${t1n} 个账户（连同其余额与流水历史）` : ''].filter(Boolean).join('、')
+      || '内置规则集/合并模块引用这类代码级残留';
+    if (!confirm(`「${x.full}」名下有 ${desc}。\n\n要连同这些一起彻底删除吗？删了找不回来。\n（只是不想让它出现在下拉里的话，用「停用」就够了，数据能保住）`)) return;
     const typed = prompt(`危险操作最后确认：请原样输入主体全称\n${x.full}`);
     if (typed === null) return;
     if (typed.trim() !== x.full) { toast('输入的全称对不上，没有删'); return; }
@@ -425,7 +433,38 @@ document.addEventListener('click', e => {
         if (typeof t1SaveAcc === 'function') t1SaveAcc(T1_ACC);
       }
     } catch (e2) { /* 忽略 */ }
-    done(`已彻底删除「${x.full}」及其 ${keys.length} 处数据${t1n ? `、${t1n} 个 T1 账户` : ''}`);
+    // 日报余额/余额来源/流水明细都按「账户 id」存（键名不带主体 id，上面的扫键扫不到）——
+    // 账户删了这些必须跟着清：t1NextSeq 会复用最高号，孤儿余额会被将来同号的新账户继承
+    if (accIds.length) {
+      const wipeByAcc = (key, byDate) => {
+        try {
+          const o = JSON.parse(localStorage.getItem(key) || '{}');
+          if (byDate) {
+            Object.keys(o).forEach(d => { accIds.forEach(id2 => delete o[d][id2]); if (!Object.keys(o[d]).length) delete o[d]; });
+          } else accIds.forEach(id2 => delete o[id2]);
+          localStorage.setItem(key, JSON.stringify(o));
+        } catch (e2) { /* 忽略 */ }
+      };
+      wipeByAcc('fsc_t1_daily_v1', 1); wipeByAcc('fsc_t1_balsrc_v1', 1); wipeByAcc('fsc_t1_txns_v1', 0);
+    }
+    // 合并模块联动剔除：留着悬空 id 会让内部交易抵消变成单边抵、报表出错数
+    try {
+      const cc = JSON.parse(localStorage.getItem('fsc_cons_cfg_v1') || 'null');
+      if (cc) {
+        let chg = 0;
+        if (cc.parent === x.id) { cc.parent = ''; chg = 1; }
+        if (Array.isArray(cc.subs) && cc.subs.indexOf(x.id) >= 0) { cc.subs = cc.subs.filter(v => v !== x.id); chg = 1; }
+        if (chg) localStorage.setItem('fsc_cons_cfg_v1', JSON.stringify(cc));
+      }
+    } catch (e2) { /* 忽略 */ }
+    try {
+      const reg = JSON.parse(localStorage.getItem('fsc_cons_reg_v1') || 'null');
+      if (Array.isArray(reg)) {
+        const left = reg.filter(r => r && r.a !== x.id && r.b !== x.id);
+        if (left.length !== reg.length) localStorage.setItem('fsc_cons_reg_v1', JSON.stringify(left));
+      }
+    } catch (e2) { /* 忽略 */ }
+    done(`已彻底删除「${x.full}」：${desc}`);
     return;
   }
   const a0 = e.target.closest('[data-act]');
