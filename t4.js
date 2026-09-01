@@ -555,6 +555,48 @@ function t4SummaryTemplate() {
   download(`T4汇总导入模板_${T4.period}.csv`, toCSV([hdr, ...rows])); toast('已下载汇总导入模板');
 }
 
+function t4MgmtTemplate() {
+  const hdr = ['归属事业部','渠道', ...T4_MGMT_FIELDS.map(([,n]) => n)];
+  const rows = T4_CH.map(c => { const cfg = T4.cfg[c.id] || {};
+    return [t4BuName(c.bu), c.n, ...T4_MGMT_FIELDS.map(([k]) => cfg[k] != null ? cfg[k] : '')]; });
+  download(`T4管理费分摊模板_${T4.period}.csv`, toCSV([hdr, ...rows])); toast('已下载管理费分摊模板（当前值已预填）');
+}
+
+function t4MgmtApplyRows(rows) {
+  const names = T4_MGMT_FIELDS.map(([,n]) => n);
+  const headRow = rows.findIndex(r => r.some(c => String(c == null ? '' : c).trim() === '渠道')
+    && r.some(c => names.includes(String(c == null ? '' : c).trim())));
+  if (headRow < 0) throw new Error('未找到表头行（需包含「渠道」列和至少一个费用项目列）');
+  const hdr = rows[headRow].map(c => String(c == null ? '' : c).trim());
+  const chCol = hdr.indexOf('渠道');
+  const cols = T4_MGMT_FIELDS.map(([k, n]) => [k, hdr.indexOf(n)]).filter(x => x[1] >= 0);
+  let set = 0; const channels = new Set(), unknown = new Set();
+  rows.slice(headRow + 1).forEach(row => {
+    const ch = t4ResolveChannel(row[chCol]);
+    if (!ch) { const nm = String(row[chCol] == null ? '' : row[chCol]).trim(); if (nm && nm !== '归属事业部') unknown.add(nm); return; }
+    cols.forEach(([k, i]) => {
+      const v = row[i];
+      if (v == null || String(v).trim() === '' || String(v).trim() === '—') return; // 留空 = 不改动该格
+      (T4.cfg[ch] = T4.cfg[ch] || {})[k] = t4Num(v); set++; channels.add(ch);
+    });
+  });
+  return { set, channels: channels.size, unknown: [...unknown] };
+}
+
+function t4MgmtPickFile() {
+  const input = document.createElement('input'); input.type = 'file'; input.accept = '.xlsx,.xls,.csv,.tsv,.txt';
+  input.onchange = async () => {
+    const file = input.files && input.files[0]; if (!file) return;
+    try {
+      const r = t4MgmtApplyRows(await XLSXLite.readTable(file));
+      t4SaveCfg(); t4Go('mgmt');
+      const bad = r.unknown.length ? `；未识别渠道：${r.unknown.slice(0, 5).join('、')}` : '';
+      toast(`分摊导入完成：${r.channels} 个渠道、${r.set} 个金额${bad}`, 5200);
+    } catch (e) { toast(`读取失败：${e.message || e}`, 5000); }
+  };
+  input.click();
+}
+
 S['t4-imp'] = () => {
   t4Load(); const c = T4_CHM[T4.editCh], imp = T4.imp;
   if (!c.files.length) return head(`导入　${c.n}`, '该渠道没有标准源文件，请人工录入。', '工具箱 · T4', '<button class="btn" data-t4go="overview">← 返回</button>')
@@ -676,7 +718,7 @@ S['t4-mgmt'] = () => {
       `<b class="mono">${money(total)}</b>`, `<span class="mono">${money(total / days)}</span>`];
   });
   return head('T4 管理费用分摊', `按项目录入各渠道当月分摊金额，系统平均分摊到每一天（月度金额 ÷ 当月自然日，本期 ${days} 天）。留空表示该渠道该项目不分摊。`, '工具箱 · T4',
-    t4PeriodControl('<button class="btn" data-t4go="overview">← 返回</button><button class="btn pri" data-t4act="mgmtSave">保存分摊</button>'))
+    t4PeriodControl('<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="mgmtTemplate">下载模板</button><button class="btn" data-t4act="mgmtPick">导入分摊</button><button class="btn pri" data-t4act="mgmtSave">保存分摊</button>'))
     + card('月度分摊金额（元/月）', table(
       [{t:'归属事业部'},{t:'渠道'}, ...T4_MGMT_FIELDS.map(([,n]) => ({t:n,n:1})), {t:'月合计',n:1},{t:'折算每日',n:1}], rows))
     + '<div class="note"><b>口径：</b>直接管理费用 = 直接人工 + 直接租金物业 + 直接其他管理；间接管理费用 = 人力公摊 + 房租水电公摊 + 其他公摊。每日分摊额 = 月度金额 ÷ 当月自然日；某天人工或文件实填的同名科目优先于分摊值。修改立即影响本期全部日期的派生结果与汇总。</div>';
@@ -769,6 +811,8 @@ document.addEventListener('click', e => {
     });
     t4SaveCfg(); toast(`已保存管理费分摊，共 ${changed} 个变更`); t4Go('overview');
   }
+  else if (a.dataset.t4act === 'mgmtTemplate') t4MgmtTemplate();
+  else if (a.dataset.t4act === 'mgmtPick') t4MgmtPickFile();
 });
 document.addEventListener('change', e => {
   if (e.target.id === 't4Period') { T4.period = e.target.value || T4.period; T4.imp = null; t4Go('overview'); }
