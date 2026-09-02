@@ -310,15 +310,36 @@ function t4Row(ch, dt) {
   r._hard = hard; r._src = raw._src || 'manual';
   return r;
 }
+/* 管理费 6 项的每日分摊额。口径：月度金额 ÷ 当月自然日；没有收入数据的日子同样计提 */
+function t4MgmtDaily(ch) {
+  const cfg = T4.cfg[ch] || {}, days = t4Days(), out = { any: false };
+  T4_MGMT_FIELDS.forEach(([mk]) => {
+    out[mk.replace(/Month$/, '')] = cfg[mk] != null ? (+cfg[mk] || 0) / days : 0;
+    if (cfg[mk] != null) out.any = true;
+  });
+  out.direct = out.directLabor + out.directRent + out.directOther;
+  out.indirect = out.sharedLabor + out.sharedRent + out.sharedOther;
+  return out;
+}
+
 function t4Month(ch) {
   const out = Object.fromEntries(T4_METRICS.filter(x => !x.pct).map(x => [x.k, 0]));
   out.days = 0; out.hard = new Set();
+  let rowN = 0;
   Object.keys(T4.data[ch] || {}).sort().forEach(dt => {
     const r = t4Row(ch, dt); if (!r) return;
+    rowN++;
     T4_METRICS.filter(x => !x.pct).forEach(x => { out[x.k] += r[x.k] || 0; });
     if (t4Raw(ch, dt).retailIncome != null) out.days++;
     r._hard.forEach(k => out.hard.add(k));
   });
+  // 无收入数据的日子照样计提管理费（有数据的日子已在 t4Row 里按参数计入）
+  const md = t4MgmtDaily(ch), rest = t4Days() - rowN;
+  if (md.any && rest > 0) {
+    ['directLabor','directRent','directOther','sharedLabor','sharedRent','sharedOther','direct','indirect'].forEach(k => { out[k] += md[k] * rest; });
+    out.contribution -= md.direct * rest;
+    out.netProfit -= (md.direct + md.indirect) * rest;
+  }
   out.grossMargin = out.salesIncome ? out.grossProfit / out.salesIncome : 0;
   out.contributionRate = out.salesIncome ? out.contribution / out.salesIncome : 0;
   out.netMargin = out.salesIncome ? out.netProfit / out.salesIncome : 0;
@@ -357,12 +378,12 @@ S.t4 = () => {
   t4Load();
   const g = t4Gap(), ok = t4SumOK(), ecomOK = t4SumOK(T4_BIG_ECOM), pddOK = t4SumOK(T4_PDD), dealerOK = t4SumOK(T4_DEALER);
   const rows = T4_CH.map(c => {
-    const n = t4Filled(c.id), m = t4Month(c.id);
+    const n = t4Filled(c.id), m = t4Month(c.id), mgmtOnly = !n && t4MgmtDaily(c.id).any;
     const src = c.files.length ? pill('文件/人工', 'ok') : pill('人工', 'wa');
-    const st = n === 0 ? pill('未开始', 'cr') : n < 15 ? pill('缺口大', 'wa') : pill('已有数据', 'ok');
+    const st = n === 0 ? (mgmtOnly ? pill('仅管理费', 'wa') : pill('未开始', 'cr')) : n < 15 ? pill('缺口大', 'wa') : pill('已有数据', 'ok');
     return [t4BuPill(c.bu), `<b>${H(c.n)}</b>`,
       `<b class="mono">${n}</b> / ${t4Days()}`, t4Cal(c.id), src,
-      n ? money(m.salesIncome) : '—', n ? money(m.netProfit) : '—', n ? `${(m.netMargin * 100).toFixed(1)}%` : '—', st,
+      n ? money(m.salesIncome) : '—', n || mgmtOnly ? money(m.netProfit) : '—', n ? `${(m.netMargin * 100).toFixed(1)}%` : '—', st,
       `${c.files.length ? `<button class="btn sm" data-t4go="imp:${c.id}">导入</button>` : ''}
        <button class="btn sm" data-t4go="man:${c.id}">录入</button>`];
   });
@@ -377,9 +398,14 @@ S.t4 = () => {
       { k: '拼多多汇总', v: pddOK ? '可用' : '禁用', t: pddOK ? 'g' : 'c' },
       { k: '经销汇总', v: dealerOK ? '可用' : '禁用', t: dealerOK ? 'g' : 'c' },
       { k: '全部汇总', v: ok ? '可用' : '禁用', t: ok ? 'g' : 'c', d: `全渠道极差 ${g.gap} 天` },
+      (() => { // 管理费分摊全渠道月合计——分摊值随有收入数据的日子计入损益
+        let sum = 0; const set = new Set();
+        T4_CH.forEach(c => { const cfg = T4.cfg[c.id] || {}; T4_MGMT_FIELDS.forEach(([k]) => { if (cfg[k] != null) { sum += +cfg[k] || 0; set.add(c.id); } }); });
+        return { k: '管理费分摊', v: set.size ? money(sum) : '未设置', u: set.size ? '元/月' : '', d: set.size ? `${set.size} 个渠道已设置 · 日摊 ${money(sum / t4Days())}` : '点「管理费分摊」录入或导入' };
+      })(),
     ])
     + (ok ? `<div class="note g"><b>三个事业部取数天数已对齐。</b>大电商、拼多多、经销和全部汇总均可用。</div>`
-      : g.max === 0 ? '<div class="note"><b>本期尚无数据。</b>先导入平台文件或逐日录入；汇总会在取数天数对齐后自动开放。</div>'
+      : g.max === 0 ? '<div class="note"><b>本期尚无数据。</b>先导入平台文件或逐日录入；已设置的管理费分摊会随有收入数据的日子自动计入损益。</div>'
       : `<div class="note c"><b>部分汇总不可用。</b>大电商事业部：${ecomOK ? '可用' : '禁用'}；拼多多事业部：${pddOK ? '可用' : '禁用'}；经销事业部：${dealerOK ? '可用' : '禁用'}；全部汇总：禁用。请补齐对应事业部的渠道数据。</div>`)
     + card(`${T4_CH.length} 渠道取数进度`, table(
       [{t:'归属事业部'},{t:'渠道'},{t:'取数天数',n:1},{t:`日历（1—${t4Days()}）`},{t:'方式'},{t:'销售收入',n:1},{t:'净利润',n:1},{t:'净利率'},{t:'状态'},{t:''}], rows))
@@ -757,11 +783,22 @@ S['t4-rules'] = () => head('T4 取数口径', '以下规则来自用户提供的
 function t4Export() {
   const hdr = ['期间','渠道','归属事业部','日期', ...T4_METRICS.map(x => x.n.trim()), '取数口径','来源'];
   const rows = [];
-  T4_CH.forEach(c => Object.keys(T4.data[c.id] || {}).sort().forEach(dt => {
-    const r = t4Row(c.id, dt); if (!r) return;
-    rows.push([T4.period,c.n,t4BuName(c.bu),dt, ...T4_METRICS.map(x => x.pct ? `${(r[x.k]*100).toFixed(2)}%` : (r[x.k] || 0).toFixed(2)),
-      r._hard.length ? `参数/硬推:${r._hard.join('/')}` : '实填', r._src === 'file' ? '文件' : '人工']);
-  }));
+  T4_CH.forEach(c => {
+    const md = t4MgmtDaily(c.id);
+    for (let d = 1; d <= t4Days(); d++) {
+      const dt = t4Date(d), r = t4Row(c.id, dt);
+      if (r) {
+        rows.push([T4.period,c.n,t4BuName(c.bu),dt, ...T4_METRICS.map(x => x.pct ? `${(r[x.k]*100).toFixed(2)}%` : (r[x.k] || 0).toFixed(2)),
+          r._hard.length ? `参数/硬推:${r._hard.join('/')}` : '实填', r._src === 'file' ? '文件' : '人工']);
+      } else if (md.any) {
+        // 无收入数据日：只计提管理费分摊
+        const e = Object.fromEntries(T4_METRICS.map(x => [x.k, 0]));
+        ['directLabor','directRent','directOther','sharedLabor','sharedRent','sharedOther','direct','indirect'].forEach(k => { e[k] = md[k]; });
+        e.contribution = -md.direct; e.netProfit = -(md.direct + md.indirect);
+        rows.push([T4.period,c.n,t4BuName(c.bu),dt, ...T4_METRICS.map(x => x.pct ? '0.00%' : (e[x.k] || 0).toFixed(2)), '管理费分摊（无收入数据日）','分摊']);
+      }
+    }
+  });
   rows.push([]);
   [
     ['特卖汇总','大电商事业部',T4_TMAI], ['大电商事业部汇总','大电商事业部',T4_BIG_ECOM],
