@@ -206,7 +206,14 @@ T4_FILE_DEFS.summaryDaily = {
   required: ['channel', 'date'],
 };
 
-const T4 = { period: new Date().toISOString().slice(0, 7), data: {}, cfg: {}, editCh: 'tmall', imp: null, sumDate: '', viewFrom: '', viewTo: '', mgmtFrom: '', mgmtTo: '' };
+const T4 = { period: new Date().toISOString().slice(0, 7), data: {}, cfg: {}, editCh: 'tmall', imp: null, sumDate: '', sumScope: 'income', viewFrom: '', viewTo: '', mgmtFrom: '', mgmtTo: '' };
+
+/* 汇总导入/录入按科目拆分：销售收入与销售成本各走各的入口，数据源独立、互不覆盖 */
+const T4_SUM_SCOPES = {
+  income: { n: '销售收入', fileK: 'summaryIncome', keys: ['retailIncome', 'returnAmount', 'refundAmount'] },
+  cost: { n: '销售成本', fileK: 'summaryCost', keys: ['retailCost', 'returnCost'] },
+};
+const t4SumScope = () => T4_SUM_SCOPES[T4.sumScope] || T4_SUM_SCOPES.income;
 
 function t4Clone(x) { return JSON.parse(JSON.stringify(x)); }
 function t4Load() {
@@ -264,12 +271,12 @@ function t4InputValue(raw, key) {
   if (!raw) return null;
   if (raw[key] != null) return +raw[key] || 0;
   const parts = raw._fileParts || {};
-  for (const source of ['summaryDaily','daily']) {
+  for (const source of ['summaryIncome','summaryCost','summaryDaily','daily']) {
     if (parts[source] && parts[source][key] != null) return +parts[source][key] || 0;
   }
   let value = 0, found = false;
   Object.entries(parts).forEach(([source, fields]) => {
-    if (source === 'summaryDaily' || source === 'daily' || fields[key] == null) return;
+    if (['summaryIncome','summaryCost','summaryDaily','daily'].includes(source) || fields[key] == null) return;
     value += +fields[key] || 0; found = true;
   });
   return found ? value : null;
@@ -448,7 +455,7 @@ S.t4 = () => {
        <button class="btn sm" data-t4go="man:${c.id}">录入</button>`];
   });
   return head('T4　日损益表', `按底稿完整科目重算 ${T4_CH.length} 个渠道，并分别归集到大电商、拼多多、瑞眠和经销事业部。`, '工具箱 · 已更新',
-    t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="overview" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="选起止日期看区间损益，清空回整月累计" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="overview" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label><button class="btn" data-t4go="sumimp">汇总导入</button><button class="btn" data-t4go="summan">汇总录入</button><button class="btn" data-t4go="rules">取数口径</button><button class="btn" data-t4go="mgmt">管理费分摊</button><button class="btn" data-t4go="cfg">参数</button><button class="btn pri" data-t4go="sheet">看损益表</button>`))
+    t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="overview" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="选起止日期看区间损益，清空回整月累计" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="overview" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label><button class="btn" data-t4go="sumimp:income">收入导入</button><button class="btn" data-t4go="sumimp:cost">成本导入</button><button class="btn" data-t4go="summan:income">收入录入</button><button class="btn" data-t4go="summan:cost">成本录入</button><button class="btn" data-t4go="rules">取数口径</button><button class="btn" data-t4go="mgmt">管理费分摊</button><button class="btn" data-t4go="cfg">参数</button><button class="btn pri" data-t4go="sheet">看损益表</button>`))
     + kpis([
       { k: '渠道', v: String(T4_CH.length), u: '个' },
       { k: '大电商', v: String(T4_BIG_ECOM.length), u: '个渠道' },
@@ -493,24 +500,23 @@ S['t4-man'] = () => {
     + t4EntryTable(c.id, '直接管理费用') + t4EntryTable(c.id, '间接管理费用');
 };
 
-function t4SummaryEntryTable(group, dt) {
-  const fs = T4_INPUTS.filter(f => f.g === group);
+function t4SummaryEntryTable(group, dt, keys, title) {
+  const fs = T4_INPUTS.filter(f => f.g === group && (!keys || keys.includes(f.k)));
   const rows = T4_CH.map(c => {
     const raw = t4Raw(c.id, dt) || {}, r = t4Row(c.id, dt);
     return [t4BuPill(c.bu), `<b>${H(c.n)}</b>`,
       ...fs.map(f => { const value = t4InputValue(raw, f.k), v = value != null ? value : ''; return `<input type="number" step="0.01" class="t4in" data-t4sumcell="${c.id}:${f.k}" data-t4orig="${v}" value="${v}" placeholder="—">`; }),
       r ? `<b class="${r.netProfit >= 0 ? 'grn' : 'red'}">${money(r.netProfit)}</b>` : '—'];
   });
-  return card(group, table([{t:'归属事业部'},{t:'渠道'}, ...fs.map(f => ({t:f.n,n:1})), {t:'当日净利润',n:1}], rows));
+  return card(title || group, table([{t:'归属事业部'},{t:'渠道'}, ...fs.map(f => ({t:f.n,n:1})), {t:'当日净利润',n:1}], rows));
 }
 S['t4-summan'] = () => {
-  t4Load();
+  t4Load(); const sc = t4SumScope();
   if (!T4.sumDate || !T4.sumDate.startsWith(T4.period + '-')) T4.sumDate = t4Date(1);
-  return head('汇总录入', '选择一个日期，在同一页面录入全部渠道；各渠道原有录入入口继续保留。', '工具箱 · T4',
+  return head(`汇总录入 · ${sc.n}`, `选择一个日期，在同一页面录入全部渠道的${sc.n}；各渠道原有录入入口继续保留。`, '工具箱 · T4',
     t4PeriodControl(`<label class="sel">日期 <input id="t4SumDate" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${T4.sumDate}" style="width:132px"></label><button class="btn" data-t4go="overview">← 返回</button><button class="btn pri" data-t4act="sumManSave">保存全部渠道</button>`))
-    + '<div class="note"><b>只保存发生变化的格子。</b>留空表示删除该日该科目的录入值；填 0 表示当日确认为零。</div>'
-    + t4SummaryEntryTable('销售与成本', T4.sumDate) + t4SummaryEntryTable('运营费用', T4.sumDate)
-    + t4SummaryEntryTable('直接管理费用', T4.sumDate) + t4SummaryEntryTable('间接管理费用', T4.sumDate);
+    + `<div class="note"><b>只保存发生变化的格子。</b>留空表示删除该日该科目的录入值；填 0 表示当日确认为零。${sc.n === '销售收入' ? '退货金额、退款金额请按负数录入。' : '退货成本请按负数录入。'}</div>`
+    + t4SummaryEntryTable('销售与成本', T4.sumDate, sc.keys, `${sc.n} · ${T4.sumDate}`);
 };
 
 function t4FindHead(rows, def) {
@@ -578,25 +584,27 @@ function t4ResolveChannel(value) {
   return hit ? hit.id : '';
 }
 const t4SummaryReady = imp => !!imp && T4_FILE_DEFS.summaryDaily.required.every(k => imp.map[k] != null)
-  && T4_INPUT_KEYS.some(k => imp.map[k] != null);
+  && t4SumScope().keys.some(k => imp.map[k] != null);
 
 S['t4-sumimp'] = () => {
-  t4Load(); const imp = T4.imp && T4.imp.mode === 'summary' ? T4.imp : null;
-  if (!imp) return head('汇总导入', '一个文件内按“归属事业部 + 渠道 + 日期”导入全部渠道；各渠道原有导入入口继续保留。', '工具箱 · T4',
+  t4Load(); const sc = t4SumScope(), scItems = T4_INPUTS.filter(x => sc.keys.includes(x.k));
+  const imp = T4.imp && T4.imp.mode === 'summary' ? T4.imp : null;
+  if (!imp) return head(`汇总导入 · ${sc.n}`, `一个文件内按“归属事业部 + 渠道 + 日期”导入全部渠道的${sc.n}；各渠道原有导入入口继续保留。`, '工具箱 · T4',
     t4PeriodControl('<button class="btn" data-t4act="sumTemplate">下载模板</button><button class="btn" data-t4go="overview">← 返回</button><button class="btn pri" data-t4act="sumPick">选择汇总文件</button>'))
     + card('汇总文件要求', table([{t:'字段'},{t:'要求'}], [
       ['渠道', `必填；支持：${T4_CH.map(c => c.n).join('、')}`],
       ['日期', '必填；只导入当前期间的数据'],
-      ['损益科目', '至少映射一个；空白不覆盖，明确的 0 会导入'],
+      [`${sc.n}科目`, `${scItems.map(x => x.n).join('、')}；至少映射一个，空白不覆盖，明确的 0 会导入`],
       ['归属事业部', '模板中提供用于核对；实际归属以系统渠道配置为准'],
     ]))
-    + '<div class="note"><b>支持 .xlsx、.xls、.csv、.tsv。</b>同一份汇总文件重复导入不会重复累计，也不会删除各渠道专用文件导入的数据。</div>';
+    + `<div class="note"><b>支持 .xlsx、.xls、.csv、.tsv。</b>本入口只写${sc.n}科目；与${sc.n === '销售收入' ? '成本' : '收入'}导入、各渠道专用文件导入互不覆盖，重复导入不会重复累计。</div>`;
   const def = T4_FILE_DEFS.summaryDaily, hdr = imp.rows[imp.headRow] || [];
+  const fields = def.fields.filter(([k]) => ['date','bu','channel'].includes(k) || sc.keys.includes(k));
   const options = k => hdr.map((x, i) => `<option value="${i}" ${imp.map[k] === i ? 'selected' : ''}>${H(String(x || '(空)').slice(0,30))}</option>`).join('');
-  return head(`汇总导入 · ${H(imp.fileName)}`, '确认渠道、日期及损益科目的列对应关系。', '工具箱 · T4', '<button class="btn" data-t4act="sumImpCancel">取消</button>')
+  return head(`汇总导入 · ${sc.n} · ${H(imp.fileName)}`, `确认渠道、日期及${sc.n}科目的列对应关系。`, '工具箱 · T4', '<button class="btn" data-t4act="sumImpCancel">取消</button>')
     + `<div class="frow" style="margin-bottom:13px"><span class="fi">✓</span><span><span class="fn">${H(imp.fileName)}</span><br><span class="fm">${imp.rows.length} 行</span></span></div>`
     + cardp('表头行', `<select id="t4head">${imp.rows.slice(0,15).map((r,i) => `<option value="${i}" ${i===imp.headRow?'selected':''}>第 ${i+1} 行：${H(r.filter(Boolean).slice(0,6).join(' | ').slice(0,80))}</option>`).join('')}</select>`)
-    + card('列对应', table([{t:'目标字段'},{t:'文件字段'}], def.fields.map(([k,n]) => [`${H(n)}${def.required.includes(k) ? ' <span class="red">*</span>' : ''}`, `<select data-t4map="${k}"><option value="">— 不使用 —</option>${options(k)}</select>`])))
+    + card('列对应', table([{t:'目标字段'},{t:'文件字段'}], fields.map(([k,n]) => [`${H(n)}${def.required.includes(k) ? ' <span class="red">*</span>' : ''}`, `<select data-t4map="${k}"><option value="">— 不使用 —</option>${options(k)}</select>`])))
     + `<div style="display:flex;justify-content:flex-end"><button class="btn pri" data-t4act="sumImpRun" ${t4SummaryReady(imp)?'':'disabled'}>导入全部渠道</button></div>`;
 };
 
@@ -617,7 +625,8 @@ async function t4PickSummaryFile() {
 function t4SummaryImpRun() {
   const imp = T4.imp;
   if (!imp || imp.mode !== 'summary' || !t4SummaryReady(imp)) return;
-  T4_CH.forEach(c => t4ClearSource(c.id, 'summaryDaily'));
+  const sc = t4SumScope();
+  T4_CH.forEach(c => t4ClearSource(c.id, sc.fileK));
   let used = 0, skipped = 0; const seen = new Set(), channels = new Set(), unknown = new Set();
   imp.rows.slice(imp.headRow + 1).forEach(row => {
     const get = k => imp.map[k] == null ? '' : row[imp.map[k]];
@@ -625,24 +634,25 @@ function t4SummaryImpRun() {
     if (!ch) { const name = String(get('channel') || '').trim(); if (name) unknown.add(name); skipped++; return; }
     if (!dt || !dt.startsWith(T4.period + '-')) { skipped++; return; }
     let wrote = false;
-    T4_INPUT_KEYS.forEach(k => {
+    sc.keys.forEach(k => {
       if (imp.map[k] == null) return;
       const value = get(k);
       if (value == null || String(value).trim() === '') return;
-      t4Add(ch, dt, k, t4Num(value), 'summaryDaily'); wrote = true;
+      t4Add(ch, dt, k, t4Num(value), sc.fileK); wrote = true;
     });
     if (!wrote) { skipped++; return; }
     seen.add(`${ch}:${dt}`); channels.add(ch); used++;
   });
   t4Save(); T4.imp = null; t4Go('overview');
   const bad = unknown.size ? `；未识别渠道：${[...unknown].slice(0,5).join('、')}` : '';
-  toast(`汇总导入 ${channels.size} 个渠道、${seen.size} 个渠道日、${used} 行${skipped ? `，跳过 ${skipped} 行` : ''}${bad}`, 5200);
+  toast(`${sc.n}汇总导入 ${channels.size} 个渠道、${seen.size} 个渠道日、${used} 行${skipped ? `，跳过 ${skipped} 行` : ''}${bad}`, 5200);
 }
 
 function t4SummaryTemplate() {
-  const hdr = ['归属事业部','渠道','日期', ...T4_INPUTS.map(x => x.n)];
-  const rows = T4_CH.map(c => [t4BuName(c.bu), c.n, t4Date(1), ...T4_INPUTS.map(() => '')]);
-  download(`T4汇总导入模板_${T4.period}.csv`, toCSV([hdr, ...rows])); toast('已下载汇总导入模板');
+  const sc = t4SumScope(), items = T4_INPUTS.filter(x => sc.keys.includes(x.k));
+  const hdr = ['归属事业部','渠道','日期', ...items.map(x => x.n)];
+  const rows = T4_CH.map(c => [t4BuName(c.bu), c.n, t4Date(1), ...items.map(() => '')]);
+  download(`T4${sc.n}汇总导入模板_${T4.period}.csv`, toCSV([hdr, ...rows])); toast(`已下载${sc.n}汇总导入模板`);
 }
 
 function t4MgmtTemplate() {
@@ -905,7 +915,12 @@ function t4Go(v) { go(v === 'overview' ? 't4' : `t4-${v}`); }
 
 document.addEventListener('click', e => {
   const nav = e.target.closest('[data-t4go]');
-  if (nav) { const [v,ch] = nav.dataset.t4go.split(':'); if (ch) T4.editCh = ch; if (v === 'imp' || v === 'sumimp') T4.imp = null; t4Go(v); return; }
+  if (nav) {
+    const [v,ch] = nav.dataset.t4go.split(':');
+    if (ch && (v === 'sumimp' || v === 'summan')) T4.sumScope = ch;
+    else if (ch) T4.editCh = ch;
+    if (v === 'imp' || v === 'sumimp') T4.imp = null; t4Go(v); return;
+  }
   const file = e.target.closest('[data-t4file]'); if (file) { t4PickFile(file.dataset.t4file); return; }
   const a = e.target.closest('[data-t4act]'); if (!a) return;
   if (a.dataset.t4act === 'saveMan') {
