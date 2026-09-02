@@ -206,7 +206,7 @@ T4_FILE_DEFS.summaryDaily = {
   required: ['channel', 'date'],
 };
 
-const T4 = { period: new Date().toISOString().slice(0, 7), data: {}, cfg: {}, editCh: 'tmall', imp: null, sumDate: '', viewDate: '' };
+const T4 = { period: new Date().toISOString().slice(0, 7), data: {}, cfg: {}, editCh: 'tmall', imp: null, sumDate: '', viewDate: '', mgmtFrom: '', mgmtTo: '' };
 
 function t4Clone(x) { return JSON.parse(JSON.stringify(x)); }
 function t4Load() {
@@ -664,6 +664,22 @@ function t4MgmtApplyRows(rows) {
   return { set, channels: channels.size, unknown: [...unknown], fallback: headRow < 0 };
 }
 
+/* 区间天数（含首尾） */
+const t4RangeDays = (from, to) => Math.round((new Date(to + 'T00:00:00') - new Date(from + 'T00:00:00')) / 86400000) + 1;
+/* 月度金额在任意日期区间内的分摊额；跨月时按各自月份的自然日分别折算 */
+function t4RangeAmount(monthTotal, from, to) {
+  let sum = 0, d = new Date(from + 'T00:00:00');
+  const end = new Date(to + 'T00:00:00');
+  while (d <= end) {
+    const y = d.getFullYear(), m = d.getMonth(), dim = new Date(y, m + 1, 0).getDate();
+    const monthEnd = new Date(y, m, dim);
+    const spanEnd = end < monthEnd ? end : monthEnd;
+    sum += monthTotal / dim * (Math.round((spanEnd - d) / 86400000) + 1);
+    d = new Date(y, m + 1, 1);
+  }
+  return sum;
+}
+
 function t4MgmtPickFile() {
   const input = document.createElement('input'); input.type = 'file'; input.accept = '.xlsx,.xls,.csv,.tsv,.txt';
   input.onchange = async () => {
@@ -793,19 +809,24 @@ S['t4-cfg'] = () => {
 S['t4-mgmt'] = () => {
   t4Load();
   const days = t4Days();
+  let from = /^\d{4}-\d{2}-\d{2}$/.test(T4.mgmtFrom) ? T4.mgmtFrom : t4Date(1);
+  let to = /^\d{4}-\d{2}-\d{2}$/.test(T4.mgmtTo) ? T4.mgmtTo : t4Date(days);
+  if (to < from) to = from;
+  const rangeN = t4RangeDays(from, to);
   const rows = T4_CH.map(c => {
     const cfg = T4.cfg[c.id] || {};
     const cells = T4_MGMT_FIELDS.map(([k]) =>
       `<input type="number" step="0.01" data-t4mgmt="${c.id}:${k}" data-t4orig="${cfg[k] != null ? cfg[k] : ''}" value="${cfg[k] != null ? cfg[k] : ''}" placeholder="—" style="width:104px">`);
     const total = T4_MGMT_FIELDS.reduce((n, [k]) => n + (+cfg[k] || 0), 0);
     return [t4BuPill(c.bu), `<b>${H(c.n)}</b>`, ...cells,
-      `<b class="mono">${money(total)}</b>`, `<span class="mono">${money(total / days)}</span>`];
+      `<b class="mono">${money(total)}</b>`, `<span class="mono">${money(total / days)}</span>`,
+      `<b class="mono">${money(t4RangeAmount(total, from, to))}</b>`];
   });
-  return head('T4 管理费用分摊', `按项目录入各渠道当月分摊金额，系统平均分摊到每一天（月度金额 ÷ 当月自然日，本期 ${days} 天）。留空表示该渠道该项目不分摊。`, '工具箱 · T4',
-    t4PeriodControl('<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="mgmtTemplate">下载模板</button><button class="btn" data-t4act="mgmtPick">导入分摊</button><button class="btn pri" data-t4act="mgmtSave">保存分摊</button>'))
-    + card('月度分摊金额（元/月）', table(
-      [{t:'归属事业部'},{t:'渠道'}, ...T4_MGMT_FIELDS.map(([,n]) => ({t:n,n:1})), {t:'月合计',n:1},{t:'折算每日',n:1}], rows))
-    + '<div class="note"><b>口径：</b>直接管理费用 = 直接人工 + 直接租金物业 + 直接其他管理；间接管理费用 = 人力公摊 + 房租水电公摊 + 其他公摊。每日分摊额 = 月度金额 ÷ 当月自然日；某天人工或文件实填的同名科目优先于分摊值。修改立即影响本期全部日期的派生结果与汇总。</div>';
+  return head('T4 管理费用分摊', `按项目录入各渠道当月分摊金额，系统平均分摊到每一天（月度金额 ÷ 当月自然日）。当前区间 ${from} ～ ${to}，共 ${rangeN} 天；「区间合计」= 日摊 × 区间天数。留空表示该渠道该项目不分摊。`, '工具箱 · T4',
+    `<label class="sel">起 <input id="t4MgmtFrom" type="date" value="${from}" style="width:132px"></label><label class="sel">止 <input id="t4MgmtTo" type="date" value="${to}" min="${from}" style="width:132px"></label><button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="mgmtTemplate">下载模板</button><button class="btn" data-t4act="mgmtPick">导入分摊</button><button class="btn pri" data-t4act="mgmtSave">保存分摊</button>`)
+    + card(`月度分摊金额（元/月） · 区间 ${from} ～ ${to}（${rangeN} 天）`, table(
+      [{t:'归属事业部'},{t:'渠道'}, ...T4_MGMT_FIELDS.map(([,n]) => ({t:n,n:1})), {t:'月合计',n:1},{t:'折算每日',n:1},{t:`区间合计（${rangeN} 天）`,n:1}], rows))
+    + '<div class="note"><b>口径：</b>直接管理费用 = 直接人工 + 直接租金物业 + 直接其他管理；间接管理费用 = 人力公摊 + 房租水电公摊 + 其他公摊。每日分摊额 = 月度金额 ÷ 当月自然日，区间跨月时按各月天数分别折算；某天人工或文件实填的同名科目优先于分摊值。修改立即影响对应日期的派生结果与汇总。</div>';
 };
 
 S['t4-rules'] = () => head('T4 取数口径', '以下规则来自用户提供的销售明细、平台推广明细和 2026-08 日损益底稿。', '工具箱 · T4', '<button class="btn" data-t4go="overview">← 返回</button>')
@@ -913,6 +934,12 @@ document.addEventListener('click', e => {
 document.addEventListener('change', e => {
   if (e.target.id === 't4Period') { T4.period = e.target.value || T4.period; T4.imp = null; T4.viewDate = ''; t4Go('overview'); }
   else if (e.target.id === 't4ViewDate') { T4.viewDate = e.target.value || ''; t4Go(e.target.dataset.view === 'sheet' ? 'sheet' : 'overview'); }
+  else if (e.target.id === 't4MgmtFrom' || e.target.id === 't4MgmtTo') {
+    if (e.target.id === 't4MgmtFrom') T4.mgmtFrom = e.target.value || ''; else T4.mgmtTo = e.target.value || '';
+    if (T4.mgmtFrom && T4.mgmtTo && T4.mgmtTo < T4.mgmtFrom) T4.mgmtTo = T4.mgmtFrom;
+    if (T4.mgmtFrom && T4.mgmtFrom.slice(0, 7) !== T4.period) { T4.period = T4.mgmtFrom.slice(0, 7); T4.imp = null; T4.viewDate = ''; }
+    t4Go('mgmt');
+  }
   else if (e.target.id === 't4chSel') { T4.editCh = e.target.value; t4Go('man'); }
   else if (e.target.id === 't4SumDate') { T4.sumDate = e.target.value || t4Date(1); t4Go('summan'); }
   else if (e.target.id === 't4head' && T4.imp) { T4.imp.headRow = +e.target.value; T4.imp.map = t4AutoMap(T4.imp.rows[T4.imp.headRow] || [], T4_FILE_DEFS[T4.imp.fileK]); t4Go(T4.imp.mode === 'summary' ? 'sumimp' : 'imp'); }
