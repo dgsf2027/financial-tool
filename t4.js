@@ -200,8 +200,14 @@ const T4_FILE_DEFS = {
 };
 T4_FILE_DEFS.summaryDaily = {
   fields: [
-    ['bu', '归属事业部', ['归属事业部', '事业部']], ['channel', '渠道', ['渠道', '渠道名称', '店铺']],
-    ...T4_FILE_DEFS.daily.fields,
+    ['bu', '归属事业部', ['归属事业部', '事业部']],
+    ['channel', '渠道', ['渠道', '渠道名称', '店铺', '销售渠道']],
+    ['type', '订单类型', ['订单类型', '业务类型']],
+    // 吉客云明细列名：发货时间→日期、分摊后金额→销售收入、货品成本→销售成本
+    ...T4_FILE_DEFS.daily.fields.map(f =>
+      f[0] === 'date' ? ['date', '日期', ['日期', '发货时间']]
+      : f[0] === 'retailIncome' ? ['retailIncome', '零售收入', ['零售收入', '分摊后金额']]
+      : f[0] === 'retailCost' ? ['retailCost', '零售成本', ['零售成本', '货品成本']] : f),
   ],
   required: ['channel', 'date'],
 };
@@ -576,10 +582,13 @@ function t4ClearSource(ch, fileK) {
 
 function t4ResolveChannel(value) {
   const norm = x => String(x == null ? '' : x).toLowerCase().replace(/[\s\-_—（）()]/g, '');
-  const aliases = { 京东自营店: 'jdzy', 京东pop: 'jdpop', 抖音达人: 'dycreator' };
+  const aliases = { 京东自营店: 'jdzy', 京东pop: 'jdpop', 抖音达人: 'dycreator',
+    // 吉客云「销售渠道」用店铺全名
+    天猫澳乐旗舰店: 'tmall', 京东澳乐官方旗舰店: 'jdpop', 快手澳乐母婴品牌店: 'ks' };
   const raw = String(value == null ? '' : value).trim();
   if (aliases[raw]) return aliases[raw];
   const n = norm(raw);
+  if (aliases[n]) return aliases[n];
   const hit = T4_CH.find(c => norm(c.n) === n || norm(c.id) === n);
   return hit ? hit.id : '';
 }
@@ -591,15 +600,15 @@ S['t4-sumimp'] = () => {
   const imp = T4.imp && T4.imp.mode === 'summary' ? T4.imp : null;
   if (!imp) return head(`汇总导入 · ${sc.n}`, `一个文件内按“归属事业部 + 渠道 + 日期”导入全部渠道的${sc.n}；各渠道原有导入入口继续保留。`, '工具箱 · T4',
     t4PeriodControl('<button class="btn" data-t4act="sumTemplate">下载模板</button><button class="btn" data-t4go="overview">← 返回</button><button class="btn pri" data-t4act="sumPick">选择汇总文件</button>'))
-    + card('汇总文件要求', table([{t:'字段'},{t:'要求'}], [
-      ['渠道', `必填；支持：${T4_CH.map(c => c.n).join('、')}`],
-      ['日期', '必填；只导入当前期间的数据'],
-      [`${sc.n}科目`, `${scItems.map(x => x.n).join('、')}；至少映射一个，空白不覆盖，明确的 0 会导入`],
-      ['归属事业部', '模板中提供用于核对；实际归属以系统渠道配置为准'],
+    + card('汇总文件要求（兼容吉客云日损益明细直接导入）', table([{t:'字段'},{t:'要求'}], [
+      ['渠道 / 销售渠道', `必填；支持渠道名或店铺全名：${T4_CH.map(c => c.n).join('、')}、天猫-澳乐旗舰店、京东-澳乐官方旗舰店、快手-澳乐母婴品牌店`],
+      ['日期 / 发货时间', '必填；只导入当前期间的数据，同渠道同日多行自动累加'],
+      [`${sc.n}科目`, `${sc.fileK === 'summaryIncome' ? '分摊后金额（即销售收入）' : '货品成本（即销售成本）'}；也认${scItems.map(x => x.n).join('、')}列名。空白不覆盖，明确的 0 会导入`],
+      ['订单类型', '选填；「退货」行自动按负数计入退货科目，「售后发货」行跳过'],
     ]))
     + `<div class="note"><b>支持 .xlsx、.xls、.csv、.tsv。</b>本入口只写${sc.n}科目；与${sc.n === '销售收入' ? '成本' : '收入'}导入、各渠道专用文件导入互不覆盖，重复导入不会重复累计。</div>`;
   const def = T4_FILE_DEFS.summaryDaily, hdr = imp.rows[imp.headRow] || [];
-  const fields = def.fields.filter(([k]) => ['date','bu','channel'].includes(k) || sc.keys.includes(k));
+  const fields = def.fields.filter(([k]) => ['date','bu','channel','type'].includes(k) || sc.keys.includes(k));
   const options = k => hdr.map((x, i) => `<option value="${i}" ${imp.map[k] === i ? 'selected' : ''}>${H(String(x || '(空)').slice(0,30))}</option>`).join('');
   return head(`汇总导入 · ${sc.n} · ${H(imp.fileName)}`, `确认渠道、日期及${sc.n}科目的列对应关系。`, '工具箱 · T4', '<button class="btn" data-t4act="sumImpCancel">取消</button>')
     + `<div class="frow" style="margin-bottom:13px"><span class="fi">✓</span><span><span class="fn">${H(imp.fileName)}</span><br><span class="fm">${imp.rows.length} 行</span></span></div>`
@@ -633,12 +642,19 @@ function t4SummaryImpRun() {
     const ch = t4ResolveChannel(get('channel')), dt = t4DateNorm(get('date'));
     if (!ch) { const name = String(get('channel') || '').trim(); if (name) unknown.add(name); skipped++; return; }
     if (!dt || !dt.startsWith(T4.period + '-')) { skipped++; return; }
+    // 明细口径（吉客云）：售后发货行不属于收入/成本；退货行转入退货科目并保证负数
+    const typ = imp.map.type != null ? String(get('type')).trim() : '';
+    if (/售后发货/.test(typ)) { skipped++; return; }
+    const isReturn = /退货/.test(typ);
     let wrote = false;
     sc.keys.forEach(k => {
       if (imp.map[k] == null) return;
       const value = get(k);
       if (value == null || String(value).trim() === '') return;
-      t4Add(ch, dt, k, t4Num(value), sc.fileK); wrote = true;
+      let key = k, num = t4Num(value);
+      if (isReturn && k === 'retailIncome') { key = 'returnAmount'; num = num > 0 ? -num : num; }
+      else if (isReturn && k === 'retailCost') { key = 'returnCost'; num = num > 0 ? -num : num; }
+      t4Add(ch, dt, key, num, sc.fileK); wrote = true;
     });
     if (!wrote) { skipped++; return; }
     seen.add(`${ch}:${dt}`); channels.add(ch); used++;
@@ -649,10 +665,11 @@ function t4SummaryImpRun() {
 }
 
 function t4SummaryTemplate() {
-  const sc = t4SumScope(), items = T4_INPUTS.filter(x => sc.keys.includes(x.k));
-  const hdr = ['归属事业部','渠道','日期', ...items.map(x => x.n)];
-  const rows = T4_CH.map(c => [t4BuName(c.bu), c.n, t4Date(1), ...items.map(() => '')]);
-  download(`T4${sc.n}汇总导入模板_${T4.period}.csv`, toCSV([hdr, ...rows])); toast(`已下载${sc.n}汇总导入模板`);
+  // 模板列名对齐吉客云日损益明细：销售渠道 / 订单类型 / 发货时间 / 分摊后金额（收入）或 货品成本（成本）
+  const sc = t4SumScope(), amountCol = sc.fileK === 'summaryIncome' ? '分摊后金额' : '货品成本';
+  const hdr = ['销售渠道', '订单类型', '发货时间', amountCol];
+  const rows = T4_CH.map(c => [c.n, '', t4Date(1), '']);
+  download(`T4${sc.n}汇总导入模板_${T4.period}.csv`, toCSV([hdr, ...rows])); toast(`已下载${sc.n}汇总导入模板（吉客云列名）`);
 }
 
 function t4MgmtTemplate() {
