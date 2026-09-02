@@ -206,7 +206,7 @@ T4_FILE_DEFS.summaryDaily = {
   required: ['channel', 'date'],
 };
 
-const T4 = { period: new Date().toISOString().slice(0, 7), data: {}, cfg: {}, editCh: 'tmall', imp: null, sumDate: '' };
+const T4 = { period: new Date().toISOString().slice(0, 7), data: {}, cfg: {}, editCh: 'tmall', imp: null, sumDate: '', viewDate: '' };
 
 function t4Clone(x) { return JSON.parse(JSON.stringify(x)); }
 function t4Load() {
@@ -360,6 +360,32 @@ function t4Group(ids) {
   out.netMargin = out.salesIncome ? out.netProfit / out.salesIncome : 0;
   return out;
 }
+/* ---------- 单日视图：看板可选具体日期，清空回整月 ---------- */
+const t4DayHasIncome = (ch, dt) => t4InputValue(t4Raw(ch, dt), 'retailIncome') != null;
+const t4DayOK = (ids, dt) => ids.every(id => t4DayHasIncome(id, dt));
+/* 当前期间内的有效单日日期；跨期间的旧选择视为整月 */
+const t4ViewDate = () => (T4.viewDate && T4.viewDate.startsWith(T4.period + '-') ? T4.viewDate : '');
+function t4DayData(ch, dt) {
+  const r = t4Row(ch, dt);
+  if (r) return r;
+  // 当日无任何数据：只计提管理费日摊
+  const out = Object.fromEntries(T4_METRICS.map(x => [x.k, 0]));
+  const md = t4MgmtDaily(ch);
+  if (md.any) {
+    ['directLabor','directRent','directOther','sharedLabor','sharedRent','sharedOther','direct','indirect'].forEach(k => { out[k] = md[k]; });
+    out.contribution = -md.direct; out.netProfit = -(md.direct + md.indirect);
+  }
+  return out;
+}
+function t4GroupDay(ids, dt) {
+  const out = Object.fromEntries(T4_METRICS.filter(x => !x.pct).map(x => [x.k, 0]));
+  ids.forEach(id => { const r = t4DayData(id, dt); T4_METRICS.filter(x => !x.pct).forEach(x => { out[x.k] += r[x.k] || 0; }); });
+  out.grossMargin = out.salesIncome ? out.grossProfit / out.salesIncome : 0;
+  out.contributionRate = out.salesIncome ? out.contribution / out.salesIncome : 0;
+  out.netMargin = out.salesIncome ? out.netProfit / out.salesIncome : 0;
+  return out;
+}
+
 function t4Gap(ids = T4_ALL) {
   const ns = ids.map(id => t4Filled(id));
   return { max: Math.max(...ns), min: Math.min(...ns), gap: Math.max(...ns) - Math.min(...ns) };
@@ -383,19 +409,23 @@ function t4Cal(ch) {
 
 S.t4 = () => {
   t4Load();
-  const g = t4Gap(), ok = t4SumOK(), ecomOK = t4SumOK(T4_BIG_ECOM), pddOK = t4SumOK(T4_PDD), rmOK = t4SumOK(T4_RUIMIAN), dealerOK = t4SumOK(T4_DEALER);
+  const vd = t4ViewDate();
+  const g = t4Gap(), ok = vd ? t4DayOK(T4_ALL, vd) : t4SumOK(),
+    ecomOK = vd ? t4DayOK(T4_BIG_ECOM, vd) : t4SumOK(T4_BIG_ECOM), pddOK = vd ? t4DayOK(T4_PDD, vd) : t4SumOK(T4_PDD),
+    rmOK = vd ? t4DayOK(T4_RUIMIAN, vd) : t4SumOK(T4_RUIMIAN), dealerOK = vd ? t4DayOK(T4_DEALER, vd) : t4SumOK(T4_DEALER);
   const rows = T4_CH.map(c => {
-    const n = t4Filled(c.id), m = t4Month(c.id), mgmtOnly = !n && t4MgmtDaily(c.id).any;
+    const n = t4Filled(c.id), m = vd ? t4DayData(c.id, vd) : t4Month(c.id);
+    const mgmtAny = t4MgmtDaily(c.id).any, hasInc = vd ? t4DayHasIncome(c.id, vd) : n > 0, mgmtOnly = !n && mgmtAny;
     const src = c.files.length ? pill('文件/人工', 'ok') : pill('人工', 'wa');
     const st = n === 0 ? (mgmtOnly ? pill('仅管理费', 'wa') : pill('未开始', 'cr')) : n < 15 ? pill('缺口大', 'wa') : pill('已有数据', 'ok');
     return [t4BuPill(c.bu), `<b>${H(c.n)}</b>`,
       `<b class="mono">${n}</b> / ${t4Days()}`, t4Cal(c.id), src,
-      n ? money(m.salesIncome) : '—', n || mgmtOnly ? money(m.netProfit) : '—', n ? `${(m.netMargin * 100).toFixed(1)}%` : '—', st,
+      hasInc ? money(m.salesIncome) : '—', hasInc || mgmtAny ? money(m.netProfit) : '—', hasInc ? `${(m.netMargin * 100).toFixed(1)}%` : '—', st,
       `${c.files.length ? `<button class="btn sm" data-t4go="imp:${c.id}">导入</button>` : ''}
        <button class="btn sm" data-t4go="man:${c.id}">录入</button>`];
   });
   return head('T4　日损益表', `按底稿完整科目重算 ${T4_CH.length} 个渠道，并分别归集到大电商、拼多多、瑞眠和经销事业部。`, '工具箱 · 已更新',
-    t4PeriodControl('<button class="btn" data-t4go="sumimp">汇总导入</button><button class="btn" data-t4go="summan">汇总录入</button><button class="btn" data-t4go="rules">取数口径</button><button class="btn" data-t4go="mgmt">管理费分摊</button><button class="btn" data-t4go="cfg">参数</button><button class="btn pri" data-t4go="sheet">看损益表</button>'))
+    t4PeriodControl(`<label class="sel">日期 <input id="t4ViewDate" data-view="overview" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vd}" title="选具体日期看单日损益，清空回整月累计" style="width:132px"></label><button class="btn" data-t4go="sumimp">汇总导入</button><button class="btn" data-t4go="summan">汇总录入</button><button class="btn" data-t4go="rules">取数口径</button><button class="btn" data-t4go="mgmt">管理费分摊</button><button class="btn" data-t4go="cfg">参数</button><button class="btn pri" data-t4go="sheet">看损益表</button>`))
     + kpis([
       { k: '渠道', v: String(T4_CH.length), u: '个' },
       { k: '大电商', v: String(T4_BIG_ECOM.length), u: '个渠道' },
@@ -406,17 +436,18 @@ S.t4 = () => {
       { k: '拼多多汇总', v: pddOK ? '可用' : '禁用', t: pddOK ? 'g' : 'c' },
       { k: '瑞眠汇总', v: rmOK ? '可用' : '禁用', t: rmOK ? 'g' : 'c' },
       { k: '经销汇总', v: dealerOK ? '可用' : '禁用', t: dealerOK ? 'g' : 'c' },
-      { k: '全部汇总', v: ok ? '可用' : '禁用', t: ok ? 'g' : 'c', d: `全渠道极差 ${g.gap} 天` },
+      { k: '全部汇总', v: ok ? '可用' : '禁用', t: ok ? 'g' : 'c', d: vd ? `${vd} 单日` : `全渠道极差 ${g.gap} 天` },
       (() => { // 管理费分摊全渠道月合计——分摊值随有收入数据的日子计入损益
         let sum = 0; const set = new Set();
         T4_CH.forEach(c => { const cfg = T4.cfg[c.id] || {}; T4_MGMT_FIELDS.forEach(([k]) => { if (cfg[k] != null) { sum += +cfg[k] || 0; set.add(c.id); } }); });
         return { k: '管理费分摊', v: set.size ? money(sum) : '未设置', u: set.size ? '元/月' : '', d: set.size ? `${set.size} 个渠道已设置 · 日摊 ${money(sum / t4Days())}` : '点「管理费分摊」录入或导入' };
       })(),
     ])
-    + (ok ? `<div class="note g"><b>四个事业部取数天数已对齐。</b>大电商、拼多多、瑞眠、经销和全部汇总均可用。</div>`
+    + (vd ? `<div class="note"><b>单日视图 ${vd}。</b>渠道列为当日损益（无数据渠道仅计管理费日摊）；汇总卡要求组内全部渠道当日均有收入数据。清空日期返回整月累计。</div>` : '')
+    + (vd ? '' : ok ? `<div class="note g"><b>四个事业部取数天数已对齐。</b>大电商、拼多多、瑞眠、经销和全部汇总均可用。</div>`
       : g.max === 0 ? '<div class="note"><b>本期尚无数据。</b>先导入平台文件或逐日录入；已设置的管理费分摊会随有收入数据的日子自动计入损益。</div>'
       : `<div class="note c"><b>部分汇总不可用。</b>大电商事业部：${ecomOK ? '可用' : '禁用'}；拼多多事业部：${pddOK ? '可用' : '禁用'}；瑞眠事业部：${rmOK ? '可用' : '禁用'}；经销事业部：${dealerOK ? '可用' : '禁用'}；全部汇总：禁用。请补齐对应事业部的渠道数据。</div>`)
-    + card(`${T4_CH.length} 渠道取数进度`, table(
+    + card(vd ? `${T4_CH.length} 渠道 · ${vd} 单日损益` : `${T4_CH.length} 渠道取数进度`, table(
       [{t:'归属事业部'},{t:'渠道'},{t:'取数天数',n:1},{t:`日历（1—${t4Days()}）`},{t:'方式'},{t:'销售收入',n:1},{t:'净利润',n:1},{t:'净利率'},{t:'状态'},{t:''}], rows))
     + '<div class="t4lg"><span><em class="f"></em>实填</span><span><em class="h"></em>含参数/硬推</span><span><em class="n"></em>无收入数据</span></div>';
 };
@@ -725,8 +756,11 @@ function t4ImpRun() {
 
 S['t4-sheet'] = () => {
   t4Load();
-  const tmOK = t4SumOK(T4_TMAI), ecomOK = t4SumOK(T4_BIG_ECOM), pddOK = t4SumOK(T4_PDD), rmOK = t4SumOK(T4_RUIMIAN), dealerOK = t4SumOK(T4_DEALER), allOK = t4SumOK(T4_ALL);
-  const months = T4_CH.map(c => t4Month(c.id)), tm = t4Group(T4_TMAI), ecom = t4Group(T4_BIG_ECOM), pdd = t4Group(T4_PDD), rm = t4Group(T4_RUIMIAN), dealer = t4Group(T4_DEALER), all = t4Group(T4_ALL);
+  const vd = t4ViewDate();
+  const okOf = ids => vd ? t4DayOK(ids, vd) : t4SumOK(ids);
+  const grpOf = ids => vd ? t4GroupDay(ids, vd) : t4Group(ids);
+  const tmOK = okOf(T4_TMAI), ecomOK = okOf(T4_BIG_ECOM), pddOK = okOf(T4_PDD), rmOK = okOf(T4_RUIMIAN), dealerOK = okOf(T4_DEALER), allOK = okOf(T4_ALL);
+  const months = T4_CH.map(c => vd ? t4DayData(c.id, vd) : t4Month(c.id)), tm = grpOf(T4_TMAI), ecom = grpOf(T4_BIG_ECOM), pdd = grpOf(T4_PDD), rm = grpOf(T4_RUIMIAN), dealer = grpOf(T4_DEALER), all = grpOf(T4_ALL);
   const headers = [{t:'损益项目'}, ...T4_CH.map(c => ({t:c.n,n:1})), {t:'特卖汇总',n:1}, {t:'大电商事业部',n:1}, {t:'拼多多事业部',n:1}, {t:'瑞眠事业部',n:1}, {t:'经销事业部',n:1}, {t:'全部汇总',n:1}];
   const rows = T4_METRICS.map(metric => {
     const vals = months.map(m => t4Fmt(m[metric.k], metric.pct));
@@ -736,10 +770,10 @@ S['t4-sheet'] = () => {
     return [name, ...vals, ...groupVals];
   });
   const disabled = [['特卖',tmOK],['大电商事业部',ecomOK],['拼多多事业部',pddOK],['瑞眠事业部',rmOK],['经销事业部',dealerOK],['全部',allOK]].filter(x => !x[1]).map(x => x[0]);
-  return head('渠道事业部日损益表', '渠道月累计后，分别归集到大电商、拼多多、瑞眠和经销事业部；特卖汇总作为大电商事业部的子组保留。', '工具箱 · T4',
-    t4PeriodControl('<button class="btn" data-t4go="overview">← 返回</button><button class="btn pri" data-t4act="export">导出 CSV</button>'))
-    + (disabled.length ? `<div class="note c"><b>以下汇总暂不可用：</b>${disabled.join('、')}。各事业部按内部渠道取数天数分别校验，渠道列仍可核对。</div>` : '')
-    + card('月累计损益', table(headers, rows))
+  return head('渠道事业部日损益表', vd ? `${vd} 单日损益；渠道分别归集到大电商、拼多多、瑞眠和经销事业部。清空日期返回整月累计。` : '渠道月累计后，分别归集到大电商、拼多多、瑞眠和经销事业部；特卖汇总作为大电商事业部的子组保留。', '工具箱 · T4',
+    t4PeriodControl(`<label class="sel">日期 <input id="t4ViewDate" data-view="sheet" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vd}" title="选具体日期看单日损益，清空回整月累计" style="width:132px"></label><button class="btn" data-t4go="overview">← 返回</button><button class="btn pri" data-t4act="export">导出 CSV</button>`))
+    + (disabled.length ? `<div class="note c"><b>以下汇总暂不可用：</b>${disabled.join('、')}。${vd ? '单日汇总要求组内全部渠道当日均有收入数据' : '各事业部按内部渠道取数天数分别校验'}，渠道列仍可核对。</div>` : '')
+    + card(vd ? `${vd} 单日损益` : '月累计损益', table(headers, rows))
     + `<div class="note c"><b>红线口径：</b>京东自营零售成本、退货金额和退货成本仍来自底稿设定比例，不是平台原始数据；所有比例与月度分摊可在「参数」中审阅和修改。</div>`;
 };
 
@@ -877,7 +911,8 @@ document.addEventListener('click', e => {
   else if (a.dataset.t4act === 'mgmtPick') t4MgmtPickFile();
 });
 document.addEventListener('change', e => {
-  if (e.target.id === 't4Period') { T4.period = e.target.value || T4.period; T4.imp = null; t4Go('overview'); }
+  if (e.target.id === 't4Period') { T4.period = e.target.value || T4.period; T4.imp = null; T4.viewDate = ''; t4Go('overview'); }
+  else if (e.target.id === 't4ViewDate') { T4.viewDate = e.target.value || ''; t4Go(e.target.dataset.view === 'sheet' ? 'sheet' : 'overview'); }
   else if (e.target.id === 't4chSel') { T4.editCh = e.target.value; t4Go('man'); }
   else if (e.target.id === 't4SumDate') { T4.sumDate = e.target.value || t4Date(1); t4Go('summan'); }
   else if (e.target.id === 't4head' && T4.imp) { T4.imp.headRow = +e.target.value; T4.imp.map = t4AutoMap(T4.imp.rows[T4.imp.headRow] || [], T4_FILE_DEFS[T4.imp.fileK]); t4Go(T4.imp.mode === 'summary' ? 'sumimp' : 'imp'); }
