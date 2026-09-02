@@ -563,24 +563,38 @@ function t4MgmtTemplate() {
 }
 
 function t4MgmtApplyRows(rows) {
+  // 去 BOM/零宽字符/所有空白后再比对，容忍 Excel、WPS 带入的不可见字符
+  const clean = c => String(c == null ? '' : c).replace(/[﻿​\s]+/g, '');
   const names = T4_MGMT_FIELDS.map(([,n]) => n);
-  const headRow = rows.findIndex(r => r.some(c => String(c == null ? '' : c).trim() === '渠道')
-    && r.some(c => names.includes(String(c == null ? '' : c).trim())));
-  if (headRow < 0) throw new Error('未找到表头行（需包含「渠道」列和至少一个费用项目列）');
-  const hdr = rows[headRow].map(c => String(c == null ? '' : c).trim());
-  const chCol = hdr.indexOf('渠道');
-  const cols = T4_MGMT_FIELDS.map(([k, n]) => [k, hdr.indexOf(n)]).filter(x => x[1] >= 0);
+  let headRow = rows.findIndex(r => r.some(c => clean(c) === '渠道' || clean(c) === '渠道名称')
+    && r.some(c => names.includes(clean(c))));
+  let chCol, cols;
+  if (headRow >= 0) {
+    const hdr = rows[headRow].map(clean);
+    chCol = hdr.indexOf('渠道'); if (chCol < 0) chCol = hdr.indexOf('渠道名称');
+    cols = T4_MGMT_FIELDS.map(([k, n]) => [k, hdr.indexOf(n)]).filter(x => x[1] >= 0);
+  } else {
+    // 兜底：没有可识别的表头时，找到能认出渠道名的列，按模板列序取其右侧 6 列
+    for (const r of rows) { const i = r.findIndex(c => t4ResolveChannel(c)); if (i >= 0) { chCol = i; break; } }
+    if (chCol == null) {
+      const first = (rows.find(r => r.some(c => String(c == null ? '' : c).trim())) || [])
+        .map(c => String(c == null ? '' : c).trim()).filter(Boolean).join(' | ').slice(0, 80);
+      throw new Error(`未找到表头行，也没认出任何渠道名。请保留模板的表头和渠道列。文件首行读到的是：「${first}」`);
+    }
+    headRow = -1;
+    cols = T4_MGMT_FIELDS.map(([k], j) => [k, chCol + 1 + j]);
+  }
   let set = 0; const channels = new Set(), unknown = new Set();
   rows.slice(headRow + 1).forEach(row => {
     const ch = t4ResolveChannel(row[chCol]);
-    if (!ch) { const nm = String(row[chCol] == null ? '' : row[chCol]).trim(); if (nm && nm !== '归属事业部') unknown.add(nm); return; }
+    if (!ch) { const nm = String(row[chCol] == null ? '' : row[chCol]).trim(); if (nm && !['归属事业部','渠道','渠道名称'].includes(nm)) unknown.add(nm); return; }
     cols.forEach(([k, i]) => {
       const v = row[i];
       if (v == null || String(v).trim() === '' || String(v).trim() === '—') return; // 留空 = 不改动该格
       (T4.cfg[ch] = T4.cfg[ch] || {})[k] = t4Num(v); set++; channels.add(ch);
     });
   });
-  return { set, channels: channels.size, unknown: [...unknown] };
+  return { set, channels: channels.size, unknown: [...unknown], fallback: headRow < 0 };
 }
 
 function t4MgmtPickFile() {
@@ -591,7 +605,7 @@ function t4MgmtPickFile() {
       const r = t4MgmtApplyRows(await XLSXLite.readTable(file));
       t4SaveCfg(); t4Go('mgmt');
       const bad = r.unknown.length ? `；未识别渠道：${r.unknown.slice(0, 5).join('、')}` : '';
-      toast(`分摊导入完成：${r.channels} 个渠道、${r.set} 个金额${bad}`, 5200);
+      toast(`分摊导入完成：${r.channels} 个渠道、${r.set} 个金额${r.fallback ? '（未见表头，已按模板列序取数，请核对）' : ''}${bad}`, 5200);
     } catch (e) { toast(`读取失败：${e.message || e}`, 5000); }
   };
   input.click();
