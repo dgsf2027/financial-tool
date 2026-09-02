@@ -42,6 +42,10 @@ const T4_CH = [
     T4_DAILY_FILE,
     { k: 'sales', n: '销售单明细账', hint: '仅取「拼多多-澳乐母婴旗舰店」' },
   ] },
+  { id: 'tm_zzzrest', n: '天猫-zzzrest旗舰店', bu: 'ruimian', tier: '直属', files: [
+    T4_DAILY_FILE,
+    { k: 'sales', n: '销售单明细账', hint: '仅取「天猫-zzzrest旗舰店」；按发货时间归属' },
+  ] },
   { id: 'tianmen', n: '天门', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
   { id: 'gift', n: '礼品单', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
   { id: 'supply', n: '电商供货', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
@@ -52,11 +56,13 @@ const T4_CHM = Object.fromEntries(T4_CH.map(c => [c.id, c]));
 const T4_TMAI = T4_CH.filter(c => c.tier === '特卖').map(c => c.id);
 const T4_BIG_ECOM = T4_CH.filter(c => c.bu === 'ecom').map(c => c.id);
 const T4_PDD = T4_CH.filter(c => c.bu === 'pdd').map(c => c.id);
+const T4_RUIMIAN = T4_CH.filter(c => c.bu === 'ruimian').map(c => c.id);
 const T4_DEALER = T4_CH.filter(c => c.bu === 'dealer').map(c => c.id);
 const T4_ALL = T4_CH.map(c => c.id);
 const T4_BU_META = {
   ecom: { n: '大电商事业部', short: '大电商', pill: 'in' },
   pdd: { n: '拼多多事业部', short: '拼多多', pill: 'ok' },
+  ruimian: { n: '瑞眠事业部', short: '瑞眠', pill: 'mu' },
   dealer: { n: '经销事业部', short: '经销', pill: 'wa' },
 };
 const t4BuName = id => (T4_BU_META[id] || {}).n || id;
@@ -144,6 +150,7 @@ const T4_CFG_DEFAULT = {
   supply: {},
   groupbuy: {},
   dycreator: {},
+  tm_zzzrest: {},
 };
 
 const T4_CFG_FIELDS = [
@@ -376,7 +383,7 @@ function t4Cal(ch) {
 
 S.t4 = () => {
   t4Load();
-  const g = t4Gap(), ok = t4SumOK(), ecomOK = t4SumOK(T4_BIG_ECOM), pddOK = t4SumOK(T4_PDD), dealerOK = t4SumOK(T4_DEALER);
+  const g = t4Gap(), ok = t4SumOK(), ecomOK = t4SumOK(T4_BIG_ECOM), pddOK = t4SumOK(T4_PDD), rmOK = t4SumOK(T4_RUIMIAN), dealerOK = t4SumOK(T4_DEALER);
   const rows = T4_CH.map(c => {
     const n = t4Filled(c.id), m = t4Month(c.id), mgmtOnly = !n && t4MgmtDaily(c.id).any;
     const src = c.files.length ? pill('文件/人工', 'ok') : pill('人工', 'wa');
@@ -387,15 +394,17 @@ S.t4 = () => {
       `${c.files.length ? `<button class="btn sm" data-t4go="imp:${c.id}">导入</button>` : ''}
        <button class="btn sm" data-t4go="man:${c.id}">录入</button>`];
   });
-  return head('T4　日损益表', `按底稿完整科目重算 ${T4_CH.length} 个渠道，并分别归集到大电商、拼多多和经销事业部。`, '工具箱 · 已更新',
+  return head('T4　日损益表', `按底稿完整科目重算 ${T4_CH.length} 个渠道，并分别归集到大电商、拼多多、瑞眠和经销事业部。`, '工具箱 · 已更新',
     t4PeriodControl('<button class="btn" data-t4go="sumimp">汇总导入</button><button class="btn" data-t4go="summan">汇总录入</button><button class="btn" data-t4go="rules">取数口径</button><button class="btn" data-t4go="mgmt">管理费分摊</button><button class="btn" data-t4go="cfg">参数</button><button class="btn pri" data-t4go="sheet">看损益表</button>'))
     + kpis([
       { k: '渠道', v: String(T4_CH.length), u: '个' },
       { k: '大电商', v: String(T4_BIG_ECOM.length), u: '个渠道' },
       { k: '拼多多', v: String(T4_PDD.length), u: '个渠道' },
+      { k: '瑞眠', v: String(T4_RUIMIAN.length), u: '个渠道' },
       { k: '经销', v: String(T4_DEALER.length), u: '个渠道' },
       { k: '大电商汇总', v: ecomOK ? '可用' : '禁用', t: ecomOK ? 'g' : 'c' },
       { k: '拼多多汇总', v: pddOK ? '可用' : '禁用', t: pddOK ? 'g' : 'c' },
+      { k: '瑞眠汇总', v: rmOK ? '可用' : '禁用', t: rmOK ? 'g' : 'c' },
       { k: '经销汇总', v: dealerOK ? '可用' : '禁用', t: dealerOK ? 'g' : 'c' },
       { k: '全部汇总', v: ok ? '可用' : '禁用', t: ok ? 'g' : 'c', d: `全渠道极差 ${g.gap} 天` },
       (() => { // 管理费分摊全渠道月合计——分摊值随有收入数据的日子计入损益
@@ -404,9 +413,9 @@ S.t4 = () => {
         return { k: '管理费分摊', v: set.size ? money(sum) : '未设置', u: set.size ? '元/月' : '', d: set.size ? `${set.size} 个渠道已设置 · 日摊 ${money(sum / t4Days())}` : '点「管理费分摊」录入或导入' };
       })(),
     ])
-    + (ok ? `<div class="note g"><b>三个事业部取数天数已对齐。</b>大电商、拼多多、经销和全部汇总均可用。</div>`
+    + (ok ? `<div class="note g"><b>四个事业部取数天数已对齐。</b>大电商、拼多多、瑞眠、经销和全部汇总均可用。</div>`
       : g.max === 0 ? '<div class="note"><b>本期尚无数据。</b>先导入平台文件或逐日录入；已设置的管理费分摊会随有收入数据的日子自动计入损益。</div>'
-      : `<div class="note c"><b>部分汇总不可用。</b>大电商事业部：${ecomOK ? '可用' : '禁用'}；拼多多事业部：${pddOK ? '可用' : '禁用'}；经销事业部：${dealerOK ? '可用' : '禁用'}；全部汇总：禁用。请补齐对应事业部的渠道数据。</div>`)
+      : `<div class="note c"><b>部分汇总不可用。</b>大电商事业部：${ecomOK ? '可用' : '禁用'}；拼多多事业部：${pddOK ? '可用' : '禁用'}；瑞眠事业部：${rmOK ? '可用' : '禁用'}；经销事业部：${dealerOK ? '可用' : '禁用'}；全部汇总：禁用。请补齐对应事业部的渠道数据。</div>`)
     + card(`${T4_CH.length} 渠道取数进度`, table(
       [{t:'归属事业部'},{t:'渠道'},{t:'取数天数',n:1},{t:`日历（1—${t4Days()}）`},{t:'方式'},{t:'销售收入',n:1},{t:'净利润',n:1},{t:'净利率'},{t:'状态'},{t:''}], rows))
     + '<div class="t4lg"><span><em class="f"></em>实填</span><span><em class="h"></em>含参数/硬推</span><span><em class="n"></em>无收入数据</span></div>';
@@ -486,6 +495,7 @@ function t4ChannelName(ch) {
   return {
     tmall: '天猫-澳乐旗舰店', jdpop: '京东-澳乐官方旗舰店', ks: '快手-澳乐母婴品牌店',
     pdd_aole: '拼多多-澳乐旗舰店', pdd_toy: '拼多多-澳乐母婴玩具旗舰店', pdd_mom: '拼多多-澳乐母婴旗舰店',
+    tm_zzzrest: '天猫-zzzrest旗舰店',
   }[ch] || '';
 }
 function t4Add(ch, dt, key, value, fileK) {
@@ -715,18 +725,18 @@ function t4ImpRun() {
 
 S['t4-sheet'] = () => {
   t4Load();
-  const tmOK = t4SumOK(T4_TMAI), ecomOK = t4SumOK(T4_BIG_ECOM), pddOK = t4SumOK(T4_PDD), dealerOK = t4SumOK(T4_DEALER), allOK = t4SumOK(T4_ALL);
-  const months = T4_CH.map(c => t4Month(c.id)), tm = t4Group(T4_TMAI), ecom = t4Group(T4_BIG_ECOM), pdd = t4Group(T4_PDD), dealer = t4Group(T4_DEALER), all = t4Group(T4_ALL);
-  const headers = [{t:'损益项目'}, ...T4_CH.map(c => ({t:c.n,n:1})), {t:'特卖汇总',n:1}, {t:'大电商事业部',n:1}, {t:'拼多多事业部',n:1}, {t:'经销事业部',n:1}, {t:'全部汇总',n:1}];
+  const tmOK = t4SumOK(T4_TMAI), ecomOK = t4SumOK(T4_BIG_ECOM), pddOK = t4SumOK(T4_PDD), rmOK = t4SumOK(T4_RUIMIAN), dealerOK = t4SumOK(T4_DEALER), allOK = t4SumOK(T4_ALL);
+  const months = T4_CH.map(c => t4Month(c.id)), tm = t4Group(T4_TMAI), ecom = t4Group(T4_BIG_ECOM), pdd = t4Group(T4_PDD), rm = t4Group(T4_RUIMIAN), dealer = t4Group(T4_DEALER), all = t4Group(T4_ALL);
+  const headers = [{t:'损益项目'}, ...T4_CH.map(c => ({t:c.n,n:1})), {t:'特卖汇总',n:1}, {t:'大电商事业部',n:1}, {t:'拼多多事业部',n:1}, {t:'瑞眠事业部',n:1}, {t:'经销事业部',n:1}, {t:'全部汇总',n:1}];
   const rows = T4_METRICS.map(metric => {
     const vals = months.map(m => t4Fmt(m[metric.k], metric.pct));
     const groupVals = [tmOK ? t4Fmt(tm[metric.k], metric.pct) : '—', ecomOK ? t4Fmt(ecom[metric.k], metric.pct) : '—',
-      pddOK ? t4Fmt(pdd[metric.k], metric.pct) : '—', dealerOK ? t4Fmt(dealer[metric.k], metric.pct) : '—', allOK ? t4Fmt(all[metric.k], metric.pct) : '—'];
+      pddOK ? t4Fmt(pdd[metric.k], metric.pct) : '—', rmOK ? t4Fmt(rm[metric.k], metric.pct) : '—', dealerOK ? t4Fmt(dealer[metric.k], metric.pct) : '—', allOK ? t4Fmt(all[metric.k], metric.pct) : '—'];
     const name = metric.lvl ? `<span class="mut">${H(metric.n)}</span>` : `<b>${H(metric.n)}</b>`;
     return [name, ...vals, ...groupVals];
   });
-  const disabled = [['特卖',tmOK],['大电商事业部',ecomOK],['拼多多事业部',pddOK],['经销事业部',dealerOK],['全部',allOK]].filter(x => !x[1]).map(x => x[0]);
-  return head('渠道事业部日损益表', '渠道月累计后，分别归集到大电商、拼多多和经销事业部；特卖汇总作为大电商事业部的子组保留。', '工具箱 · T4',
+  const disabled = [['特卖',tmOK],['大电商事业部',ecomOK],['拼多多事业部',pddOK],['瑞眠事业部',rmOK],['经销事业部',dealerOK],['全部',allOK]].filter(x => !x[1]).map(x => x[0]);
+  return head('渠道事业部日损益表', '渠道月累计后，分别归集到大电商、拼多多、瑞眠和经销事业部；特卖汇总作为大电商事业部的子组保留。', '工具箱 · T4',
     t4PeriodControl('<button class="btn" data-t4go="overview">← 返回</button><button class="btn pri" data-t4act="export">导出 CSV</button>'))
     + (disabled.length ? `<div class="note c"><b>以下汇总暂不可用：</b>${disabled.join('、')}。各事业部按内部渠道取数天数分别校验，渠道列仍可核对。</div>` : '')
     + card('月累计损益', table(headers, rows))
@@ -803,6 +813,7 @@ function t4Export() {
   [
     ['特卖汇总','大电商事业部',T4_TMAI], ['大电商事业部汇总','大电商事业部',T4_BIG_ECOM],
     ['拼多多事业部汇总','拼多多事业部',T4_PDD],
+    ['瑞眠事业部汇总','瑞眠事业部',T4_RUIMIAN],
     ['经销事业部汇总','经销事业部',T4_DEALER], ['全部汇总','全部',T4_ALL],
   ].forEach(([n,bu,ids]) => {
     const ok = t4SumOK(ids), m = ok ? t4Group(ids) : null;
