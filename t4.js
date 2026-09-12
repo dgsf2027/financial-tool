@@ -149,21 +149,15 @@ const T4_METRICS = [
   { k: 'netMargin', n: '净利润率', pct: true, lvl: 0 },
 ];
 
+/* 管理费 6 项月摊不再内置底稿默认值——统一在「管理费分摊」页由用户录入/导入维护 */
 const T4_CFG_DEFAULT = {
-  tmall: { platformFeeRate: .05, platformOtherRate: .033, aftersalesRate: .009, logisticsRate: .08, warehouseRate: .02, taxRate: .01,
-    directLaborMonth: 9802.343, directRentMonth: 1190.5, directOtherMonth: 2095.73,
-    sharedLaborMonth: 194.475465327179, sharedRentMonth: 255.11, sharedOtherMonth: 296.93 },
-  jdzy: { retailCostRate: .45, returnRate: -.16, returnCostRate: -.16, platformFeeRate: .30, taxRate: .04, logisticsMonth: 5000,
-    directLaborMonth: 11273.173, directRentMonth: 2011.54, directOtherMonth: 3541.06,
-    sharedLaborMonth: 91.2252469974487, sharedRentMonth: 431.04, sharedOtherMonth: 501.72 },
-  jdpop: { platformFeeRate: .063, logisticsRate: .10, taxRate: .018,
-    directLaborMonth: 9802.343, directRentMonth: 1190.5, directOtherMonth: 2095.73,
-    sharedLaborMonth: 200.180588463734, sharedRentMonth: 255.11, sharedOtherMonth: 296.93 },
-  vip: { directLaborMonth: 7414.617, directRentMonth: 1026.29, directOtherMonth: 1806.66,
-    sharedLaborMonth: 5.33824775458277, sharedRentMonth: 219.92, sharedOtherMonth: 255.97 },
+  tmall: { platformFeeRate: .05, platformOtherRate: .033, aftersalesRate: .009, logisticsRate: .08, warehouseRate: .02, taxRate: .01 },
+  jdzy: { retailCostRate: .45, returnRate: -.16, returnCostRate: -.16, platformFeeRate: .30, taxRate: .04, logisticsMonth: 5000 },
+  jdpop: { platformFeeRate: .063, logisticsRate: .10, taxRate: .018 },
+  vip: {},
   vip3pl: {},
-  ks: { directLaborMonth: 0, sharedLaborMonth: 82.5103681163978 },
-  priv: { directLaborMonth: 5838.63 },
+  ks: {},
+  priv: {},
   pdd_aole: {},
   pdd_toy: {},
   pdd_mom: {},
@@ -181,9 +175,6 @@ const T4_CFG_FIELDS = [
   ['aftersalesRate', '售后费用率', 'rate'], ['logisticsRate', '快递物流率', 'rate'],
   ['warehouseRate', '仓储费率', 'rate'], ['taxRate', '税率', 'rate'],
   ['logisticsMonth', '快递物流/月', 'money'],
-  ['directLaborMonth', '直接人工/月', 'money'], ['directRentMonth', '直接租金物业/月', 'money'],
-  ['directOtherMonth', '直接其他管理/月', 'money'], ['sharedLaborMonth', '人力公摊/月', 'money'],
-  ['sharedRentMonth', '房租水电公摊/月', 'money'], ['sharedOtherMonth', '其他公摊/月', 'money'],
 ];
 
 /* 管理费分摊页只管这 6 个项目：前 3 项合计为直接管理费用，后 3 项合计为间接管理费用 */
@@ -984,7 +975,7 @@ S['t4-cfg'] = () => {
     return card(c.n, rows.length ? table([{t:'参数'},{t:'值',n:1},{t:'单位'}], rows)
       : '<div class="mut" style="padding:14px">暂无底稿参数，损益科目以人工录入为准。</div>');
   }).join('');
-  return head('T4 参数', '比例基于每日零售收入；月度金额按当月自然日平均分摊。参数均来自 2026-08 日损益底稿。', '工具箱 · T4',
+  return head('T4 参数', '比例基于每日零售收入；月度金额按当月自然日平均分摊。参数均来自 2026-08 日损益底稿；直接/间接管理费用请在「管理费分摊」页维护。', '工具箱 · T4',
     `<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="cfgReset">恢复底稿值</button><button class="btn pri" data-t4act="cfgSave">保存参数</button>`)
     + '<div class="note w"><b>修改会影响所有对应日期的派生结果。</b>人工录入的同名科目优先于参数值。</div>' + blocks;
 };
@@ -1123,7 +1114,14 @@ document.addEventListener('click', e => {
   else if (a.dataset.t4act === 'cfgSave') {
     document.querySelectorAll('[data-t4cfg]').forEach(inp => { const [ch,k] = inp.dataset.t4cfg.split(':'); const meta = T4_CFG_FIELDS.find(x => x[0] === k); T4.cfg[ch][k] = (Number(inp.value) || 0) / (meta && meta[2] === 'rate' ? 100 : 1); });
     t4SaveCfg(); toast('参数已保存'); t4Go('overview');
-  } else if (a.dataset.t4act === 'cfgReset') { T4.cfg = t4Clone(T4_CFG_DEFAULT); t4SaveCfg(); toast('已恢复底稿参数'); t4Go('cfg'); }
+  } else if (a.dataset.t4act === 'cfgReset') {
+    // 只重置比例类底稿参数；管理费分摊是用户数据，原样保留
+    const keep = {};
+    T4_CH.forEach(c => { const cur = T4.cfg[c.id] || {}; keep[c.id] = {}; T4_MGMT_FIELDS.forEach(([k]) => { if (cur[k] != null) keep[c.id][k] = cur[k]; }); });
+    T4.cfg = t4Clone(T4_CFG_DEFAULT);
+    T4_CH.forEach(c => { T4.cfg[c.id] = Object.assign(T4.cfg[c.id] || {}, keep[c.id]); });
+    t4SaveCfg(); toast('已恢复底稿参数（管理费分摊保留）'); t4Go('cfg');
+  }
   else if (a.dataset.t4act === 'mgmtSave') {
     let changed = 0;
     document.querySelectorAll('[data-t4mgmt]').forEach(inp => {
