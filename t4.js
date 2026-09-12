@@ -49,7 +49,7 @@ const T4_CH = [
   { id: 'tianmen', n: '天门', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
   { id: 'gift', n: '礼品单', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
   { id: 'supply', n: '电商供货', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
-  { id: 'groupbuy', n: '团购', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
+  { id: 'groupbuy', n: '分销-团购-零售', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
   { id: 'dycreator', n: '抖音达人店', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
 ];
 const T4_CHM = Object.fromEntries(T4_CH.map(c => [c.id, c]));
@@ -586,7 +586,7 @@ function t4ResolveChannel(value) {
     // 吉客云「销售渠道」用店铺全名
     京东澳乐官方旗舰店: 'jdpop', 快手澳乐母婴品牌店: 'ks',
     // 渠道改店铺全名后，旧文件/旧数据里的简称仍要认
-    天猫: 'tmall', 私域: 'priv' };
+    天猫: 'tmall', 私域: 'priv', 团购: 'groupbuy' };
   const raw = String(value == null ? '' : value).trim();
   if (aliases[raw]) return aliases[raw];
   const n = norm(raw);
