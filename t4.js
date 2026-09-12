@@ -483,7 +483,7 @@ S.t4 = () => {
        <button class="btn sm" data-t4go="man:${c.id}">录入</button>`];
   });
   return head('T4　日损益表', `按底稿完整科目重算 ${T4_CH.length} 个渠道，并分别归集到大电商、拼多多、瑞眠和经销事业部。`, '工具箱 · 已更新',
-    t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="overview" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="选起止日期看区间损益，清空回整月累计" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="overview" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label><button class="btn" data-t4go="sumimp:income">收入导入</button><button class="btn" data-t4go="sumimp:cost">成本导入</button><button class="btn" data-t4go="summan:income">收入录入</button><button class="btn" data-t4go="summan:cost">成本录入</button><button class="btn" data-t4go="channels">渠道列表</button><button class="btn" data-t4go="rules">取数口径</button><button class="btn" data-t4go="mgmt">管理费分摊</button><button class="btn" data-t4go="cfg">参数</button><button class="btn pri" data-t4go="sheet">看损益表</button>`))
+    t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="overview" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="选起止日期看区间损益，清空回整月累计" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="overview" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label><button class="btn" data-t4go="sumimp:income">收入导入</button><button class="btn" data-t4go="sumimp:cost">成本导入</button><button class="btn" data-t4go="summan:income">收入录入</button><button class="btn" data-t4go="summan:cost">成本录入</button><button class="btn" data-t4go="channels">渠道列表</button><button class="btn" data-t4go="rules">取数口径</button><button class="btn" data-t4go="mgmt">管理费分摊</button><button class="btn" data-t4go="cfg">参数</button><button class="btn" data-t4act="wipePeriod" title="清空当前期间全部渠道的收入/成本/费用数据；参数、管理费分摊和渠道列表不受影响">清空本期</button><button class="btn pri" data-t4go="sheet">看损益表</button>`))
     + kpis([
       { k: '渠道', v: String(T4_CH.length), u: '个' },
       { k: '大电商', v: String(T4_BIG_ECOM.length), u: '个渠道' },
@@ -1138,6 +1138,12 @@ document.addEventListener('click', e => {
   else if (a.dataset.t4act === 'mgmtPick') t4MgmtPickFile();
   else if (a.dataset.t4act === 'chTemplate') t4ChTemplate();
   else if (a.dataset.t4act === 'chPick') t4ChPickFile();
+  else if (a.dataset.t4act === 'wipePeriod') {
+    if (confirm(`确认清空 ${T4.period} 期间全部渠道的收入、成本与费用数据？\n参数、管理费分摊和渠道列表不受影响，此操作不可恢复。`)) {
+      T4.data = {}; T4_CH.forEach(c => { T4.data[c.id] = {}; });
+      t4Save(); toast(`已清空 ${T4.period} 全部录入与导入数据`); t4Go('overview');
+    }
+  }
 });
 document.addEventListener('change', e => {
   if (e.target.id === 't4Period') { T4.period = e.target.value || T4.period; T4.imp = null; T4.viewFrom = ''; T4.viewTo = ''; t4Go('overview'); }
