@@ -626,8 +626,9 @@ S['t4-sumimp'] = () => {
   const imp = T4.imp && T4.imp.mode === 'summary' ? T4.imp : null;
   if (!imp) return head(`汇总导入 · ${sc.n}`, `一个文件内按“归属事业部 + 渠道 + 日期”导入全部渠道的${sc.n}；各渠道原有导入入口继续保留。`, '工具箱 · T4',
     t4PeriodControl('<button class="btn" data-t4act="sumTemplate">下载模板</button><button class="btn" data-t4go="overview">← 返回</button><button class="btn pri" data-t4act="sumPick">选择汇总文件</button>'))
-    + card('汇总文件要求（兼容吉客云日损益明细直接导入）', table([{t:'字段'},{t:'要求'}], [
-      ['渠道 / 销售渠道', `必填；支持渠道名或店铺全名：${T4_CH.map(c => c.n).join('、')}、京东-澳乐官方旗舰店、快手-澳乐母婴品牌店`],
+    + `<div class="note g"><b>模板就是吉客云导出的「销售单明细账」原版（28 列一列不少）。</b>吉客云导出的文件不用改一个字、直接选进来；从其他系统来的数据按模板列序套进去再导也一样。收入导入与成本导入用<b>同一份模板、同一份文件</b>：分摊后金额＝零售收入，货品成本＝零售成本，其余列自动忽略。</div>`
+    + card('汇总文件要求（吉客云销售单明细账直接导入）', table([{t:'字段'},{t:'要求'}], [
+      ['渠道 / 销售渠道', `必填；支持渠道名或店铺全名：${T4_CH.map(c => c.n).join('、')}、天猫-澳乐旗舰店、京东-澳乐官方旗舰店、快手-澳乐母婴品牌店`],
       ['日期 / 发货时间', '必填；只导入当前期间的数据，同渠道同日多行自动累加'],
       [`${sc.n}科目`, `${sc.fileK === 'summaryIncome' ? '分摊后金额（即销售收入）' : '货品成本（即销售成本）'}；也认${scItems.map(x => x.n).join('、')}列名。空白不覆盖，明确的 0 会导入`],
       ['订单类型', '选填；「退货」行自动按负数计入退货科目，「售后发货」行跳过'],
@@ -690,12 +691,18 @@ function t4SummaryImpRun() {
   toast(`${sc.n}汇总导入 ${channels.size} 个渠道、${seen.size} 个渠道日、${used} 行${skipped ? `，跳过 ${skipped} 行` : ''}${bad}`, 5200);
 }
 
-function t4SummaryTemplate() {
-  // 模板列名对齐吉客云日损益明细：销售渠道 / 订单类型 / 发货时间 / 分摊后金额（收入）或 货品成本（成本）
-  const sc = t4SumScope(), amountCol = sc.fileK === 'summaryIncome' ? '分摊后金额' : '货品成本';
-  const hdr = ['销售渠道', '订单类型', '发货时间', amountCol];
-  const rows = T4_CH.map(c => [c.n, '', t4Date(1), '']);
-  download(`T4${sc.n}汇总导入模板_${T4.period}.csv`, toCSV([hdr, ...rows])); toast(`已下载${sc.n}汇总导入模板（吉客云列名）`);
+async function t4SummaryTemplate() {
+  // 模板 = 吉客云「销售单明细账」原版 xlsx（仓库携带，28 列一列不动，负责人 2026-09-12 拍板不许精简）。
+  // 收入导入与成本导入共用同一份：分摊后金额＝零售收入、货品成本＝零售成本，导入时其余列自动忽略
+  try {
+    const r = await fetch('示例文件/吉客云销售单明细账模版.xlsx');
+    const u8 = new Uint8Array(await r.arrayBuffer());
+    // 静态服务器对不存在的路径回落 200+index.html，光看 r.ok 拦不住——
+    // xlsx 是 zip，头两字节必为 PK，嗅一道防止把 HTML 当模版发给用户
+    if (!r.ok || u8[0] !== 0x50 || u8[1] !== 0x4b) throw new Error('模版文件缺失或损坏，请联系开发');
+    downloadBlob('吉客云销售单明细账模版.xlsx', new Blob([u8]));
+    toast('已下载吉客云销售单明细账模版（28 列原版，收入导入 / 成本导入通用）');
+  } catch (e) { toast(`模版下载失败：${e.message || e}`, 5000); }
 }
 
 /* ---------- 渠道列表：模板导入维护（批量改名/调事业部/新增） ---------- */
