@@ -87,6 +87,9 @@ const T4_BU_META = {
   dealer: { n: '经销事业部', short: '经销', pill: 'wa' },
 };
 const t4BuName = id => (T4_BU_META[id] || {}).n || id;
+// 项目层：瑞眠事业部归瑞眠项目，其余（大电商/拼多多/经销）归澳乐项目
+const t4Project = bu => bu === 'ruimian' ? '瑞眠项目' : '澳乐项目';
+const t4ProjectPill = bu => bu === 'ruimian' ? pill('瑞眠项目', 'mu') : pill('澳乐项目', 'in');
 const t4BuPill = id => { const m = T4_BU_META[id] || { short:id, pill:'mu' }; return pill(m.short, m.pill); };
 
 const T4_INPUTS = [
@@ -467,7 +470,7 @@ S.t4 = () => {
     const mgmtAny = t4MgmtDaily(c.id).any, hasInc = vr ? rn > 0 : n > 0, mgmtOnly = !n && mgmtAny;
     const src = c.files.length ? pill('文件/人工', 'ok') : pill('人工', 'wa');
     const st = n === 0 ? (mgmtOnly ? pill('仅管理费', 'wa') : pill('未开始', 'cr')) : n < 15 ? pill('缺口大', 'wa') : pill('已有数据', 'ok');
-    return [t4BuPill(c.bu), `<b>${H(c.n)}</b>`,
+    return [t4ProjectPill(c.bu), t4BuPill(c.bu), `<b>${H(c.n)}</b>`,
       vr ? `<b class="mono">${rn}</b> / ${vr.n}` : `<b class="mono">${n}</b> / ${t4Days()}`, t4Cal(c.id), src,
       hasInc ? money(m.salesIncome) : '—', hasInc || mgmtAny ? money(m.netProfit) : '—', hasInc ? `${(m.netMargin * 100).toFixed(1)}%` : '—', st,
       `${c.files.length ? `<button class="btn sm" data-t4go="imp:${c.id}">导入</button>` : ''}
@@ -497,7 +500,7 @@ S.t4 = () => {
       : g.max === 0 ? '<div class="note"><b>本期尚无数据。</b>先导入平台文件或逐日录入；已设置的管理费分摊会随有收入数据的日子自动计入损益。</div>'
       : `<div class="note c"><b>部分汇总不可用。</b>大电商事业部：${ecomOK ? '可用' : '禁用'}；拼多多事业部：${pddOK ? '可用' : '禁用'}；瑞眠事业部：${rmOK ? '可用' : '禁用'}；经销事业部：${dealerOK ? '可用' : '禁用'}；全部汇总：禁用。请补齐对应事业部的渠道数据。</div>`)
     + card(vr ? `${T4_CH.length} 渠道 · ${vr.from} ～ ${vr.to} 区间损益` : `${T4_CH.length} 渠道取数进度`, table(
-      [{t:'归属事业部'},{t:'渠道汇总'},{t:'取数天数',n:1},{t:`日历（1—${t4Days()}）`},{t:'方式'},{t:'销售收入',n:1},{t:'净利润',n:1},{t:'净利率'},{t:'状态'},{t:''}], rows))
+      [{t:'项目'},{t:'归属事业部'},{t:'渠道汇总'},{t:'取数天数',n:1},{t:`日历（1—${t4Days()}）`},{t:'方式'},{t:'销售收入',n:1},{t:'净利润',n:1},{t:'净利率'},{t:'状态'},{t:''}], rows))
     + '<div class="t4lg"><span><em class="f"></em>实填</span><span><em class="h"></em>含参数/硬推</span><span><em class="n"></em>无收入数据</span></div>';
 };
 
