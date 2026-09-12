@@ -228,7 +228,7 @@ T4_FILE_DEFS.summaryDaily = {
   required: ['channel', 'date'],
 };
 
-const T4 = { period: new Date().toISOString().slice(0, 7), data: {}, cfg: {}, editCh: 'tmall', imp: null, sumDate: '', sumScope: 'income', viewFrom: '', viewTo: '', mgmtFrom: '', mgmtTo: '' };
+const T4 = { period: new Date().toISOString().slice(0, 7), data: {}, cfg: {}, editCh: 'tmall', imp: null, sumDate: '', sumScope: 'income', viewFrom: '', viewTo: '', mgmtFrom: '', mgmtTo: '', sheetMode: 'tree', treeCollapsed: {} };
 
 /* 汇总导入/录入按科目拆分：销售收入与销售成本各走各的入口，数据源独立、互不覆盖 */
 const T4_SUM_SCOPES = {
@@ -947,11 +947,69 @@ function t4ImpRun() {
   toast(`已导入 ${seen.size} 天、${used} 行${skipped ? `，跳过 ${skipped} 行` : ''}`, 4200);
 }
 
+// 损益树的列：一条从销售收入到净利润的「层层递减」链
+const T4_TREE_COLS = [
+  ['salesIncome', '销售收入'], ['salesCost', '销售成本'], ['grossProfit', '毛利'], ['grossMargin', '毛利率', true],
+  ['operating', '运营费'], ['contribution', '边际毛利'], ['mgmt', '管理费'], ['netProfit', '净利润'], ['netMargin', '净利率', true],
+];
+const t4TreeVal = (g, key) => key === 'mgmt' ? (g.direct || 0) + (g.indirect || 0) : (g[key] || 0);
+function t4TreeCell(g, col) {
+  const [key, , pct] = col;
+  const v = t4TreeVal(g, key);
+  const neg = v < 0;
+  return `<span class="${neg ? 'red' : ''}">${t4Fmt(v, pct)}</span>`;
+}
+// 组织树：全部 → 项目 → 事业部 → 渠道
+function t4TreeNodes() {
+  const chNodes = ids => ids.map(id => ({ id, name: T4_CHM[id].n, lvl: 3, ids: [id] }));
+  const buNode = (id, name, ids) => ({ id: 'bu:' + id, name, lvl: 2, ids, children: chNodes(ids) });
+  const aole = [...T4_BIG_ECOM, ...T4_PDD, ...T4_DEALER];
+  return [{
+    id: 'all', name: '全部汇总', lvl: 0, ids: T4_ALL, children: [
+      { id: 'proj:aole', name: '澳乐项目', lvl: 1, ids: aole, children: [
+        buNode('ecom', '大电商事业部', T4_BIG_ECOM),
+        buNode('pdd', '拼多多事业部', T4_PDD),
+        buNode('dealer', '经销事业部', T4_DEALER),
+      ].filter(n => n.ids.length) },
+      { id: 'proj:ruimian', name: '瑞眠项目', lvl: 1, ids: T4_RUIMIAN, children: [
+        buNode('ruimian', '瑞眠事业部', T4_RUIMIAN),
+      ].filter(n => n.ids.length) },
+    ].filter(n => n.ids.length),
+  }];
+}
+
 S['t4-sheet'] = () => {
   t4Load();
   const vr = t4ViewRange();
-  const okOf = ids => vr ? t4RangeOK(ids, vr.from, vr.to) : t4SumOK(ids);
   const grpOf = ids => vr ? t4GroupRange(ids, vr.from, vr.to) : t4Group(ids);
+  const ctrl = t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="sheet" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="选起止日期看区间损益，清空回整月累计" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="sheet" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label><button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="sheetMode">${T4.sheetMode === 'tree' ? '切换明细表' : '切换树视图'}</button><button class="btn pri" data-t4act="export">导出 CSV</button>`);
+  const desc = vr ? `${vr.from} ～ ${vr.to}（${vr.n} 天）区间损益。` : '渠道月累计损益。';
+  const title = vr ? `${vr.from} ～ ${vr.to} 区间损益（${vr.n} 天）` : '月累计损益';
+
+  if (T4.sheetMode === 'tree') {
+    // 展平树为行，尊重折叠状态
+    const rows = [];
+    const walk = (node, parents) => {
+      const collapsed = parents.some(p => T4.treeCollapsed[p]);
+      if (collapsed) return;
+      const g = grpOf(node.ids);
+      const has = node.children && node.children.length;
+      const open = !T4.treeCollapsed[node.id];
+      const caret = has ? `<span class="tcar" data-t4tree="${H(node.id)}">${open ? '▾' : '▸'}</span>` : '<span class="tcar"></span>';
+      const pad = 4 + node.lvl * 16;
+      const name = `<span style="padding-left:${pad}px">${caret}<span class="tnm">${H(node.name)}</span></span>`;
+      rows.push({ cls: 'tr' + node.lvl, d: [name, ...T4_TREE_COLS.map(col => t4TreeCell(g, col))] });
+      if (has && open) node.children.forEach(ch => walk(ch, parents.concat(node.id)));
+    };
+    t4TreeNodes().forEach(n => walk(n, []));
+    const headers = [{ t: '项目 / 事业部 / 渠道' }, ...T4_TREE_COLS.map(c => ({ t: c[1], n: 1 }))];
+    return head('渠道事业部日损益表', desc + '按 项目→事业部→渠道 逐层汇总，父级为子级之和；点名称前的三角可折叠。', '工具箱 · T4', ctrl)
+      + card(title + ' · 树视图', table(headers, rows))
+      + `<div class="note c"><b>红线口径：</b>京东自营零售成本、退货金额和退货成本来自底稿设定比例；管理费为直接+间接合计。比例与分摊可在「参数」「管理费分摊」中修改。</div>`;
+  }
+
+  // 明细表（经典矩阵）
+  const okOf = ids => vr ? t4RangeOK(ids, vr.from, vr.to) : t4SumOK(ids);
   const tmOK = okOf(T4_TMAI), ecomOK = okOf(T4_BIG_ECOM), pddOK = okOf(T4_PDD), rmOK = okOf(T4_RUIMIAN), dealerOK = okOf(T4_DEALER), allOK = okOf(T4_ALL);
   const months = T4_CH.map(c => vr ? t4RangeData(c.id, vr.from, vr.to) : t4Month(c.id)), tm = grpOf(T4_TMAI), ecom = grpOf(T4_BIG_ECOM), pdd = grpOf(T4_PDD), rm = grpOf(T4_RUIMIAN), dealer = grpOf(T4_DEALER), all = grpOf(T4_ALL);
   const headers = [{t:'损益项目'}, ...T4_CH.map(c => ({t:c.n,n:1})), {t:'特卖汇总',n:1}, {t:'大电商事业部',n:1}, {t:'拼多多事业部',n:1}, {t:'瑞眠事业部',n:1}, {t:'经销事业部',n:1}, {t:'全部汇总',n:1}];
@@ -963,10 +1021,9 @@ S['t4-sheet'] = () => {
     return [name, ...vals, ...groupVals];
   });
   const disabled = [['特卖',tmOK],['大电商事业部',ecomOK],['拼多多事业部',pddOK],['瑞眠事业部',rmOK],['经销事业部',dealerOK],['全部',allOK]].filter(x => !x[1]).map(x => x[0]);
-  return head('渠道事业部日损益表', vr ? `${vr.from} ～ ${vr.to}（${vr.n} 天）区间损益；渠道分别归集到大电商、拼多多、瑞眠和经销事业部。清空起止日期返回整月累计。` : '渠道月累计后，分别归集到大电商、拼多多、瑞眠和经销事业部；特卖汇总作为大电商事业部的子组保留。', '工具箱 · T4',
-    t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="sheet" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="选起止日期看区间损益，清空回整月累计" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="sheet" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label><button class="btn" data-t4go="overview">← 返回</button><button class="btn pri" data-t4act="export">导出 CSV</button>`))
+  return head('渠道事业部日损益表', desc + '渠道分别归集到大电商、拼多多、瑞眠和经销事业部；特卖汇总作为大电商事业部的子组保留。', '工具箱 · T4', ctrl)
     + (disabled.length ? `<div class="note c"><b>以下汇总暂不可用：</b>${disabled.join('、')}。${vr ? '区间汇总按区间内取数天数对齐校验' : '各事业部按内部渠道取数天数分别校验'}，渠道列仍可核对。</div>` : '')
-    + card(vr ? `${vr.from} ～ ${vr.to} 区间损益（${vr.n} 天）` : '月累计损益', table(headers, rows))
+    + card(title, table(headers, rows))
     + `<div class="note c"><b>红线口径：</b>京东自营零售成本、退货金额和退货成本仍来自底稿设定比例，不是平台原始数据；所有比例与月度分摊可在「参数」中审阅和修改。</div>`;
 };
 
@@ -1079,6 +1136,8 @@ document.addEventListener('click', e => {
     if (v === 'imp' || v === 'sumimp') T4.imp = null; t4Go(v); return;
   }
   const file = e.target.closest('[data-t4file]'); if (file) { t4PickFile(file.dataset.t4file); return; }
+  const tree = e.target.closest('[data-t4tree]');
+  if (tree) { const id = tree.dataset.t4tree; T4.treeCollapsed[id] = !T4.treeCollapsed[id]; t4Go('sheet'); return; }
   const chdel = e.target.closest('[data-t4chdel]');
   if (chdel) {
     t4SaveChOverrides(t4ChOverrides().filter(x => x.id !== chdel.dataset.t4chdel));
@@ -1139,6 +1198,7 @@ document.addEventListener('click', e => {
   else if (a.dataset.t4act === 'mgmtPick') t4MgmtPickFile();
   else if (a.dataset.t4act === 'chTemplate') t4ChTemplate();
   else if (a.dataset.t4act === 'chPick') t4ChPickFile();
+  else if (a.dataset.t4act === 'sheetMode') { T4.sheetMode = T4.sheetMode === 'tree' ? 'matrix' : 'tree'; t4Go('sheet'); }
   else if (a.dataset.t4act === 'wipePeriod') {
     // 两步确认：先弹窗说明，再要求手动输入期间号，防误触
     if (!confirm(`确认清空 ${T4.period} 期间全部渠道的收入、成本与费用数据？\n参数、管理费分摊和渠道列表不受影响，此操作不可恢复。\n\n点「确定」后还需输入期间号做二次确认。`)) return;

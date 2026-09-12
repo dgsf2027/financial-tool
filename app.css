@@ -38,6 +38,12 @@
 body{margin:0;background:var(--bg);color:var(--text);font-family:var(--f-body);font-size:13px;line-height:1.6;-webkit-font-smoothing:antialiased}
 h1,h2,h3,h4{margin:0;font-weight:600;text-wrap:balance}
 .mono,.num{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+.tcar{display:inline-block;width:15px;cursor:pointer;color:var(--text-3);user-select:none}
+.tcar:hover{color:var(--accent)}
+tr.tr0>td{font-weight:700;background:var(--surface-2)}
+tr.tr1>td{font-weight:600}
+tr.tr2>td{font-weight:500}
+tr.tr3 .tnm{color:var(--text-2);font-weight:400}
 
 /* 顶栏 */
 .bar1{display:flex;align-items:center;gap:4px;background:var(--bar);padding:0 14px;position:sticky;top:0;z-index:40;height:48px}
