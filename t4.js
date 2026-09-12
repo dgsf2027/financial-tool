@@ -329,11 +329,10 @@ function t4Row(ch, dt) {
   T4_INPUT_KEYS.forEach(k => { const v = t4InputValue(raw, k); if (v != null) { r[k] = v; explicit.add(k); } });
   const cfg = T4.cfg[ch] || {};
   r.retailIncome = r.retailIncome || 0;
-  if (ch === 'jdzy') {
-    if (!explicit.has('retailCost')) { r.retailCost = r.retailIncome * (cfg.retailCostRate || 0); hard.push('retailCost'); }
-    if (!explicit.has('returnAmount')) { r.returnAmount = r.retailIncome * (cfg.returnRate || 0); hard.push('returnAmount'); }
-    if (!explicit.has('returnCost')) { r.returnCost = r.retailCost * (cfg.returnCostRate || 0); hard.push('returnCost'); }
-  }
+  // 零售成本率/退货率/退货成本率：任意渠道只要在参数页设置了就按比例派生（原仅京东自营，现通用）
+  if (!explicit.has('retailCost') && cfg.retailCostRate != null) { r.retailCost = r.retailIncome * cfg.retailCostRate; hard.push('retailCost'); }
+  if (!explicit.has('returnAmount') && cfg.returnRate != null) { r.returnAmount = r.retailIncome * cfg.returnRate; hard.push('returnAmount'); }
+  if (!explicit.has('returnCost') && cfg.returnCostRate != null) { r.returnCost = (r.retailCost || 0) * cfg.returnCostRate; hard.push('returnCost'); }
   ['returnAmount','refundAmount','retailCost','returnCost','promotion','ztc','cps','research'].forEach(k => { if (r[k] == null) r[k] = 0; });
   ['platformFee','platformOther','aftersales','logistics','warehouse','tax','directLabor','directRent','directOther','sharedLabor','sharedRent','sharedOther'].forEach(k => {
     if (r[k] == null) r[k] = t4Assumed(ch, k, r.retailIncome, hard);
@@ -1050,12 +1049,12 @@ S['t4-cfg'] = () => {
     // 该渠道还没设置的费用项目——供「添加规则」下拉选择
     const unset = T4_CFG_FIELDS.filter(([k]) => cfg[k] == null);
     const addCtrl = unset.length
-      ? `<select class="t4addsel" data-ch="${c.id}"><option value="">＋添加费用规则…</option>${unset.map(([k,n,t]) => `<option value="${k}">${H(n)}（${t === 'rate' ? '%' : '元'}）</option>`).join('')}</select><button class="btn sm pri" data-t4cfgadd="${c.id}">添加</button>`
+      ? `<select class="t4addsel" data-ch="${c.id}"><option value="">＋添加费用规则…</option>${unset.map(([k,n,t]) => `<option value="${k}">${H(n)}（${t === 'rate' ? '%' : '元'}）</option>`).join('')}</select><button class="btn sm" data-t4cfgadd="${c.id}">添加</button>`
       : '<span class="mut" style="font-size:11px">已包含全部费用规则</span>';
     return card(c.n,
       (rows.length ? table([{t:'参数'},{t:'值',n:1},{t:'单位'},{t:''}], rows)
-        : '<div class="mut" style="padding:14px 14px 0">暂无费用规则；用右上角「添加费用规则」为本渠道设置分摊。</div>')
-      + `<div style="padding:11px 14px;display:flex;gap:7px;align-items:center;flex-wrap:wrap">${addCtrl}</div>`);
+        : '<div class="mut" style="padding:14px 14px 0">暂无费用规则；用下方「添加费用规则」为本渠道设置分摊。</div>')
+      + `<div style="padding:11px 14px;display:flex;gap:7px;align-items:center;flex-wrap:wrap">${addCtrl}<span style="flex:1"></span><button class="btn sm pri" data-t4act="cfgSave">保存参数</button></div>`);
   }).join('');
   return head('T4 参数', '比例基于每日零售收入；月度金额按当月自然日平均分摊。可为每个渠道单独添加费用分摊规则；直接/间接管理费用请在「管理费分摊」页维护。', '工具箱 · T4',
     `<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="cfgReset">恢复底稿值</button><button class="btn pri" data-t4act="cfgSave">保存参数</button>`)
@@ -1211,7 +1210,7 @@ document.addEventListener('click', e => {
   else if (a.dataset.t4act === 'export') t4Export();
   else if (a.dataset.t4act === 'cfgSave') {
     t4CfgReadInputs();
-    t4SaveCfg(); toast('参数已保存'); t4Go('overview');
+    t4SaveCfg(); toast('✓ 参数已保存，损益表已按新规则重算', 3500);  // 留在本页，不跳转，滚动位置不丢
   } else if (a.dataset.t4act === 'cfgReset') {
     // 只重置比例类底稿参数；管理费分摊是用户数据，原样保留
     const keep = {};
