@@ -14,6 +14,8 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 PROFILE = os.path.join(BASE, "_profiles", "scrapling_tmall")
 OUT = os.path.join(BASE, "downloads")
 LOGIN_URL = "https://one.alimama.com/"   # 万相台无界（阿里妈妈）
+# 目标报表：账户资金明细（cash 流水标签），用户提供
+REPORT_URL = "https://one.alimama.com/index.html#!/account/detail?detailTab=cash"
 
 from scrapling.fetchers import StealthyFetcher
 
@@ -51,4 +53,4 @@ if __name__ == "__main__":
     if cmd == "login":
         login()
     else:
-        fetch(sys.argv[2] if len(sys.argv) > 2 else LOGIN_URL)
+        fetch(sys.argv[2] if len(sys.argv) > 2 else REPORT_URL)
