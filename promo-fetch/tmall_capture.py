@@ -9,7 +9,8 @@ import json
 import os
 import time
 
-from playwright.sync_api import sync_playwright
+# patchright = 打过隐身补丁的 playwright，避免报表页风控识别自动化
+from patchright.sync_api import sync_playwright
 
 EDGE = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -24,9 +25,21 @@ captured = []
 def main():
     os.makedirs(OUT, exist_ok=True)
     with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(
-            PROFILE, executable_path=EDGE, headless=False, viewport=None)
-        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        def launch():
+            return p.chromium.launch_persistent_context(
+                PROFILE, executable_path=EDGE, headless=False, viewport=None,
+                args=["--no-first-run", "--no-default-browser-check",
+                      "--disable-blink-features=AutomationControlled",
+                      "--disable-features=msEdgeStartupBoost,StartupBoost"])
+        ctx = launch()
+        try:
+            page = ctx.new_page()
+        except Exception:   # Edge 首启偶发抢关实例，重来一次
+            try: ctx.close()
+            except Exception: pass
+            time.sleep(2)
+            ctx = launch()
+            page = ctx.new_page()
 
         def on_response(resp):
             try:
@@ -45,9 +58,9 @@ def main():
 
         page.on("response", on_response)
         page.goto(REPORT_URL)
-        print("如出现登录页请扫码；脚本等待明细表加载，最多 5 分钟……")
+        print("如出现登录页，请在窗口里用账号密码（或扫码）登录；脚本等待明细表加载，最多 8 分钟……")
 
-        deadline = time.time() + 300
+        deadline = time.time() + 480
         ok = False
         while time.time() < deadline:
             try:
