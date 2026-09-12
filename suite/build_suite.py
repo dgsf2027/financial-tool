@@ -234,22 +234,18 @@ def write_summary(ws, tree, chans, chans_by_id, meta, row_of, first_row):
     filled_n = sum(1 for c in chans if c["filled"] > 0)
     note(ws, "A2", f"期间 {meta['period']}　生成 {meta['generated']}　渠道 {len(chans)} 个（实取 {filled_n} 个）")
     note(ws, "A3", "竖式利润表：科目竖排，列为 全部→项目→事业部 逐级汇总（均为公式，可点格核对）。事业部列蓝色数字可点击跳到「渠道对比」同一科目行，再点渠道跳到逐日明细。一级科目加粗，二级科目缩进。")
-    # 表头两行：第 4 行层级色带，第 5 行名称（事业部带 └ 标识并可点击）
-    for r_, t_ in ((4, "层级"), (5, "损益项目")):
-        ws.cell(r_, 1, t_); hdr(ws.cell(r_, 1))
+    # 表头一行（第 5 行）：名称按层级配色，事业部带 └ 标识并可点击；第 4 行留作间隔
+    ws.cell(5, 1, "损益项目"); hdr(ws.cell(5, 1))
     for node in nodes:
-        fill, fc, tag = LEVEL_STYLE.get(node["lvl"], LEVEL_STYLE[2])
-        col = 2 + node["_idx"]
-        band = ws.cell(4, col, tag)
-        name = ws.cell(5, col, ("└ " if node["_is_bu"] else "") + node["name"])
-        for cell in (band, name):
-            cell.font = Font(name=FONT, bold=True, color=fc, size=10)
-            cell.fill = PatternFill("solid", fgColor=fill)
-            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            cell.border = BORDER
+        fill, fc, _ = LEVEL_STYLE.get(node["lvl"], LEVEL_STYLE[2])
+        name = ws.cell(5, 2 + node["_idx"], ("└ " if node["_is_bu"] else "") + node["name"])
+        name.font = Font(name=FONT, bold=True, color=fc, size=10)
+        name.fill = PatternFill("solid", fgColor=fill)
+        name.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        name.border = BORDER
         if node["_is_bu"] and first_ch_col(node):
             name.hyperlink = f"#'渠道对比'!{first_ch_col(node)}5"
-    ws.row_dimensions[4].height = 16
+    ws.row_dimensions[4].height = 6
     ws.row_dimensions[5].height = 30
 
     for m in metrics:
