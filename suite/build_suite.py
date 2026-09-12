@@ -5,7 +5,7 @@
 输入：系统导出的 JSON（期间、项目范围、科目定义、渠道、汇总树、每日取数、月合计）
 输出：多 Sheet Excel 工作簿——
     Sheet1「总表」    全部→项目→事业部→渠道，数字为公式（事业部=SUM渠道，渠道=引用明细页）
-    Sheet2「渠道对比」全科目 × 各渠道，引用各渠道明细页合计
+    事业部页（每个事业部一页）事业部合计 + 该事业部各渠道，引用各渠道明细页合计；页序为 事业部页→其渠道页
     Sheet3…「各渠道」  逐日利润表：科目竖排、日期横排、合计在左；小计与比率为公式，每日取数为系统值
 总表/对比里的渠道名与数字均带超链接，点击跳到该渠道明细页对应科目行。
 """
@@ -143,7 +143,7 @@ def write_channel(wb, ch, days_data, meta, row_of, first_row):
     title(ws, f"{ch['name']} · {meta['period']} 每日利润表", 2 + days)
     note(ws, "A2", f"{ch['project']} / {ch['buName']}　实取 {ch['filled']}/{days} 天　　小计与比率为公式；每日数据来自系统取数（含费率/分摊派生）")
     link(ws, "A3", "← 返回总表", "#'总表'!A1")
-    link(ws, "B3", "渠道对比 →", "#'渠道对比'!A1")
+    link(ws, "B3", f"{ch.get('buName', '事业部')} →", f"#{q(ch.get('bu_sheet', '总表'))}!A1")
     # 表头
     h = first_row - 1
     ws.cell(h, 1, "损益项目"); ws.cell(h, 2, "合计")
@@ -177,15 +177,15 @@ def write_channel(wb, ch, days_data, meta, row_of, first_row):
     return ws
 
 
-# ---------- Sheet2：渠道对比 ----------
-def write_compare(ws, chans, meta, row_of, first_row):
+# ---------- 事业部页：事业部合计 + 该事业部各渠道（当月累计） ----------
+def write_bu(ws, bu_name, chans, meta, row_of, first_row):
     metrics, inputs = meta["metrics"], set(meta["inputKeys"])
     n = len(chans)
-    title(ws, f"渠道对比 · {meta['period']}（{meta['scopeName']}）", 2 + n)
-    note(ws, "A2", "各渠道当月累计，引用自各渠道明细页合计列；渠道名与数字可点击跳转到明细页对应行")
+    title(ws, f"{bu_name} · 渠道对比 · {meta['period']}", 2 + n)
+    note(ws, "A2", f"{bu_name}合计 = 本页各渠道之和（公式）；渠道名与数字可点击跳转到该渠道逐日明细对应行")
     link(ws, "A3", "← 返回总表", "#'总表'!A1")
     h = first_row - 1
-    ws.cell(h, 1, "损益项目"); ws.cell(h, 2, "合计")
+    ws.cell(h, 1, "损益项目"); ws.cell(h, 2, f"{bu_name}合计")
     for i, ch in enumerate(chans):
         c = ws.cell(h, 3 + i, ch["name"])
         c.hyperlink = f"#{q(ch['sheet'])}!A1"
@@ -229,22 +229,21 @@ def write_summary(ws, tree, chans, chans_by_id, meta, row_of, first_row):
         node["_col"] = get_column_letter(2 + i)
         node["_leaves"] = [c for c in leaf_list(node) if c.get("id") in chans_by_id]
         node["_is_bu"] = all(not c.get("children") for c in node["children"])
-    ch_col = {c["id"]: get_column_letter(3 + i) for i, c in enumerate(chans)}   # 「渠道对比」页各渠道所在列
-    first_ch_col = lambda node: ch_col[node["_leaves"][0]["id"]] if node["_leaves"] else None
+    bu_sheet = lambda node: node.get("_sheet")   # 事业部页名（main 中按层级建页时写入）
 
     title(ws, f"财务中心 · T4 日损益套表（{meta['scopeName']}）", 1 + len(nodes))
     filled_n = sum(1 for c in chans if c["filled"] > 0)
     note(ws, "A2", f"期间 {meta['period']}　生成 {meta['generated']}　渠道 {len(chans)} 个（实取 {filled_n} 个）")
-    note(ws, "A3", "竖式利润表：科目竖排，列为 全部→项目→事业部 逐级汇总（均为公式，可点格核对）。事业部列蓝色数字可点击跳到「渠道对比」同一科目行，再点渠道跳到逐日明细。一级科目加粗，二级科目缩进。")
+    note(ws, "A3", "竖式利润表：科目竖排，列为 全部→项目→事业部 逐级汇总（均为公式，可点格核对）。事业部表头与数字可点击跳到该事业部页同一科目行，再点渠道跳到逐日明细。一级科目加粗，二级科目缩进。")
     # 表头一行（第 5 行）：名称按层级配色，事业部带 └ 标识并可点击；第 4 行留作间隔
     ws.cell(5, 1, "损益项目"); hdr(ws.cell(5, 1))
     for node in nodes:
         # 层级用字重表达：全部/项目加粗，事业部常规并带 └；事业部可点击（链接色）
-        linkable = node["_is_bu"] and bool(first_ch_col(node))
+        linkable = node["_is_bu"] and bool(bu_sheet(node))
         name = ws.cell(5, 2 + node["_idx"], ("└ " if node["_is_bu"] else "") + node["name"])
         hdr(name, bold=not node["_is_bu"], link=linkable)
         if linkable:
-            name.hyperlink = f"#'渠道对比'!{first_ch_col(node)}5"
+            name.hyperlink = f"#{q(bu_sheet(node))}!A1"
     ws.row_dimensions[4].height = 6
     ws.row_dimensions[5].height = 30
 
@@ -262,10 +261,10 @@ def write_summary(ws, tree, chans, chans_by_id, meta, row_of, first_row):
             else:
                 f = formula_for(m["k"], node["_col"], row_of)   # 小计/比率：同口径公式作用于本列
             cell = ws.cell(r, 2 + node["_idx"], f)
-            link = node["_is_bu"] and bool(node["_leaves"])
+            link = node["_is_bu"] and bool(bu_sheet(node))
             num_cell(cell, m, is_link=link)
             if link:
-                cell.hyperlink = f"#'渠道对比'!{first_ch_col(node)}{r}"
+                cell.hyperlink = f"#{q(bu_sheet(node))}!B{r}"   # 跳到事业部页合计列同一科目行
     # 底部：实取渠道数 + 口径说明
     r_info = max(row_of.values()) + 1
     c0 = ws.cell(r_info, 1, "实取渠道"); c0.font = Font(name=FONT, size=9, color=C_SUB); c0.border = BORDER
@@ -296,17 +295,38 @@ def main(inp, outp):
     first_row = 6                                   # 明细页/对比页科目起始行（第 5 行是表头）
     row_of = {m["k"]: first_row + i for i, m in enumerate(metrics)}
     chans = data["channels"]
-    used = {"总表", "渠道对比"}
+    used = {"总表"}
     for ch in chans:
         ch["sheet"] = sheet_name(ch["name"], used)
     chans_by_id = {c["id"]: c for c in chans}
 
     wb = Workbook()
     ws_sum = wb.active; ws_sum.title = "总表"
-    ws_cmp = wb.create_sheet("渠道对比")
-    for ch in chans:
-        write_channel(wb, ch, data["dailyByCh"].get(ch["id"], []), data, row_of, first_row)
-    write_compare(ws_cmp, chans, data, row_of, first_row)
+    placed = set()
+
+    # 按树的层级建页：每个事业部一页，紧跟其各渠道页（页序即层级）
+    def is_bu(node):
+        return bool(node.get("children")) and all(not c.get("children") for c in node["children"])
+
+    def build(node):
+        if is_bu(node):
+            node["_sheet"] = sheet_name(node["name"], used)
+            members = [chans_by_id[c["id"]] for c in node["children"] if c.get("id") in chans_by_id]
+            ws_bu = wb.create_sheet(node["_sheet"])
+            for ch in members:
+                ch["bu_sheet"] = node["_sheet"]
+                write_channel(wb, ch, data["dailyByCh"].get(ch["id"], []), data, row_of, first_row)
+                placed.add(ch["id"])
+            write_bu(ws_bu, node["name"], members, data, row_of, first_row)
+        else:
+            for c in node.get("children") or []:
+                build(c)
+    for root in data["tree"]:
+        build(root)
+    for ch in chans:                     # 兜底：未归入任何事业部的渠道
+        if ch["id"] not in placed:
+            ch["bu_sheet"] = "总表"
+            write_channel(wb, ch, data["dailyByCh"].get(ch["id"], []), data, row_of, first_row)
     write_summary(ws_sum, data["tree"], chans, chans_by_id, data, row_of, first_row)
     wb.calculation = CalcProperties(fullCalcOnLoad=True)   # 打开即重算
     wb.active = 0
