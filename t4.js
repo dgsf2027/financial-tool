@@ -988,7 +988,7 @@ S['t4-sheet'] = () => {
   t4Load();
   const vr = t4ViewRange();
   const grpOf = ids => vr ? t4GroupRange(ids, vr.from, vr.to) : t4Group(ids);
-  const ctrl = t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="sheet" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="选起止日期看区间损益，清空回整月累计" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="sheet" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label>${t4ProjSelect('sheet')}<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="sheetMode">${T4.sheetMode === 'tree' ? '切换明细表' : '切换树视图'}</button><button class="btn" data-t4go="chday">每日明细</button><button class="btn pri" data-t4act="export">导出 CSV</button>`);
+  const ctrl = t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="sheet" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="选起止日期看区间损益，清空回整月累计" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="sheet" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label>${t4ProjSelect('sheet')}<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="sheetMode">${T4.sheetMode === 'tree' ? '切换明细表' : '切换树视图'}</button><button class="btn" data-t4go="chday">每日明细</button><button class="btn" data-t4act="export">导出本表</button><button class="btn pri" data-t4act="exportSuite">导出套表</button>`);
   const desc = vr ? `${vr.from} ～ ${vr.to}（${vr.n} 天）区间损益。` : '渠道月累计损益。';
   const title = vr ? `${vr.from} ～ ${vr.to} 区间损益（${vr.n} 天）` : '月累计损益';
 
@@ -1141,6 +1141,66 @@ S['t4-rules'] = () => head('T4 取数口径', '以下规则来自用户提供的
   ]))
   + '<div class="note"><b>重复导入是幂等的：</b>每次先清除该文件类型上次写入的字段，再写入本次结果；不同来源不会互相覆盖。</div>';
 
+// 导出整套报表（总分模式）：总表(汇总树) + 渠道月度对比 + 各渠道每日利润表，一个 CSV 多区块
+function t4ExportSuite() {
+  t4Load();
+  const days = t4Days(), period = T4.period;
+  const money = v => (Number(v) || 0).toFixed(2);
+  const fmt = (g, m) => m.pct ? `${((g[m.k] || 0) * 100).toFixed(2)}%` : money(t4TreeVal(g, m.k));
+  const sumCols = [['salesIncome', '销售收入'], ['salesCost', '销售成本'], ['grossProfit', '毛利'], ['grossMargin', '毛利率', true], ['operating', '运营费'], ['contribution', '边际毛利'], ['mgmt', '管理费'], ['netProfit', '净利润'], ['netMargin', '净利率', true]];
+  const out = [];
+  const push = row => out.push(row);
+  const blank = () => out.push([]);
+
+  push([`财务中心 · T4 日损益套表`]);
+  push([`期间：${period}`, `导出时间：${new Date().toLocaleString('zh-CN')}`, `实取渠道：${T4_CH.filter(c => t4Filled(c.id) > 0).length}/${T4_CH.length}`]);
+  blank();
+
+  // —— 一、总分汇总（树）——
+  push(['【一、总分汇总】全部 → 项目 → 事业部 → 渠道，父级为子级之和']);
+  push(['层级/名称', ...sumCols.map(c => ({ pct: c[2], n: c[1] }).n)]);
+  const walk = (node, lvl) => {
+    const g = t4Group(node.ids);
+    push(['　'.repeat(lvl) + node.name, ...sumCols.map(c => fmt(g, { k: c[0], pct: c[2] }))]);
+    (node.children || []).forEach(ch => walk(ch, lvl + 1));
+  };
+  walk(t4TreeNodes()[0], 0);
+  blank(); blank();
+
+  // —— 二、渠道月度对比（全科目 × 渠道）——
+  push(['【二、渠道月度对比】损益科目 × 各渠道（当月累计）']);
+  push(['损益项目', ...T4_CH.map(c => c.n), '全部合计']);
+  const monthByCh = {}; T4_CH.forEach(c => monthByCh[c.id] = t4Month(c.id));
+  const allG = t4Group(T4_ALL);
+  T4_METRICS.forEach(m => {
+    const nm = (m.lvl ? '　' : '') + m.n.trim();
+    push([nm, ...T4_CH.map(c => m.pct ? `${((monthByCh[c.id][m.k] || 0) * 100).toFixed(2)}%` : money(monthByCh[c.id][m.k])),
+      m.pct ? `${((allG[m.k] || 0) * 100).toFixed(2)}%` : money(allG[m.k])]);
+  });
+  blank(); blank();
+
+  // —— 三、各渠道每日利润表（分表）——
+  push([`【三、渠道每日利润表】${period} 逐日，仅列有数据的渠道`]);
+  blank();
+  T4_CH.forEach(c => {
+    if (t4Filled(c.id) === 0 && !t4MgmtDaily(c.id).any) return;  // 完全无数据的渠道跳过
+    const daily = [], has = [];
+    for (let d = 1; d <= days; d++) { const dt = t4Date(d); daily.push(t4DayData(c.id, dt)); has.push(t4DayHasIncome(c.id, dt) || t4MgmtDaily(c.id).any); }
+    const m = t4Month(c.id);
+    push([`▼ ${c.n}（${t4Project(c.bu)} / ${t4BuName(c.bu)}） 实取 ${t4Filled(c.id)}/${days} 天`]);
+    push(['损益项目', '合计', ...Array.from({ length: days }, (_, i) => `${i + 1}日`)]);
+    T4_METRICS.forEach(mt => {
+      const nm = (mt.lvl ? '　' : '') + mt.n.trim();
+      const total = mt.pct ? `${((m[mt.k] || 0) * 100).toFixed(2)}%` : money(m[mt.k]);
+      push([nm, total, ...daily.map((g, i) => has[i] ? (mt.pct ? `${((g[mt.k] || 0) * 100).toFixed(2)}%` : money(g[mt.k])) : '')]);
+    });
+    blank();
+  });
+
+  download(`T4日损益套表_${period}.csv`, toCSV(out));
+  toast('已导出整套报表（总分模式），Excel 打开即可');
+}
+
 function t4DayExport() {
   const c = T4_CHM[T4.dayCh]; if (!c) return;
   const days = t4Days();
@@ -1248,6 +1308,7 @@ document.addEventListener('click', e => {
   else if (a.dataset.t4act === 'sumImpCancel') { T4.imp = null; t4Go('sumimp'); }
   else if (a.dataset.t4act === 'sumImpRun') t4SummaryImpRun();
   else if (a.dataset.t4act === 'export') t4Export();
+  else if (a.dataset.t4act === 'exportSuite') t4ExportSuite();
   else if (a.dataset.t4act === 'dayExport') t4DayExport();
   else if (a.dataset.t4act === 'cfgSave') {
     t4CfgReadInputs();
