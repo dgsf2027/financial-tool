@@ -1039,31 +1039,31 @@ function t4CfgReadInputs() {
   });
 }
 
-// 单渠道每日明细：按天列出该渠道的损益
+// 单渠道每日明细：利润表格式——损益科目竖排（行），日期横排（列），末列合计
 S['t4-chday'] = () => {
   t4Load();
   if (!T4_CHM[T4.dayCh]) T4.dayCh = T4_CH[0].id;
-  const c = T4_CHM[T4.dayCh];
+  const c = T4_CHM[T4.dayCh], days = t4Days();
   const sel = `<label class="sel">渠道 <select id="t4DayCh">${T4_CH.map(x => `<option value="${x.id}" ${x.id === T4.dayCh ? 'selected' : ''}>${H(x.n)}</option>`).join('')}</select></label>`;
-  const cols = [['salesIncome', '销售收入'], ['salesCost', '销售成本'], ['grossProfit', '毛利'], ['operating', '运营费'], ['contribution', '边际毛利'], ['mgmt', '管理费'], ['netProfit', '净利润'], ['netMargin', '净利率', true]];
-  const rows = [];
-  for (let d = 1; d <= t4Days(); d++) {
-    const dt = t4Date(d), raw = t4Raw(c.id, dt), hasInc = t4DayHasIncome(c.id, dt);
-    const g = t4DayData(c.id, dt);
-    const md = t4MgmtDaily(c.id);
-    const src = hasInc ? (t4Row(c.id, dt)._hard.length ? pill('含参数', 'wa') : pill('实填', 'ok'))
-      : (md.any ? pill('仅管理费', 'wa') : pill('无数据', 'mu'));
-    // 无收入且无管理费的空日，值列留白更清爽
-    const blank = !hasInc && !md.any;
-    rows.push({ cls: hasInc ? '' : 'mut', d: [`<b class="mono">${d}</b>`,
-      ...cols.map(col => blank ? '—' : t4TreeCell(g, col)), src] });
+  // 每天算一次损益对象（含参数/分摊派生），末列取月合计
+  const daily = [], hasData = [];
+  for (let d = 1; d <= days; d++) {
+    const dt = t4Date(d);
+    daily.push(t4DayData(c.id, dt));
+    hasData.push(t4DayHasIncome(c.id, dt) || t4MgmtDaily(c.id).any);
   }
   const m = t4Month(c.id);
-  const foot = ['月合计', ...cols.map(col => t4TreeCell(m, col)), `${t4Filled(c.id)}/${t4Days()} 天`];
-  return head(`每日明细 · ${c.n}`, `${T4.period} 逐日损益。「实填」当日有导入/录入的真实数据；「含参数」当日损益含费率或分摊派生；「仅管理费」当日无收入、只计管理费日摊。`, '工具箱 · T4',
-    t4PeriodControl(`${sel}<button class="btn" data-t4go="sheet">← 返回损益表</button>`))
-    + card(`${c.n} · ${T4.period} 每日损益`, table(
-      [{t:'日'}, ...cols.map(col => ({t:col[1], n:1})), {t:'口径'}], rows, foot));
+  // 合计列放最左（紧挨科目名）与最右各一列，两头都能直接看到
+  const headers = [{ t: '损益项目' }, { t: '合计', n: 1 }, ...Array.from({ length: days }, (_, i) => ({ t: `${i + 1}日`, n: 1 })), { t: '合计', n: 1 }];
+  const rows = T4_METRICS.map(metric => {
+    const name = metric.lvl ? `<span class="mut">${H(metric.n)}</span>` : `<b>${H(metric.n)}</b>`;
+    const total = `<b>${t4Fmt(m[metric.k], metric.pct)}</b>`;
+    const dayCells = daily.map((g, i) => hasData[i] ? t4Fmt(g[metric.k], metric.pct) : '<span class="mut">—</span>');
+    return [name, total, ...dayCells, total];
+  });
+  return head(`每日明细 · ${c.n}`, `${T4.period} 逐日损益表（利润表格式）：损益科目竖排，每天一列，末列为当月合计。空白日仅计管理费日摊。`, '工具箱 · T4',
+    t4PeriodControl(`${sel}<button class="btn" data-t4go="sheet">← 返回损益表</button><button class="btn pri" data-t4act="dayExport">导出 CSV</button>`))
+    + card(`${c.n} · ${T4.period} 每日损益表（实取 ${t4Filled(c.id)}/${days} 天）`, table(headers, rows));
 };
 
 S['t4-cfg'] = () => {
@@ -1141,6 +1141,18 @@ S['t4-rules'] = () => head('T4 取数口径', '以下规则来自用户提供的
   ]))
   + '<div class="note"><b>重复导入是幂等的：</b>每次先清除该文件类型上次写入的字段，再写入本次结果；不同来源不会互相覆盖。</div>';
 
+function t4DayExport() {
+  const c = T4_CHM[T4.dayCh]; if (!c) return;
+  const days = t4Days();
+  const daily = [], has = [];
+  for (let d = 1; d <= days; d++) { const dt = t4Date(d); daily.push(t4DayData(c.id, dt)); has.push(t4DayHasIncome(c.id, dt) || t4MgmtDaily(c.id).any); }
+  const m = t4Month(c.id);
+  const hdr = ['损益项目', ...Array.from({ length: days }, (_, i) => `${T4.period}-${String(i + 1).padStart(2, '0')}`), '合计'];
+  const fmt = (g, metric) => metric.pct ? `${(g[metric.k] * 100).toFixed(2)}%` : (g[metric.k] || 0).toFixed(2);
+  const rows = T4_METRICS.map(metric => [metric.n.trim(),
+    ...daily.map((g, i) => has[i] ? fmt(g, metric) : ''), fmt(m, metric)]);
+  download(`每日损益_${c.n}_${T4.period}.csv`, toCSV([hdr, ...rows])); toast('已导出每日损益明细');
+}
 function t4Export() {
   const hdr = ['期间','渠道','归属事业部','日期', ...T4_METRICS.map(x => x.n.trim()), '取数口径','来源'];
   const rows = [];
@@ -1236,6 +1248,7 @@ document.addEventListener('click', e => {
   else if (a.dataset.t4act === 'sumImpCancel') { T4.imp = null; t4Go('sumimp'); }
   else if (a.dataset.t4act === 'sumImpRun') t4SummaryImpRun();
   else if (a.dataset.t4act === 'export') t4Export();
+  else if (a.dataset.t4act === 'dayExport') t4DayExport();
   else if (a.dataset.t4act === 'cfgSave') {
     t4CfgReadInputs();
     t4SaveCfg(); toast('✓ 参数已保存，损益表已按新规则重算', 3500);  // 留在本页，不跳转，滚动位置不丢
