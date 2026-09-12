@@ -204,7 +204,7 @@ const T4_FILE_DEFS = {
     ['research', '数研', ['数研']],
   ], required: ['date', 'channel', 'amount'] },
   ztc: { fields: [
-    ['date', '记账时间', ['记账时间']], ['amount', '操作金额(元)', ['操作金额', '金额']],
+    ['date', '交易日期', ['交易日期', '记账时间']], ['amount', '操作金额(元)', ['操作金额', '金额']],
     ['direction', '收支类型', ['收支类型']], ['type', '交易类型', ['交易类型']],
   ], required: ['date', 'amount'] },
   cps: { fields: [['date', '日期', ['日期']], ['amount', '支出金额', ['支出金额', '金额']]], required: ['date', 'amount'] },
