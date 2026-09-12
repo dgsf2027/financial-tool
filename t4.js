@@ -29,7 +29,7 @@ const T4_CH = [
     T4_DAILY_FILE,
     { k: 'sales', n: '销售单明细账', hint: '仅取「快手-澳乐母婴品牌店」' },
   ] },
-  { id: 'priv', n: '私域', bu: 'ecom', tier: '直属', files: [T4_DAILY_FILE] },
+  { id: 'priv', n: '有赞-澳乐乐姐心选', bu: 'ecom', tier: '直属', files: [T4_DAILY_FILE] },
   { id: 'pdd_aole', n: '拼多多-澳乐旗舰店', bu: 'pdd', tier: '直属', files: [
     T4_DAILY_FILE,
     { k: 'sales', n: '销售单明细账', hint: '仅取「拼多多-澳乐旗舰店」' },
@@ -586,7 +586,7 @@ function t4ResolveChannel(value) {
     // 吉客云「销售渠道」用店铺全名
     京东澳乐官方旗舰店: 'jdpop', 快手澳乐母婴品牌店: 'ks',
     // 渠道改店铺全名后，旧文件/旧数据里的简称仍要认
-    天猫: 'tmall' };
+    天猫: 'tmall', 私域: 'priv' };
   const raw = String(value == null ? '' : value).trim();
   if (aliases[raw]) return aliases[raw];
   const n = norm(raw);
