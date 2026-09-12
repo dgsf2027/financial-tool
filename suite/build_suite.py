@@ -19,10 +19,10 @@ from openpyxl.utils import get_column_letter
 from openpyxl.workbook.properties import CalcProperties
 
 FONT = "微软雅黑"
-# 极简报表风：无填充色、无网格线；层级靠字重与缩进，会计式细线；唯一含义色是负数红字
-C_TEXT, C_SUB, C_LINK, C_RULE = "000000", "595959", "1F3864", "808080"
-FMT_AMT = '#,##0.00;[Red]-#,##0.00;"-"'
-FMT_PCT = '0.0%;[Red]-0.0%;"-"'
+# 极简报表风：字体统一黑色、无填充色；层级靠字重与缩进；表格全部实线边框
+C_TEXT = C_SUB = C_LINK = "000000"
+FMT_AMT = '#,##0.00;-#,##0.00;"-"'
+FMT_PCT = '0.0%;-0.0%;"-"'
 KEY_ROWS = {"grossProfit", "contribution", "netProfit"}          # 关键小计：加粗 + 上划线
 OPERATING = ["platformFee", "platformOther", "promotion", "ztc", "cps", "research", "aftersales", "logistics", "warehouse", "tax"]
 DIRECT = ["directLabor", "directRent", "directOther"]
@@ -31,10 +31,9 @@ SUMMARY_KEYS = ["salesIncome", "salesCost", "grossProfit", "grossMargin", "opera
                 "contribution", "contributionRate", "indirect", "netProfit", "netMargin"]
 PCT_KEYS = {"grossMargin", "contributionRate", "netMargin"}
 
-RULE = Side(style="thin", color=C_RULE)        # 小计上划线
-RULE_M = Side(style="medium", color="000000")  # 表头下划线
-DOUBLE = Side(style="double", color="000000")  # 净利润双下划线
-BORDER = Border(top=RULE)                      # 信息行（实取渠道）上方细线
+LINE = Side(style="thin", color="000000")
+GRID = Border(left=LINE, right=LINE, top=LINE, bottom=LINE)   # 表格所有单元格实线
+BORDER = GRID
 
 
 # ---------- 公式：与系统 t4Row 完全一致 ----------
@@ -71,9 +70,10 @@ def derive(vals):
 
 # ---------- 样式 ----------
 def hdr(cell, bold=True, link=False):
-    cell.font = Font(name=FONT, bold=bold, size=10, color=C_LINK if link else C_TEXT)
+    # 可点击的表头用下划线提示（颜色仍为黑）
+    cell.font = Font(name=FONT, bold=bold, size=10, color=C_TEXT, underline="single" if link else None)
     cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    cell.border = Border(bottom=RULE_M)
+    cell.border = GRID
 
 
 def title(ws, text, cols):
@@ -96,12 +96,7 @@ def link(ws, cell, text, target):
 
 
 def row_border(m):
-    """会计式横线：一级小计上划线，净利润再加双下划线，比率行与二级科目无线"""
-    if m["k"] == "netProfit":
-        return Border(top=RULE, bottom=DOUBLE)
-    if m["lvl"] == 0 and not m.get("pct"):
-        return Border(top=RULE)
-    return Border()
+    return GRID   # 所有表格单元格统一实线
 
 
 def metric_name_cell(cell, m):
