@@ -9,7 +9,7 @@ const T4_CFG_KEY = 'fsc_t4_cfg_v1';
 const T4_DAILY_FILE = { k: 'daily', n: '标准日损益明细', hint: '按日期映射收入、成本、费用和管理费用等完整科目' };
 
 const T4_CH = [
-  { id: 'tmall', n: '天猫', bu: 'ecom', tier: '直属', files: [
+  { id: 'tmall', n: '天猫-澳乐旗舰店', bu: 'ecom', tier: '直属', files: [
     T4_DAILY_FILE,
     { k: 'sales', n: '销售单明细账', hint: '仅取「天猫-澳乐旗舰店」；按发货时间归属' },
     { k: 'ztc', n: '天猫直通车', hint: '按记账时间；仅取支出/扣款，排除充值' },
@@ -584,7 +584,9 @@ function t4ResolveChannel(value) {
   const norm = x => String(x == null ? '' : x).toLowerCase().replace(/[\s\-_—（）()]/g, '');
   const aliases = { 京东自营店: 'jdzy', 京东pop: 'jdpop', 抖音达人: 'dycreator',
     // 吉客云「销售渠道」用店铺全名
-    天猫澳乐旗舰店: 'tmall', 京东澳乐官方旗舰店: 'jdpop', 快手澳乐母婴品牌店: 'ks' };
+    京东澳乐官方旗舰店: 'jdpop', 快手澳乐母婴品牌店: 'ks',
+    // 渠道改店铺全名后，旧文件/旧数据里的简称仍要认
+    天猫: 'tmall' };
   const raw = String(value == null ? '' : value).trim();
   if (aliases[raw]) return aliases[raw];
   const n = norm(raw);
@@ -601,7 +603,7 @@ S['t4-sumimp'] = () => {
   if (!imp) return head(`汇总导入 · ${sc.n}`, `一个文件内按“归属事业部 + 渠道 + 日期”导入全部渠道的${sc.n}；各渠道原有导入入口继续保留。`, '工具箱 · T4',
     t4PeriodControl('<button class="btn" data-t4act="sumTemplate">下载模板</button><button class="btn" data-t4go="overview">← 返回</button><button class="btn pri" data-t4act="sumPick">选择汇总文件</button>'))
     + card('汇总文件要求（兼容吉客云日损益明细直接导入）', table([{t:'字段'},{t:'要求'}], [
-      ['渠道 / 销售渠道', `必填；支持渠道名或店铺全名：${T4_CH.map(c => c.n).join('、')}、天猫-澳乐旗舰店、京东-澳乐官方旗舰店、快手-澳乐母婴品牌店`],
+      ['渠道 / 销售渠道', `必填；支持渠道名或店铺全名：${T4_CH.map(c => c.n).join('、')}、京东-澳乐官方旗舰店、快手-澳乐母婴品牌店`],
       ['日期 / 发货时间', '必填；只导入当前期间的数据，同渠道同日多行自动累加'],
       [`${sc.n}科目`, `${sc.fileK === 'summaryIncome' ? '分摊后金额（即销售收入）' : '货品成本（即销售成本）'}；也认${scItems.map(x => x.n).join('、')}列名。空白不覆盖，明确的 0 会导入`],
       ['订单类型', '选填；「退货」行自动按负数计入退货科目，「售后发货」行跳过'],
@@ -891,7 +893,7 @@ S['t4-rules'] = () => head('T4 取数口径', '以下规则来自用户提供的
   ]))
   + card('底稿设定', table([{t:'渠道'},{t:'项目'},{t:'规则'}], [
     ['京东自营','零售成本','零售收入 × 45%'], ['京东自营','退货金额','零售收入 × -16%'], ['京东自营','退货成本','零售成本 × -16%'],
-    ['天猫','平台/售后/物流/仓储/税费','按收入比例计算，比例见参数页'], ['各渠道','管理费用','月度设定值 ÷ 当月自然日'],
+    ['天猫-澳乐旗舰店','平台/售后/物流/仓储/税费','按收入比例计算，比例见参数页'], ['各渠道','管理费用','月度设定值 ÷ 当月自然日'],
   ]))
   + '<div class="note"><b>重复导入是幂等的：</b>每次先清除该文件类型上次写入的字段，再写入本次结果；不同来源不会互相覆盖。</div>';
 
