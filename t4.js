@@ -1079,20 +1079,33 @@ const T4_SMTP_PRESETS = {
   o365: { n: 'Outlook / Microsoft 365', host: 'smtp.office365.com', port: 587, secure: 'starttls', tip: '需管理员允许 SMTP AUTH；密码用应用专用密码' },
   custom: { n: '自定义', host: '', port: 465, secure: 'ssl', tip: '按邮箱服务商提供的 SMTP 参数填写' },
 };
-async function t4SmtpSave() {
+async function t4SmtpSave(quiet) {
   t4MailReadForm();
   const g = id => ((document.getElementById(id) || {}).value || '').trim();
   const body = { host: g('t4SmtpHost'), port: g('t4SmtpPort'), secure: g('t4SmtpSecure'), user: g('t4SmtpUser'), pass: g('t4SmtpPass'), from: g('t4SmtpFrom') || g('t4SmtpUser'), fromName: g('t4SmtpName') };
   try {
     const res = await fetch('/api/t4/mail/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (!res.ok) { toast(await res.text(), 6000); return; }
-    T4.mail.status = await res.json(); toast('发件配置已保存到服务器本地'); t4Go('mail');
-  } catch (e) { toast('保存失败：' + (e.message || e), 6000); }
+    if (!res.ok) { toast(await res.text(), 6000); return false; }
+    T4.mail.status = await res.json();
+    if (!quiet) { toast('发件配置已保存到服务器本地'); t4Go('mail'); }
+    return true;
+  } catch (e) { toast('保存失败：' + (e.message || e), 6000); return false; }
+}
+// 发送前确保发件配置就绪：表单里填了授权码就先自动保存；仍未配置则提示并中止
+async function t4SmtpEnsure() {
+  const pass = ((document.getElementById('t4SmtpPass') || {}).value || '').trim();
+  if (pass || !(T4.mail.status && T4.mail.status.configured)) {
+    if (!pass && !(T4.mail.status && T4.mail.status.hasPass)) { toast('请先在「发件邮箱配置」里填写授权码', 6000); return false; }
+    await t4SmtpSave(true);
+  }
+  if (!(T4.mail.status && T4.mail.status.configured)) { toast('发件邮箱未配置完整：' + ((T4.mail.status || {}).missing || []).join('、'), 6000); return false; }
+  return true;
 }
 async function t4SmtpTest() {
   t4MailReadForm();
   const to = ((document.getElementById('t4SmtpTestTo') || {}).value || '').trim();
   if (!T4_EMAIL_RE.test(to)) { toast('请填写测试收件邮箱'); return; }
+  if (!(await t4SmtpEnsure())) return;
   toast('正在发送测试邮件…', 6000);
   try {
     const res = await fetch('/api/t4/mail/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to }) });
@@ -1144,6 +1157,7 @@ async function t4MailSend() {
   t4MailReadForm();
   const list = T4.mail.list.filter(r => r.enabled !== false && T4_EMAIL_RE.test(r.email || ''));
   if (!list.length) { toast('没有启用且邮箱有效的收件人'); return; }
+  if (!(await t4SmtpEnsure())) return;
   const scopes = [...new Set(list.map(r => r.scope || 'all'))];
   const prev = T4.projFilter, payloads = {};
   scopes.forEach(s => { T4.projFilter = s; payloads[s] = t4SuitePayload(); });   // 每个范围一份数据包

@@ -53,7 +53,8 @@ async function buildSuite(payloadBuf, tag) {
 function mailStatus() {
   const cfg = readJsonFile(path.join(CFG, 'mail.config.json'), null);
   if (!cfg) return { configured: false, missing: ['suite/_cfg/mail.config.json 不存在'] };
-  const missing = ['host', 'port', 'user', 'pass', 'from'].filter(k => !cfg[k]);
+  const labels = { host: 'SMTP 服务器', port: '端口', user: '发件账号', pass: '授权码', from: '发件地址' };
+  const missing = Object.keys(labels).filter(k => !cfg[k]).map(k => labels[k]);
   return { configured: !missing.length, host: cfg.host, port: cfg.port, secure: cfg.secure || 'ssl', user: cfg.user,
     from: cfg.from, fromName: cfg.fromName || '', hasPass: !!cfg.pass, missing };
 }
