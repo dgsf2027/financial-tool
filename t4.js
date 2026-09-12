@@ -1069,6 +1069,54 @@ S['t4-chday'] = () => {
 
 // ---------- 邮件发送：收件人清单（服务端保存，多端共用）+ 按各自范围生成套表并逐人发送 ----------
 const T4_EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+// 常见服务商 SMTP 预设（授权码获取方式见 tip）
+const T4_SMTP_PRESETS = {
+  exmail: { n: '腾讯企业邮箱（企业微信）', host: 'smtp.exmail.qq.com', port: 465, secure: 'ssl', tip: '登录网页邮箱 → 设置 → 账户 → 开启 IMAP/SMTP 服务 → 生成「客户端专用密码」，即授权码' },
+  qq: { n: 'QQ 邮箱', host: 'smtp.qq.com', port: 465, secure: 'ssl', tip: 'QQ 邮箱网页版 → 设置 → 账户 → 开启 SMTP 服务 → 生成授权码（16 位）' },
+  n163: { n: '网易 163 邮箱', host: 'smtp.163.com', port: 465, secure: 'ssl', tip: '163 网页版 → 设置 → POP3/SMTP/IMAP → 开启服务 → 新增授权密码' },
+  ali: { n: '阿里企业邮箱', host: 'smtp.mxhichina.com', port: 465, secure: 'ssl', tip: '用邮箱登录密码；若开启了「客户端专用密码」则填专用密码' },
+  o365: { n: 'Outlook / Microsoft 365', host: 'smtp.office365.com', port: 587, secure: 'starttls', tip: '需管理员允许 SMTP AUTH；密码用应用专用密码' },
+  custom: { n: '自定义', host: '', port: 465, secure: 'ssl', tip: '按邮箱服务商提供的 SMTP 参数填写' },
+};
+async function t4SmtpSave() {
+  t4MailReadForm();
+  const g = id => ((document.getElementById(id) || {}).value || '').trim();
+  const body = { host: g('t4SmtpHost'), port: g('t4SmtpPort'), secure: g('t4SmtpSecure'), user: g('t4SmtpUser'), pass: g('t4SmtpPass'), from: g('t4SmtpFrom') || g('t4SmtpUser'), fromName: g('t4SmtpName') };
+  try {
+    const res = await fetch('/api/t4/mail/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!res.ok) { toast(await res.text(), 6000); return; }
+    T4.mail.status = await res.json(); toast('发件配置已保存到服务器本地'); t4Go('mail');
+  } catch (e) { toast('保存失败：' + (e.message || e), 6000); }
+}
+async function t4SmtpTest() {
+  t4MailReadForm();
+  const to = ((document.getElementById('t4SmtpTestTo') || {}).value || '').trim();
+  if (!T4_EMAIL_RE.test(to)) { toast('请填写测试收件邮箱'); return; }
+  toast('正在发送测试邮件…', 6000);
+  try {
+    const res = await fetch('/api/t4/mail/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to }) });
+    if (!res.ok) throw new Error((await res.text()).slice(0, 300));
+    const out = await res.json(); const r = out.results && out.results[0];
+    T4.mail.result = (out.results || []).map(x => ({ ...x, name: '测试邮件 → ' + x.to }));
+    toast(r && r.ok ? '测试邮件已发出，请到收件箱确认' : '测试发送失败：' + (r && r.error || '未知错误'), 7000);
+  } catch (e) { T4.mail.result = [{ name: '测试邮件', ok: false, error: String(e.message || e) }]; toast('测试发送失败：' + (e.message || e), 7000); }
+  t4Go('mail');
+}
+function t4SmtpCard(cfg) {
+  const c = cfg || {};
+  const preset = Object.keys(T4_SMTP_PRESETS).find(k => T4_SMTP_PRESETS[k].host && T4_SMTP_PRESETS[k].host === c.host) || 'custom';
+  const opt = (v, cur) => `<option value="${v}" ${v === cur ? 'selected' : ''}>`;
+  return cardp('发件邮箱配置（授权码只存服务器本地，不入库）',
+    `<div style="display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center;max-width:640px">
+      <span>服务商</span><select id="t4SmtpPreset">${Object.entries(T4_SMTP_PRESETS).map(([k, p]) => `${opt(k, preset)}${H(p.n)}</option>`).join('')}</select>
+      <span>SMTP 服务器</span><div style="display:flex;gap:7px"><input id="t4SmtpHost" value="${H(c.host || '')}" placeholder="smtp.exmail.qq.com" style="flex:1"><input id="t4SmtpPort" value="${H(String(c.port || 465))}" style="width:70px" title="端口"><select id="t4SmtpSecure">${opt('ssl', c.secure || 'ssl')}SSL(465)</option>${opt('starttls', c.secure)}STARTTLS(587)</option>${opt('none', c.secure)}不加密</option></select></div>
+      <span>发件账号</span><input id="t4SmtpUser" value="${H(c.user || '')}" placeholder="finance@公司域名.com">
+      <span>授权码</span><input id="t4SmtpPass" type="password" placeholder="${c.hasPass ? '已保存，留空则不改' : '邮箱设置里生成的 SMTP 授权码'}" autocomplete="new-password">
+      <span>发件人显示</span><div style="display:flex;gap:7px"><input id="t4SmtpName" value="${H(c.fromName || '财务中心')}" placeholder="显示名" style="width:150px"><input id="t4SmtpFrom" value="${H(c.from || '')}" placeholder="发件地址（默认同账号）" style="flex:1"></div>
+    </div>
+    <div id="t4SmtpTip" class="mut" style="margin:8px 0 10px;font-size:11px">${H(T4_SMTP_PRESETS[preset].tip)}</div>
+    <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap"><button class="btn pri" data-t4act="smtpSave">保存配置</button><span style="width:14px"></span><input id="t4SmtpTestTo" value="${H(c.user || '')}" placeholder="测试收件邮箱" style="width:230px"><button class="btn" data-t4act="smtpTest">发测试邮件</button></div>`);
+}
 async function t4MailLoad() {
   const st = T4.mail; st.loading = true;
   try {
@@ -1126,10 +1174,11 @@ S['t4-mail'] = () => {
   const cfg = st.status;
   const cfgNote = !cfg ? '<div class="note">正在读取发件配置…</div>'
     : cfg.configured ? `<div class="note g"><b>发件邮箱已就绪：</b>${H(cfg.fromName ? cfg.fromName + ' ' : '')}${H(cfg.from)}（${H(cfg.host)}:${H(String(cfg.port))}）</div>`
-    : `<div class="note c"><b>发件邮箱尚未配置。</b>请在服务器上复制 <code>suite/mail.config.example.json</code> 为 <code>suite/_cfg/mail.config.json</code> 并填写 SMTP 与授权码（缺少：${H((cfg.missing || []).join('、'))}）。授权码只存服务器本地，不入库。</div>`;
+    : `<div class="note c"><b>发件邮箱尚未配置。</b>在下方选择服务商、填写发件账号和授权码后点「保存配置」，再发一封测试邮件确认。</div>`;
   return head('邮件发送套表', '维护收件人清单，每人指定报表范围（全部 / 澳乐 / 瑞眠）；发送时按范围各生成一份套表工作簿，逐人附上对应的那份。', '工具箱 · T4',
     '<button class="btn" data-t4go="sheet">← 返回损益表</button><button class="btn" data-t4act="mailSave">保存收件人</button><button class="btn pri" data-t4act="mailSend">生成并发送</button>')
     + cfgNote
+    + t4SmtpCard(cfg)
     + card(`收件人清单（${st.list.length}）`,
       (rows.length ? table([{t:'启用'},{t:'姓名'},{t:'邮箱'},{t:'报表范围'},{t:''}], rows) : '<div class="mut" style="padding:14px 14px 0">还没有收件人，在下面添加。</div>')
       + `<div style="padding:11px 14px;display:flex;gap:7px;align-items:center;flex-wrap:wrap"><input id="t4MailNewName" placeholder="姓名" style="width:110px"><input id="t4MailNewAddr" placeholder="邮箱" style="width:230px">${opts('all', 'id="t4MailNewScope"')}<button class="btn sm" data-t4act="mailAdd">添加</button><span class="mut" style="font-size:11px">停用的收件人保留在清单但不发送</span></div>`)
@@ -1443,6 +1492,8 @@ document.addEventListener('click', e => {
   }
   else if (a.dataset.t4act === 'mailSave') { t4MailReadForm(); t4MailSaveList().then(r => toast(r.ok ? '收件人已保存（服务端，多端共用）' : '保存失败')).catch(() => toast('保存失败：服务端不可达')); }
   else if (a.dataset.t4act === 'mailSend') t4MailSend();
+  else if (a.dataset.t4act === 'smtpSave') t4SmtpSave();
+  else if (a.dataset.t4act === 'smtpTest') t4SmtpTest();
   else if (a.dataset.t4act === 'cfgSave') {
     t4CfgReadInputs();
     t4SaveCfg(); toast('✓ 参数已保存，损益表已按新规则重算', 3500);  // 留在本页，不跳转，滚动位置不丢
@@ -1483,6 +1534,12 @@ document.addEventListener('change', e => {
   if (e.target.id === 't4Period') { T4.period = e.target.value || T4.period; T4.imp = null; T4.viewFrom = ''; T4.viewTo = ''; t4Go('overview'); }
   else if (e.target.id === 't4ProjSel') { T4.projFilter = e.target.value || 'all'; t4Go(e.target.dataset.view === 'sheet' ? 'sheet' : 'overview'); }
   else if (e.target.id === 't4DayCh') { T4.dayCh = e.target.value || T4_CH[0].id; t4Go('chday'); }
+  else if (e.target.id === 't4SmtpPreset') {   // 选服务商自动填 SMTP 参数
+    const p = T4_SMTP_PRESETS[e.target.value]; if (!p) return;
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+    if (p.host) { set('t4SmtpHost', p.host); set('t4SmtpPort', String(p.port)); set('t4SmtpSecure', p.secure); }
+    const tip = document.getElementById('t4SmtpTip'); if (tip) tip.textContent = p.tip;
+  }
   else if (e.target.id === 't4ViewFrom' || e.target.id === 't4ViewTo') {
     if (e.target.id === 't4ViewFrom') T4.viewFrom = e.target.value || ''; else T4.viewTo = e.target.value || '';
     if (T4.viewFrom && T4.viewTo && T4.viewTo < T4.viewFrom) T4.viewTo = T4.viewFrom;

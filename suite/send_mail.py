@@ -49,8 +49,9 @@ def main(cfg_path, job_path):
             msg["From"] = formataddr((cfg.get("fromName") or "", from_addr))
             msg["To"] = formataddr((s.get("name") or "", s["to"]))
             msg.set_content(s.get("body") or "")
-            with open(s["attachment"], "rb") as f:
-                msg.add_attachment(f.read(), maintype=XLSX[0], subtype=XLSX[1], filename=s.get("filename") or "套表.xlsx")
+            if s.get("attachment"):          # 测试邮件可不带附件
+                with open(s["attachment"], "rb") as f:
+                    msg.add_attachment(f.read(), maintype=XLSX[0], subtype=XLSX[1], filename=s.get("filename") or "套表.xlsx")
             server.send_message(msg)
             results.append({"to": s["to"], "name": s.get("name"), "scopeName": s.get("scopeName"), "ok": True})
         except Exception as e:

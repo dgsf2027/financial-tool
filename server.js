@@ -54,7 +54,16 @@ function mailStatus() {
   const cfg = readJsonFile(path.join(CFG, 'mail.config.json'), null);
   if (!cfg) return { configured: false, missing: ['suite/_cfg/mail.config.json 不存在'] };
   const missing = ['host', 'port', 'user', 'pass', 'from'].filter(k => !cfg[k]);
-  return { configured: !missing.length, host: cfg.host, port: cfg.port, from: cfg.from, fromName: cfg.fromName || '', missing };
+  return { configured: !missing.length, host: cfg.host, port: cfg.port, secure: cfg.secure || 'ssl', user: cfg.user,
+    from: cfg.from, fromName: cfg.fromName || '', hasPass: !!cfg.pass, missing };
+}
+// 写一个无附件的发信任务并执行，返回逐人结果
+async function runMailJob(subject, sends) {
+  fs.mkdirSync(OUT, { recursive: true });
+  const jobFile = path.join(OUT, `mailjob_${Date.now()}.json`);
+  fs.writeFileSync(jobFile, JSON.stringify({ subject, sends }));
+  try { const { stdout } = await runPy('send_mail.py', [path.join(CFG, 'mail.config.json'), jobFile]); return JSON.parse(stdout.trim().split('\n').pop()); }
+  finally { fs.unlink(jobFile, () => {}); }
 }
 
 async function handleApi(req, res, urlPath) {
@@ -76,6 +85,32 @@ async function handleApi(req, res, urlPath) {
     return sendJson(res, 200, { ok: true, count: list.length });
   }
   if (urlPath === '/api/t4/mail/status' && req.method === 'GET') return sendJson(res, 200, mailStatus());
+  // 保存发件配置：授权码由用户在页面输入，只落服务器本地文件；留空则沿用已保存的授权码
+  if (urlPath === '/api/t4/mail/config' && req.method === 'POST') {
+    const c = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
+    const cur = readJsonFile(path.join(CFG, 'mail.config.json'), {}) || {};
+    const cfg = { host: String(c.host || '').trim(), port: Number(c.port) || 465,
+      secure: ['ssl', 'starttls', 'none'].includes(c.secure) ? c.secure : 'ssl',
+      user: String(c.user || '').trim(), pass: c.pass ? String(c.pass) : (cur.pass || ''),
+      from: String(c.from || c.user || '').trim(), fromName: String(c.fromName || '').trim() };
+    const missing = [['host', 'SMTP 服务器'], ['user', '发件账号'], ['pass', '授权码']].filter(([k]) => !cfg[k]).map(x => x[1]);
+    if (missing.length) return sendText(res, 400, '请填写：' + missing.join('、'));
+    fs.mkdirSync(CFG, { recursive: true });
+    fs.writeFileSync(path.join(CFG, 'mail.config.json'), JSON.stringify(cfg, null, 2));
+    return sendJson(res, 200, mailStatus());
+  }
+  // 发一封测试邮件（无附件）验证配置
+  if (urlPath === '/api/t4/mail/test' && req.method === 'POST') {
+    const st = mailStatus();
+    if (!st.configured) return sendText(res, 400, '发件邮箱未配置：' + st.missing.join('、'));
+    const { to } = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
+    if (!to) return sendText(res, 400, '请填写测试收件地址');
+    try {
+      const results = await runMailJob('财务中心 · 发件配置测试', [{ to, name: '', scopeName: '测试',
+        body: `这是财务中心 T4 套表的发件配置测试邮件。\n发件：${st.from}（${st.host}:${st.port}）\n时间：${new Date().toLocaleString('zh-CN')}\n\n收到此邮件即表示 SMTP 配置正确，可以正式发送套表。` }]);
+      return sendJson(res, 200, { ok: true, results });
+    } catch (e) { return sendText(res, 500, '测试发送失败：' + String(e.stderr || e.message).slice(0, 1500)); }
+  }
   if (urlPath === '/api/t4/mail' && req.method === 'POST') {
     const st = mailStatus();
     if (!st.configured) return sendText(res, 400, '发件邮箱未配置：' + st.missing.join('、'));
