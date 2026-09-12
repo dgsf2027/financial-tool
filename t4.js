@@ -1141,8 +1141,56 @@ S['t4-rules'] = () => head('T4 取数口径', '以下规则来自用户提供的
   ]))
   + '<div class="note"><b>重复导入是幂等的：</b>每次先清除该文件类型上次写入的字段，再写入本次结果；不同来源不会互相覆盖。</div>';
 
-// 导出整套报表（总分模式）：总表(汇总树) + 渠道月度对比 + 各渠道每日利润表，一个 CSV 多区块
-function t4ExportSuite() {
+// 套表数据包：按当前项目筛选裁剪（全部/澳乐/瑞眠），交给服务端 Python 生成多 Sheet 工作簿
+function t4SuitePayload() {
+  t4Load();
+  const days = t4Days(), scope = T4.projFilter;
+  const scopeName = (T4_PROJ_OPTS.find(o => o[0] === scope) || T4_PROJ_OPTS[0])[1];
+  const chs = t4ProjCH();
+  const full = t4TreeNodes()[0];
+  const roots = scope === 'all' ? [full] : full.children.filter(p => p.id === 'proj:' + scope);
+  const R = n => Math.round((n || 0) * 100) / 100;
+  const R6 = n => Math.round((n || 0) * 1e6) / 1e6;   // 每日取数保留全精度，避免分摊值逐日取整后累计漂移
+  const mkNode = n => ({ name: n.name, lvl: n.lvl, id: n.children ? null : n.id,
+    children: (n.children || []).map(mkNode) });
+  const dailyByCh = {}, monthByCh = {};
+  chs.forEach(c => {
+    const arr = [];
+    for (let d = 1; d <= days; d++) {
+      const dt = t4Date(d), g = t4DayData(c.id, dt);
+      const o = { has: t4DayHasIncome(c.id, dt) || t4MgmtDaily(c.id).any };
+      T4_INPUT_KEYS.forEach(k => { o[k] = R6(g[k]); });
+      arr.push(o);
+    }
+    dailyByCh[c.id] = arr;
+    const m = t4Month(c.id);
+    monthByCh[c.id] = Object.fromEntries(T4_METRICS.map(x => [x.k, R(m[x.k])]));
+  });
+  return { period: T4.period, days, scope, scopeName, generated: new Date().toLocaleString('zh-CN'),
+    metrics: T4_METRICS.map(m => ({ k: m.k, n: m.n.trim(), lvl: m.lvl || 0, pct: !!m.pct })),
+    inputKeys: T4_INPUT_KEYS,
+    channels: chs.map(c => ({ id: c.id, name: c.n, project: t4Project(c.bu), bu: c.bu, buName: t4BuName(c.bu), filled: t4Filled(c.id) })),
+    tree: roots.map(mkNode), dailyByCh, monthByCh };
+}
+
+// 导出整套报表：优先服务端生成 Excel 工作簿（总表/渠道对比/各渠道明细，带公式与超链接）；失败回退 CSV
+async function t4ExportSuite() {
+  const payload = t4SuitePayload();
+  toast('正在生成套表工作簿…');
+  try {
+    const res = await fetch('/api/t4/suite', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    if (!res.ok) throw new Error((await res.text()).slice(0, 200));
+    const blob = await res.blob();
+    downloadBlob(`T4日损益套表_${payload.scopeName}_${payload.period}.xlsx`, blob);
+    toast(`套表已生成：${payload.scopeName} · ${payload.channels.length} 个渠道（总表/渠道对比/逐日明细）`, 4500);
+  } catch (e) {
+    toast('服务端生成失败，改用 CSV 版：' + (e.message || e), 6000);
+    t4ExportSuiteCsv();
+  }
+}
+
+// CSV 回退版（总分区块，单表）
+function t4ExportSuiteCsv() {
   t4Load();
   const days = t4Days(), period = T4.period;
   const money = v => (Number(v) || 0).toFixed(2);
