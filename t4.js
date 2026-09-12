@@ -47,7 +47,7 @@ const T4_CH = [
     { k: 'sales', n: '销售单明细账', hint: '仅取「天猫-zzzrest旗舰店」；按发货时间归属' },
   ] },
   { id: 'tianmen', n: '分销-微商-天门（1688）', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
-  { id: 'gift', n: '礼品单', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
+  { id: 'gift', n: '分销-澳乐礼品单', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
   { id: 'supply', n: '电商供货', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
   { id: 'groupbuy', n: '分销-团购-零售', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
   { id: 'dycreator', n: '抖音-BD达人成交店', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
@@ -586,7 +586,7 @@ function t4ResolveChannel(value) {
     // 吉客云「销售渠道」用店铺全名
     京东澳乐官方旗舰店: 'jdpop', 快手澳乐母婴品牌店: 'ks',
     // 渠道改店铺全名后，旧文件/旧数据里的简称仍要认
-    天猫: 'tmall', 私域: 'priv', 团购: 'groupbuy', 天门: 'tianmen', 抖音达人店: 'dycreator' };
+    天猫: 'tmall', 私域: 'priv', 团购: 'groupbuy', 天门: 'tianmen', 抖音达人店: 'dycreator', 礼品单: 'gift' };
   const raw = String(value == null ? '' : value).trim();
   if (aliases[raw]) return aliases[raw];
   const n = norm(raw);
