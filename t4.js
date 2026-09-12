@@ -8,7 +8,7 @@ const T4_KEY = 'fsc_t4_data_v2';
 const T4_CFG_KEY = 'fsc_t4_cfg_v1';
 const T4_DAILY_FILE = { k: 'daily', n: '标准日损益明细', hint: '按日期映射收入、成本、费用和管理费用等完整科目' };
 
-const T4_CH = [
+const T4_CH_BASE = [
   { id: 'tmall', n: '天猫-澳乐旗舰店', bu: 'ecom', tier: '直属', files: [
     T4_DAILY_FILE,
     { k: 'sales', n: '销售单明细账', hint: '仅取「天猫-澳乐旗舰店」；按发货时间归属' },
@@ -52,13 +52,33 @@ const T4_CH = [
   { id: 'groupbuy', n: '分销-团购-零售', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
   { id: 'dycreator', n: '抖音-BD达人成交店', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
 ];
-const T4_CHM = Object.fromEntries(T4_CH.map(c => [c.id, c]));
-const T4_TMAI = T4_CH.filter(c => c.tier === '特卖').map(c => c.id);
-const T4_BIG_ECOM = T4_CH.filter(c => c.bu === 'ecom').map(c => c.id);
-const T4_PDD = T4_CH.filter(c => c.bu === 'pdd').map(c => c.id);
-const T4_RUIMIAN = T4_CH.filter(c => c.bu === 'ruimian').map(c => c.id);
-const T4_DEALER = T4_CH.filter(c => c.bu === 'dealer').map(c => c.id);
-const T4_ALL = T4_CH.map(c => c.id);
+/* 渠道表 = 内置基础表 + localStorage 覆盖层（渠道列表页可导入模板批量改名/调事业部/新增） */
+const T4_CHLIST_KEY = 'fsc_t4_channels_v2';
+let T4_CH = [], T4_CHM = {}, T4_TMAI = [], T4_BIG_ECOM = [], T4_PDD = [], T4_RUIMIAN = [], T4_DEALER = [], T4_ALL = [];
+function t4ChOverrides() { try { const v = JSON.parse(localStorage.getItem(T4_CHLIST_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; } }
+function t4SaveChOverrides(list) { localStorage.setItem(T4_CHLIST_KEY, JSON.stringify(list)); }
+function t4RebuildChannels() {
+  const base = T4_CH_BASE.map(c => ({ ...c }));
+  t4ChOverrides().forEach(o => {
+    const hit = base.find(c => c.id === o.id);
+    if (hit) {
+      if (o.n && o.n !== hit.n) { hit.aliases = (hit.aliases || []).concat(hit.n); hit.n = o.n; }
+      if (o.bu) hit.bu = o.bu;
+      if (o.aliases) hit.aliases = (hit.aliases || []).concat(o.aliases);
+    } else if (o.n) {
+      base.push({ id: o.id, n: o.n, bu: o.bu || 'dealer', tier: '直属', files: [T4_DAILY_FILE], aliases: o.aliases || [], custom: true });
+    }
+  });
+  T4_CH = base;
+  T4_CHM = Object.fromEntries(T4_CH.map(c => [c.id, c]));
+  T4_TMAI = T4_CH.filter(c => c.tier === '特卖').map(c => c.id);
+  T4_BIG_ECOM = T4_CH.filter(c => c.bu === 'ecom').map(c => c.id);
+  T4_PDD = T4_CH.filter(c => c.bu === 'pdd').map(c => c.id);
+  T4_RUIMIAN = T4_CH.filter(c => c.bu === 'ruimian').map(c => c.id);
+  T4_DEALER = T4_CH.filter(c => c.bu === 'dealer').map(c => c.id);
+  T4_ALL = T4_CH.map(c => c.id);
+}
+t4RebuildChannels();
 const T4_BU_META = {
   ecom: { n: '大电商事业部', short: '大电商', pill: 'in' },
   pdd: { n: '拼多多事业部', short: '拼多多', pill: 'ok' },
@@ -231,7 +251,7 @@ function t4Load() {
   try {
     const saved = JSON.parse(localStorage.getItem(T4_CFG_KEY) || '{}');
     T4.cfg = t4Clone(T4_CFG_DEFAULT);
-    T4_CH.forEach(c => Object.assign(T4.cfg[c.id], saved[c.id] || {}));
+    T4_CH.forEach(c => { T4.cfg[c.id] = Object.assign(T4.cfg[c.id] || {}, saved[c.id] || {}); });
   } catch (e) { T4.cfg = t4Clone(T4_CFG_DEFAULT); }
   t4MigrateV1();
   t4MigrateFileParts();
@@ -461,7 +481,7 @@ S.t4 = () => {
        <button class="btn sm" data-t4go="man:${c.id}">录入</button>`];
   });
   return head('T4　日损益表', `按底稿完整科目重算 ${T4_CH.length} 个渠道，并分别归集到大电商、拼多多、瑞眠和经销事业部。`, '工具箱 · 已更新',
-    t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="overview" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="选起止日期看区间损益，清空回整月累计" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="overview" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label><button class="btn" data-t4go="sumimp:income">收入导入</button><button class="btn" data-t4go="sumimp:cost">成本导入</button><button class="btn" data-t4go="summan:income">收入录入</button><button class="btn" data-t4go="summan:cost">成本录入</button><button class="btn" data-t4go="rules">取数口径</button><button class="btn" data-t4go="mgmt">管理费分摊</button><button class="btn" data-t4go="cfg">参数</button><button class="btn pri" data-t4go="sheet">看损益表</button>`))
+    t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="overview" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="选起止日期看区间损益，清空回整月累计" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="overview" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label><button class="btn" data-t4go="sumimp:income">收入导入</button><button class="btn" data-t4go="sumimp:cost">成本导入</button><button class="btn" data-t4go="summan:income">收入录入</button><button class="btn" data-t4go="summan:cost">成本录入</button><button class="btn" data-t4go="channels">渠道列表</button><button class="btn" data-t4go="rules">取数口径</button><button class="btn" data-t4go="mgmt">管理费分摊</button><button class="btn" data-t4go="cfg">参数</button><button class="btn pri" data-t4go="sheet">看损益表</button>`))
     + kpis([
       { k: '渠道', v: String(T4_CH.length), u: '个' },
       { k: '大电商', v: String(T4_BIG_ECOM.length), u: '个渠道' },
@@ -591,7 +611,7 @@ function t4ResolveChannel(value) {
   if (aliases[raw]) return aliases[raw];
   const n = norm(raw);
   if (aliases[n]) return aliases[n];
-  const hit = T4_CH.find(c => norm(c.n) === n || norm(c.id) === n);
+  const hit = T4_CH.find(c => norm(c.n) === n || norm(c.id) === n || (c.aliases || []).some(a => norm(a) === n));
   return hit ? hit.id : '';
 }
 const t4SummaryReady = imp => !!imp && T4_FILE_DEFS.summaryDaily.required.every(k => imp.map[k] != null)
@@ -672,6 +692,114 @@ function t4SummaryTemplate() {
   const hdr = ['销售渠道', '订单类型', '发货时间', amountCol];
   const rows = T4_CH.map(c => [c.n, '', t4Date(1), '']);
   download(`T4${sc.n}汇总导入模板_${T4.period}.csv`, toCSV([hdr, ...rows])); toast(`已下载${sc.n}汇总导入模板（吉客云列名）`);
+}
+
+/* ---------- 渠道列表：模板导入维护（批量改名/调事业部/新增） ---------- */
+const T4_BU_ALIAS = { 大电商: 'ecom', 大电商事业部: 'ecom', 拼多多: 'pdd', 拼多多事业部: 'pdd',
+  瑞眠: 'ruimian', 瑞眠事业部: 'ruimian', 经销: 'dealer', 经销事业部: 'dealer' };
+
+function t4ChTemplate() {
+  // 与用户渠道列表底稿同构：销售渠道（原始店铺）→ 渠道汇总（T4 渠道）→ 归属事业部
+  const hdr = ['编号', '销售渠道', '归属事业部', '渠道汇总'];
+  const rows = []; let i = 0;
+  const short = bu => (T4_BU_META[bu] || {}).short || bu;
+  T4_CH.forEach(c => {
+    rows.push([String(++i).padStart(4, '0'), c.n, short(c.bu), c.n]);
+    (c.aliases || []).forEach(a => rows.push([String(++i).padStart(4, '0'), a, short(c.bu), c.n]));
+  });
+  download(`T4渠道列表模板_${T4.period}.csv`, toCSV([hdr, ...rows])); toast('已下载渠道列表模板（当前渠道与映射已预填）');
+}
+
+function t4ChApplyRows(rows) {
+  const clean = c => String(c == null ? '' : c).replace(/[﻿​\s]+/g, '');
+  const headRow = rows.findIndex(r => r.some(c => ['渠道名称', '渠道', '销售渠道'].includes(clean(c)))
+    && r.some(c => ['归属事业部', '事业部'].includes(clean(c))));
+  if (headRow < 0) throw new Error('未找到表头行（需包含「销售渠道/渠道名称」和「归属事业部」列）');
+  const hdr = rows[headRow].map(clean);
+  const buCol = hdr.findIndex(c => c === '归属事业部' || c === '事业部');
+  const sumCol = hdr.findIndex(c => c === '渠道汇总' || c === '汇总渠道');
+  const trim = v => String(v == null ? '' : v).trim();
+  const buOf = raw => raw ? T4_BU_ALIAS[raw.replace(/\s/g, '')] || '' : '';
+  const ov = t4ChOverrides();
+  const put = entry => { const i = ov.findIndex(x => x.id === entry.id); if (i >= 0) ov[i] = { ...ov[i], ...entry }; else ov.push(entry); };
+  let cusMax = 0; T4_CH.concat(ov).forEach(c => { const m = /^cus(\d+)$/.exec(c.id || ''); if (m) cusMax = Math.max(cusMax, +m[1]); });
+  let renamed = 0, moved = 0, added = 0, mapped = 0; const bad = [];
+  const body = rows.slice(headRow + 1);
+
+  if (sumCol >= 0) {
+    // 映射模式（渠道列表底稿）：销售渠道（吉客云原始店铺）归集到渠道汇总（T4 渠道）
+    const rawCol = hdr.findIndex(c => ['销售渠道', '店铺', '渠道名称', '渠道'].includes(c));
+    // 第一遍：保证每个「渠道汇总」目标渠道存在，并按表调整事业部
+    body.forEach(row => {
+      const tgt = trim(row[sumCol]) || (rawCol >= 0 ? trim(row[rawCol]) : ''); if (!tgt) return;
+      const buRaw = buCol >= 0 ? trim(row[buCol]) : '', bu = buOf(buRaw);
+      if (buRaw && !bu) { bad.push(`${tgt}（事业部「${buRaw}」不识别）`); return; }
+      const rid = t4ResolveChannel(tgt);
+      if (rid) {
+        if (bu && T4_CHM[rid].bu !== bu) { put({ id: rid, bu }); T4_CHM[rid].bu = bu; moved++; }
+      } else {
+        put({ id: `cus${++cusMax}`, n: tgt, bu: bu || 'dealer' }); added++;
+        if (!bu) bad.push(`${tgt}（未填事业部，暂归经销）`);
+        t4SaveChOverrides(ov); t4RebuildChannels(); // 让同表后续行立即能解析到新渠道
+      }
+    });
+    t4SaveChOverrides(ov); t4RebuildChannels();
+    // 第二遍：销售渠道 → 渠道汇总 的对应关系挂为目标渠道的别名
+    body.forEach(row => {
+      const raw = rawCol >= 0 ? trim(row[rawCol]) : '';
+      const tgt = trim(row[sumCol]) || raw;
+      if (!raw || !tgt) return;
+      const tid = t4ResolveChannel(tgt); if (!tid) return;
+      if (t4ResolveChannel(raw) === tid) return; // 本名或已有映射
+      const i = ov.findIndex(x => x.id === tid);
+      const prev = i >= 0 ? (ov[i].aliases || []) : [];
+      if (i >= 0) ov[i] = { ...ov[i], aliases: [...new Set(prev.concat(raw))] };
+      else ov.push({ id: tid, aliases: [raw] });
+      mapped++;
+    });
+    t4SaveChOverrides(ov); t4RebuildChannels();
+    return { renamed, moved, added, mapped, bad };
+  }
+
+  // 渠道ID 模式：改名 / 调事业部 / 新增
+  const idCol = hdr.findIndex(c => ['渠道ID', '渠道Id', '渠道id', 'ID', 'id'].includes(c));
+  const nameCol = hdr.findIndex(c => c === '渠道名称' || c === '渠道');
+  body.forEach(row => {
+    const name = trim(row[nameCol]);
+    if (!name) return;
+    const idRaw = idCol >= 0 ? trim(row[idCol]) : '';
+    const buRaw = buCol >= 0 ? trim(row[buCol]) : '', bu = buOf(buRaw);
+    if (buRaw && !bu) { bad.push(`${name}（事业部「${buRaw}」不识别）`); return; }
+    const rid = t4ResolveChannel(name);
+    const target = (idRaw && T4_CHM[idRaw]) || (rid && T4_CHM[rid]) || null;
+    if (target) {
+      const entry = { id: target.id };
+      if (name !== target.n) { entry.n = name; renamed++; }
+      if (bu && bu !== target.bu) { entry.bu = bu; moved++; }
+      if (entry.n || entry.bu) put(entry);
+    } else {
+      const id = /^[a-z][a-z0-9_]*$/i.test(idRaw) && !T4_CHM[idRaw] ? idRaw : `cus${++cusMax}`;
+      put({ id, n: name, bu: bu || 'dealer' }); added++;
+      if (!bu) bad.push(`${name}（未填事业部，暂归经销）`);
+    }
+  });
+  t4SaveChOverrides(ov);
+  t4RebuildChannels();
+  return { renamed, moved, added, mapped, bad };
+}
+
+function t4ChPickFile() {
+  const input = document.createElement('input'); input.type = 'file'; input.accept = '.xlsx,.xls,.csv,.tsv,.txt';
+  input.onchange = async () => {
+    const file = input.files && input.files[0]; if (!file) return;
+    try {
+      const r = t4ChApplyRows(await XLSXLite.readTable(file));
+      t4Load(); t4Go('channels');
+      const warn = r.bad.length ? `；注意：${r.bad.slice(0, 3).join('、')}` : '';
+      toast(`渠道列表导入完成：新增渠道 ${r.added}、映射销售渠道 ${r.mapped}、改名 ${r.renamed}、调事业部 ${r.moved}${warn}`, 5600);
+    } catch (e) { toast(`读取失败：${e.message || e}`, 5000); }
+  };
+  input.click();
 }
 
 function t4MgmtTemplate() {
@@ -881,6 +1009,19 @@ S['t4-mgmt'] = () => {
     + '<div class="note"><b>口径：</b>直接管理费用 = 直接人工 + 直接租金物业 + 直接其他管理；间接管理费用 = 人力公摊 + 房租水电公摊 + 其他公摊。每日分摊额 = 月度金额 ÷ 当月自然日，区间跨月时按各月天数分别折算；某天人工或文件实填的同名科目优先于分摊值。修改立即影响对应日期的派生结果与汇总。</div>';
 };
 
+S['t4-channels'] = () => {
+  t4Load();
+  const rows = T4_CH.map(c => [
+    `<span class="mono">${H(c.id)}</span>`, t4BuPill(c.bu), `<b>${H(c.n)}</b>`,
+    (c.aliases || []).map(H).join('、') || '<span class="mut">—</span>',
+    c.custom ? pill('自定义', 'in') : pill('内置', 'mu'),
+    c.custom ? `<button class="btn sm" data-t4chdel="${H(c.id)}">移除</button>` : '']);
+  return head('T4 渠道列表', `当前 ${T4_CH.length} 个渠道。下载模板修改后导入：按渠道ID（留空则按名称）匹配已有渠道，改名或调整归属事业部；匹配不上的行作为新渠道加入。改名后旧名在数据导入时仍会被识别。`, '工具箱 · T4',
+    '<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="chTemplate">下载模板</button><button class="btn pri" data-t4act="chPick">导入渠道列表</button>')
+    + card(`渠道清单（${T4_CH.length} 个）`, table([{t:'渠道ID'},{t:'归属事业部'},{t:'渠道汇总'},{t:'关联销售渠道'},{t:'来源'},{t:''}], rows))
+    + '<div class="note"><b>与吉客云的关系：</b>渠道列表底稿的「销售渠道」列是吉客云明细里的原始店铺名，导入后挂为对应「渠道汇总」渠道的关联名；此后收入/成本导入吉客云明细时，各店铺数据自动归集到渠道汇总。事业部填大电商、拼多多、瑞眠或经销；新增渠道自动获得录入/导入/分摊全部能力；移除仅限自定义渠道，历史数据保留。</div>';
+};
+
 S['t4-rules'] = () => head('T4 取数口径', '以下规则来自用户提供的销售明细、平台推广明细和 2026-08 日损益底稿。', '工具箱 · T4', '<button class="btn" data-t4go="overview">← 返回</button>')
   + card('文件取数', table([{t:'渠道/文件'},{t:'落表规则'},{t:'控制'}], [
     ['汇总导入', '一个文件按渠道 + 日期导入全部渠道；归属事业部由系统配置确定', pill('批量导入','ok')],
@@ -941,6 +1082,11 @@ document.addEventListener('click', e => {
     if (v === 'imp' || v === 'sumimp') T4.imp = null; t4Go(v); return;
   }
   const file = e.target.closest('[data-t4file]'); if (file) { t4PickFile(file.dataset.t4file); return; }
+  const chdel = e.target.closest('[data-t4chdel]');
+  if (chdel) {
+    t4SaveChOverrides(t4ChOverrides().filter(x => x.id !== chdel.dataset.t4chdel));
+    t4RebuildChannels(); t4Load(); toast('已移除自定义渠道（历史数据保留）'); t4Go('channels'); return;
+  }
   const a = e.target.closest('[data-t4act]'); if (!a) return;
   if (a.dataset.t4act === 'saveMan') {
     let changed = 0;
@@ -987,6 +1133,8 @@ document.addEventListener('click', e => {
   }
   else if (a.dataset.t4act === 'mgmtTemplate') t4MgmtTemplate();
   else if (a.dataset.t4act === 'mgmtPick') t4MgmtPickFile();
+  else if (a.dataset.t4act === 'chTemplate') t4ChTemplate();
+  else if (a.dataset.t4act === 'chPick') t4ChPickFile();
 });
 document.addEventListener('change', e => {
   if (e.target.id === 't4Period') { T4.period = e.target.value || T4.period; T4.imp = null; T4.viewFrom = ''; T4.viewTo = ''; t4Go('overview'); }
