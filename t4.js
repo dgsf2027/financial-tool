@@ -1018,27 +1018,16 @@ S['t4-sheet'] = () => {
       + `<div class="note c"><b>红线口径：</b>京东自营零售成本、退货金额和退货成本来自底稿设定比例；管理费为直接+间接合计。比例与分摊可在「参数」「管理费分摊」中修改。</div>`;
   }
 
-  // 明细表（经典矩阵）——列随项目筛选
-  const okOf = ids => vr ? t4RangeOK(ids, vr.from, vr.to) : t4SumOK(ids);
+  // 明细表（经典矩阵）——只列渠道；事业部/全部汇总看树视图
   const chs = t4ProjCH();
   const months = chs.map(c => vr ? t4RangeData(c.id, vr.from, vr.to) : t4Month(c.id));
-  const aoleIds = [...T4_BIG_ECOM, ...T4_PDD, ...T4_DEALER];
-  const allSpecs = [
-    ['特卖汇总', T4_TMAI, 'aole'], ['大电商事业部', T4_BIG_ECOM, 'aole'],
-    ['拼多多事业部', T4_PDD, 'aole'], ['瑞眠事业部', T4_RUIMIAN, 'ruimian'], ['经销事业部', T4_DEALER, 'aole'],
-  ].filter(s => (T4.projFilter === 'all' || s[2] === T4.projFilter) && s[1].length);
-  const totalSpec = T4.projFilter === 'aole' ? ['澳乐项目', aoleIds] : T4.projFilter === 'ruimian' ? ['瑞眠项目', T4_RUIMIAN] : ['全部汇总', T4_ALL];
-  const sumSpecs = allSpecs.concat([totalSpec]).map(s => ({ name: s[0], ok: okOf(s[1]), g: grpOf(s[1]) }));
-  const headers = [{t:'损益项目'}, ...chs.map(c => ({t:c.n,n:1})), ...sumSpecs.map(s => ({t:s.name,n:1}))];
+  const headers = [{t:'损益项目'}, ...chs.map(c => ({t:c.n,n:1}))];
   const rows = T4_METRICS.map(metric => {
     const vals = months.map(m => t4Fmt(m[metric.k], metric.pct));
-    const groupVals = sumSpecs.map(s => t4Fmt(s.g[metric.k], metric.pct));  // 始终显示合计，与渠道列前后对应
     const name = metric.lvl ? `<span class="mut">${H(metric.n)}</span>` : `<b>${H(metric.n)}</b>`;
-    return [name, ...vals, ...groupVals];
+    return [name, ...vals];
   });
-  const disabled = sumSpecs.filter(s => !s.ok).map(s => s.name);
-  return head('渠道事业部日损益表', desc + '渠道分别归集到大电商、拼多多、瑞眠和经销事业部；特卖汇总作为大电商事业部的子组保留。', '工具箱 · T4', ctrl)
-    + (disabled.length ? `<div class="note w"><b>取数天数提示：</b>${disabled.join('、')} 内部渠道取数天数不一致，其汇总为各渠道直接相加，跨期可比性有限，仅供参考。</div>` : '')
+  return head('渠道事业部日损益表', desc + '按渠道逐列展开损益科目；事业部与全部汇总见「树视图」。', '工具箱 · T4', ctrl)
     + card(title, table(headers, rows))
     + `<div class="note c"><b>红线口径：</b>京东自营零售成本、退货金额和退货成本仍来自底稿设定比例，不是平台原始数据；所有比例与月度分摊可在「参数」中审阅和修改。</div>`;
 };
