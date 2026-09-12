@@ -1032,17 +1032,34 @@ S['t4-sheet'] = () => {
     + `<div class="note c"><b>红线口径：</b>京东自营零售成本、退货金额和退货成本仍来自底稿设定比例，不是平台原始数据；所有比例与月度分摊可在「参数」中审阅和修改。</div>`;
 };
 
+// 把参数页当前所有输入框的值读回 T4.cfg（供保存/添加/删除前保留未存的编辑）
+function t4CfgReadInputs() {
+  document.querySelectorAll('[data-t4cfg]').forEach(inp => {
+    const [ch, k] = inp.dataset.t4cfg.split(':'), meta = T4_CFG_FIELDS.find(x => x[0] === k);
+    (T4.cfg[ch] = T4.cfg[ch] || {})[k] = (Number(inp.value) || 0) / (meta && meta[2] === 'rate' ? 100 : 1);
+  });
+}
 S['t4-cfg'] = () => {
   t4Load();
   const blocks = T4_CH.map(c => {
-    const cfg = T4.cfg[c.id], rows = T4_CFG_FIELDS.filter(([k]) => cfg[k] != null).map(([k,n,t]) => [H(n),
-      `<input type="number" step="0.0001" data-t4cfg="${c.id}:${k}" value="${t === 'rate' ? cfg[k] * 100 : cfg[k]}">`, t === 'rate' ? '%' : '元']);
-    return card(c.n, rows.length ? table([{t:'参数'},{t:'值',n:1},{t:'单位'}], rows)
-      : '<div class="mut" style="padding:14px">暂无底稿参数，损益科目以人工录入为准。</div>');
+    const cfg = T4.cfg[c.id] || {};
+    const rows = T4_CFG_FIELDS.filter(([k]) => cfg[k] != null).map(([k,n,t]) => [H(n),
+      `<input type="number" step="0.0001" data-t4cfg="${c.id}:${k}" value="${t === 'rate' ? cfg[k] * 100 : cfg[k]}">`,
+      t === 'rate' ? '%' : '元',
+      `<button class="btn sm" data-t4cfgdel="${c.id}:${k}" title="删除此费用规则">删除</button>`]);
+    // 该渠道还没设置的费用项目——供「添加规则」下拉选择
+    const unset = T4_CFG_FIELDS.filter(([k]) => cfg[k] == null);
+    const addCtrl = unset.length
+      ? `<select class="t4addsel" data-ch="${c.id}"><option value="">＋添加费用规则…</option>${unset.map(([k,n,t]) => `<option value="${k}">${H(n)}（${t === 'rate' ? '%' : '元'}）</option>`).join('')}</select><button class="btn sm pri" data-t4cfgadd="${c.id}">添加</button>`
+      : '<span class="mut" style="font-size:11px">已包含全部费用规则</span>';
+    return card(c.n,
+      (rows.length ? table([{t:'参数'},{t:'值',n:1},{t:'单位'},{t:''}], rows)
+        : '<div class="mut" style="padding:14px 14px 0">暂无费用规则；用右上角「添加费用规则」为本渠道设置分摊。</div>')
+      + `<div style="padding:11px 14px;display:flex;gap:7px;align-items:center;flex-wrap:wrap">${addCtrl}</div>`);
   }).join('');
-  return head('T4 参数', '比例基于每日零售收入；月度金额按当月自然日平均分摊。参数均来自 2026-08 日损益底稿；直接/间接管理费用请在「管理费分摊」页维护。', '工具箱 · T4',
+  return head('T4 参数', '比例基于每日零售收入；月度金额按当月自然日平均分摊。可为每个渠道单独添加费用分摊规则；直接/间接管理费用请在「管理费分摊」页维护。', '工具箱 · T4',
     `<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="cfgReset">恢复底稿值</button><button class="btn pri" data-t4act="cfgSave">保存参数</button>`)
-    + '<div class="note w"><b>修改会影响所有对应日期的派生结果。</b>人工录入的同名科目优先于参数值。</div>' + blocks;
+    + '<div class="note w"><b>修改会影响所有对应日期的派生结果。</b>人工录入的同名科目优先于参数值。添加规则后填入数值并「保存参数」生效。</div>' + blocks;
 };
 
 S['t4-mgmt'] = () => {
@@ -1148,6 +1165,20 @@ document.addEventListener('click', e => {
     t4SaveChOverrides(t4ChOverrides().filter(x => x.id !== chdel.dataset.t4chdel));
     t4RebuildChannels(); t4Load(); toast('已移除自定义渠道（历史数据保留）'); t4Go('channels'); return;
   }
+  const cfgadd = e.target.closest('[data-t4cfgadd]');
+  if (cfgadd) {
+    const ch = cfgadd.dataset.t4cfgadd, sel = document.querySelector(`.t4addsel[data-ch="${ch}"]`), key = sel && sel.value;
+    if (!key) { toast('请先选择要添加的费用规则'); return; }
+    t4CfgReadInputs(); (T4.cfg[ch] = T4.cfg[ch] || {})[key] = 0; t4SaveCfg();
+    const meta = T4_CFG_FIELDS.find(x => x[0] === key);
+    toast(`已为「${T4_CHM[ch].n}」添加「${meta[1]}」，请填入数值后保存`); t4Go('cfg'); return;
+  }
+  const cfgdel = e.target.closest('[data-t4cfgdel]');
+  if (cfgdel) {
+    const [ch, key] = cfgdel.dataset.t4cfgdel.split(':');
+    t4CfgReadInputs(); if (T4.cfg[ch]) delete T4.cfg[ch][key]; t4SaveCfg();
+    toast('已删除该费用规则'); t4Go('cfg'); return;
+  }
   const a = e.target.closest('[data-t4act]'); if (!a) return;
   if (a.dataset.t4act === 'saveMan') {
     let changed = 0;
@@ -1179,7 +1210,7 @@ document.addEventListener('click', e => {
   else if (a.dataset.t4act === 'sumImpRun') t4SummaryImpRun();
   else if (a.dataset.t4act === 'export') t4Export();
   else if (a.dataset.t4act === 'cfgSave') {
-    document.querySelectorAll('[data-t4cfg]').forEach(inp => { const [ch,k] = inp.dataset.t4cfg.split(':'); const meta = T4_CFG_FIELDS.find(x => x[0] === k); T4.cfg[ch][k] = (Number(inp.value) || 0) / (meta && meta[2] === 'rate' ? 100 : 1); });
+    t4CfgReadInputs();
     t4SaveCfg(); toast('参数已保存'); t4Go('overview');
   } else if (a.dataset.t4act === 'cfgReset') {
     // 只重置比例类底稿参数；管理费分摊是用户数据，原样保留
