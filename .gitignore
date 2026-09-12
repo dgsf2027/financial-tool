@@ -8,3 +8,4 @@ node_modules/
 
 # 套表生成的中间/输出文件
 suite/_out/
+suite/_cfg/

@@ -1,0 +1,17 @@
+{
+  "_说明": "复制本文件为 suite/_cfg/mail.config.json 并填写；该目录已被 .gitignore 排除，不会入库。pass 填邮箱的 SMTP 授权码（不是登录密码）。",
+  "_常见服务商": {
+    "腾讯企业邮": "host smtp.exmail.qq.com, port 465, secure ssl",
+    "QQ邮箱": "host smtp.qq.com, port 465, secure ssl（设置→账户→开启SMTP→获取授权码）",
+    "网易163": "host smtp.163.com, port 465, secure ssl",
+    "阿里企业邮": "host smtp.mxhichina.com, port 465, secure ssl",
+    "Outlook/365": "host smtp.office365.com, port 587, secure starttls"
+  },
+  "host": "smtp.exmail.qq.com",
+  "port": 465,
+  "secure": "ssl",
+  "user": "finance@yourcompany.com",
+  "pass": "在此填写SMTP授权码",
+  "from": "finance@yourcompany.com",
+  "fromName": "财务中心"
+}

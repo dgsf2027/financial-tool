@@ -228,7 +228,8 @@ T4_FILE_DEFS.summaryDaily = {
   required: ['channel', 'date'],
 };
 
-const T4 = { period: new Date().toISOString().slice(0, 7), data: {}, cfg: {}, editCh: 'tmall', imp: null, sumDate: '', sumScope: 'income', viewFrom: '', viewTo: '', mgmtFrom: '', mgmtTo: '', sheetMode: 'tree', treeCollapsed: {}, projFilter: 'all', dayCh: 'tmall' };
+const T4 = { period: new Date().toISOString().slice(0, 7), data: {}, cfg: {}, editCh: 'tmall', imp: null, sumDate: '', sumScope: 'income', viewFrom: '', viewTo: '', mgmtFrom: '', mgmtTo: '', sheetMode: 'tree', treeCollapsed: {}, projFilter: 'all', dayCh: 'tmall',
+  mail: { list: [], status: null, loaded: false, loading: false, result: null, subject: '', body: '' } };
 
 // 项目筛选：全部 / 澳乐（大电商+拼多多+经销）/ 瑞眠
 const T4_PROJ_OPTS = [['all', '全部项目'], ['aole', '澳乐项目'], ['ruimian', '瑞眠项目']];
@@ -988,7 +989,7 @@ S['t4-sheet'] = () => {
   t4Load();
   const vr = t4ViewRange();
   const grpOf = ids => vr ? t4GroupRange(ids, vr.from, vr.to) : t4Group(ids);
-  const ctrl = t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="sheet" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="选起止日期看区间损益，清空回整月累计" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="sheet" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label>${t4ProjSelect('sheet')}<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="sheetMode">${T4.sheetMode === 'tree' ? '切换明细表' : '切换树视图'}</button><button class="btn" data-t4go="chday">每日明细</button><button class="btn" data-t4act="export">导出本表</button><button class="btn pri" data-t4act="exportSuite">导出套表</button>`);
+  const ctrl = t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="sheet" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="选起止日期看区间损益，清空回整月累计" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="sheet" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label>${t4ProjSelect('sheet')}<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="sheetMode">${T4.sheetMode === 'tree' ? '切换明细表' : '切换树视图'}</button><button class="btn" data-t4go="chday">每日明细</button><button class="btn" data-t4act="export">导出本表</button><button class="btn" data-t4go="mail">邮件发送</button><button class="btn pri" data-t4act="exportSuite">导出套表</button>`);
   const desc = vr ? `${vr.from} ～ ${vr.to}（${vr.n} 天）区间损益。` : '渠道月累计损益。';
   const title = vr ? `${vr.from} ～ ${vr.to} 区间损益（${vr.n} 天）` : '月累计损益';
 
@@ -1064,6 +1065,79 @@ S['t4-chday'] = () => {
   return head(`每日明细 · ${c.n}`, `${T4.period} 逐日损益表（利润表格式）：损益科目竖排，每天一列，末列为当月合计。空白日仅计管理费日摊。`, '工具箱 · T4',
     t4PeriodControl(`${sel}<button class="btn" data-t4go="sheet">← 返回损益表</button><button class="btn pri" data-t4act="dayExport">导出 CSV</button>`))
     + card(`${c.n} · ${T4.period} 每日损益表（实取 ${t4Filled(c.id)}/${days} 天）`, table(headers, rows));
+};
+
+// ---------- 邮件发送：收件人清单（服务端保存，多端共用）+ 按各自范围生成套表并逐人发送 ----------
+const T4_EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+async function t4MailLoad() {
+  const st = T4.mail; st.loading = true;
+  try {
+    const [list, status] = await Promise.all([fetch('/api/t4/recipients').then(r => r.json()), fetch('/api/t4/mail/status').then(r => r.json())]);
+    st.list = Array.isArray(list) ? list : []; st.status = status;
+  } catch (e) { st.status = { configured: false, missing: ['服务端不可达：' + (e.message || e)] }; }
+  st.loaded = true; st.loading = false;
+  if (document.getElementById('t4MailSubject')) t4Go('mail');   // 仍在本页才刷新
+}
+// 把页面上的收件人表格与主题/附言读回状态
+function t4MailReadForm() {
+  const names = document.querySelectorAll('[data-t4mailname]');
+  if (names.length) {
+    const val = (sel, i) => { const el = document.querySelector(`[${sel}="${i}"]`); return el ? el : {}; };
+    T4.mail.list = [...names].map(inp => { const i = inp.dataset.t4mailname; return {
+      name: inp.value.trim(), email: String(val('data-t4mailaddr', i).value || '').trim(),
+      scope: val('data-t4mailscope', i).value || 'all', enabled: !!val('data-t4mailon', i).checked }; });
+  }
+  const s = document.getElementById('t4MailSubject'); if (s) T4.mail.subject = s.value.trim();
+  const b = document.getElementById('t4MailBody'); if (b) T4.mail.body = b.value.trim();
+}
+const t4MailSaveList = () => fetch('/api/t4/recipients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(T4.mail.list) });
+async function t4MailSend() {
+  t4MailReadForm();
+  const list = T4.mail.list.filter(r => r.enabled !== false && T4_EMAIL_RE.test(r.email || ''));
+  if (!list.length) { toast('没有启用且邮箱有效的收件人'); return; }
+  const scopes = [...new Set(list.map(r => r.scope || 'all'))];
+  const prev = T4.projFilter, payloads = {};
+  scopes.forEach(s => { T4.projFilter = s; payloads[s] = t4SuitePayload(); });   // 每个范围一份数据包
+  T4.projFilter = prev;
+  toast(`正在生成 ${scopes.length} 份套表并发送给 ${list.length} 人，请稍候…`, 8000);
+  try {
+    await t4MailSaveList();
+    const res = await fetch('/api/t4/mail', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subject: T4.mail.subject || `T4 日损益套表 · ${T4.period}`, body: T4.mail.body, payloads,
+        recipients: list.map(r => ({ name: r.name, email: r.email, scope: r.scope || 'all' })) }) });
+    if (!res.ok) throw new Error((await res.text()).slice(0, 300));
+    const out = await res.json();
+    T4.mail.result = out.results || [];
+    toast(`发送完成：成功 ${T4.mail.result.filter(x => x.ok).length} / ${T4.mail.result.length}`, 5000);
+  } catch (e) { T4.mail.result = [{ name: '—', ok: false, error: String(e.message || e) }]; toast('发送失败：' + (e.message || e), 7000); }
+  t4Go('mail');
+}
+S['t4-mail'] = () => {
+  t4Load();
+  const st = T4.mail;
+  if (!st.loaded && !st.loading) t4MailLoad();
+  const opts = (v, attr) => `<select ${attr}>${T4_PROJ_OPTS.map(([k, n]) => `<option value="${k}" ${v === k ? 'selected' : ''}>${n}</option>`).join('')}</select>`;
+  const rows = st.list.map((r, i) => [
+    `<input type="checkbox" data-t4mailon="${i}" ${r.enabled !== false ? 'checked' : ''}>`,
+    `<input data-t4mailname="${i}" value="${H(r.name || '')}" placeholder="姓名" style="width:110px">`,
+    `<input data-t4mailaddr="${i}" value="${H(r.email || '')}" placeholder="邮箱" style="width:230px">`,
+    opts(r.scope || 'all', `data-t4mailscope="${i}"`),
+    `<button class="btn sm" data-t4maildel="${i}">删除</button>`]);
+  const cfg = st.status;
+  const cfgNote = !cfg ? '<div class="note">正在读取发件配置…</div>'
+    : cfg.configured ? `<div class="note g"><b>发件邮箱已就绪：</b>${H(cfg.fromName ? cfg.fromName + ' ' : '')}${H(cfg.from)}（${H(cfg.host)}:${H(String(cfg.port))}）</div>`
+    : `<div class="note c"><b>发件邮箱尚未配置。</b>请在服务器上复制 <code>suite/mail.config.example.json</code> 为 <code>suite/_cfg/mail.config.json</code> 并填写 SMTP 与授权码（缺少：${H((cfg.missing || []).join('、'))}）。授权码只存服务器本地，不入库。</div>`;
+  return head('邮件发送套表', '维护收件人清单，每人指定报表范围（全部 / 澳乐 / 瑞眠）；发送时按范围各生成一份套表工作簿，逐人附上对应的那份。', '工具箱 · T4',
+    '<button class="btn" data-t4go="sheet">← 返回损益表</button><button class="btn" data-t4act="mailSave">保存收件人</button><button class="btn pri" data-t4act="mailSend">生成并发送</button>')
+    + cfgNote
+    + card(`收件人清单（${st.list.length}）`,
+      (rows.length ? table([{t:'启用'},{t:'姓名'},{t:'邮箱'},{t:'报表范围'},{t:''}], rows) : '<div class="mut" style="padding:14px 14px 0">还没有收件人，在下面添加。</div>')
+      + `<div style="padding:11px 14px;display:flex;gap:7px;align-items:center;flex-wrap:wrap"><input id="t4MailNewName" placeholder="姓名" style="width:110px"><input id="t4MailNewAddr" placeholder="邮箱" style="width:230px">${opts('all', 'id="t4MailNewScope"')}<button class="btn sm" data-t4act="mailAdd">添加</button><span class="mut" style="font-size:11px">停用的收件人保留在清单但不发送</span></div>`)
+    + cardp('邮件内容', `<label class="sel" style="display:block;margin-bottom:8px">主题 <input id="t4MailSubject" value="${H(st.subject || `T4 日损益套表 · ${T4.period}`)}" style="width:440px"></label>`
+      + `<label class="sel" style="display:block">附言 <input id="t4MailBody" value="${H(st.body || '')}" placeholder="可选，写在正文开头" style="width:440px"></label>`
+      + '<div class="mut" style="margin-top:8px;font-size:11px">正文自动附上期间、报表范围、生成时间；附件为该收件人范围的套表 .xlsx（总表→事业部→渠道逐日明细）。</div>')
+    + (st.result ? card('发送结果', table([{t:'收件人'},{t:'范围'},{t:'结果'}],
+        st.result.map(x => [H(x.name || x.to || ''), H(x.scopeName || ''), x.ok ? pill('已发送', 'ok') : `<span class="red">${H(x.error || '失败')}</span>`]))) : '');
 };
 
 S['t4-cfg'] = () => {
@@ -1305,6 +1379,8 @@ document.addEventListener('click', e => {
     if (v === 'imp' || v === 'sumimp') T4.imp = null; t4Go(v); return;
   }
   const file = e.target.closest('[data-t4file]'); if (file) { t4PickFile(file.dataset.t4file); return; }
+  const mdel = e.target.closest('[data-t4maildel]');
+  if (mdel) { t4MailReadForm(); T4.mail.list.splice(+mdel.dataset.t4maildel, 1); t4Go('mail'); return; }
   const tree = e.target.closest('[data-t4tree]');
   if (tree) { const id = tree.dataset.t4tree; T4.treeCollapsed[id] = !T4.treeCollapsed[id]; t4Go('sheet'); return; }
   const chdel = e.target.closest('[data-t4chdel]');
@@ -1358,6 +1434,15 @@ document.addEventListener('click', e => {
   else if (a.dataset.t4act === 'export') t4Export();
   else if (a.dataset.t4act === 'exportSuite') t4ExportSuite();
   else if (a.dataset.t4act === 'dayExport') t4DayExport();
+  else if (a.dataset.t4act === 'mailAdd') {
+    t4MailReadForm();
+    const g = id => (document.getElementById(id) || {}).value || '';
+    const name = g('t4MailNewName').trim(), email = g('t4MailNewAddr').trim(), scope = g('t4MailNewScope') || 'all';
+    if (!T4_EMAIL_RE.test(email)) { toast('请输入有效邮箱'); return; }
+    T4.mail.list.push({ name, email, scope, enabled: true }); t4Go('mail');
+  }
+  else if (a.dataset.t4act === 'mailSave') { t4MailReadForm(); t4MailSaveList().then(r => toast(r.ok ? '收件人已保存（服务端，多端共用）' : '保存失败')).catch(() => toast('保存失败：服务端不可达')); }
+  else if (a.dataset.t4act === 'mailSend') t4MailSend();
   else if (a.dataset.t4act === 'cfgSave') {
     t4CfgReadInputs();
     t4SaveCfg(); toast('✓ 参数已保存，损益表已按新规则重算', 3500);  // 留在本页，不跳转，滚动位置不丢
