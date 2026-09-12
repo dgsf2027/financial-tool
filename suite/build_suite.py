@@ -205,105 +205,83 @@ def write_compare(ws, chans, meta, row_of, first_row):
     ws.sheet_properties.tabColor = "2E75B6"
 
 
-# ---------- Sheet1：总表（总分树） ----------
-def write_summary(ws, tree, chans_by_id, meta, row_of):
-    days = meta["days"]
-    mdef = {m["k"]: m for m in meta["metrics"]}
-    cols = SUMMARY_KEYS
-    title(ws, f"财务中心 · T4 日损益套表（{meta['scopeName']}）", 2 + len(cols))
-    filled_n = sum(1 for c in chans_by_id.values() if c["filled"] > 0)
-    note(ws, "A2", f"期间 {meta['period']}　生成 {meta['generated']}　渠道 {len(chans_by_id)} 个（实取 {filled_n} 个）")
-    note(ws, "A3", "说明：总表→渠道对比→各渠道逐日明细，层层递进。蓝色名称/数字可点击跳转明细页对应行；汇总为公式（事业部=SUM 渠道，渠道=引用明细页），可逐级核对。一级科目加粗，二级科目缩进。")
-    h = 5
-    ws.cell(h, 1, "层级 / 名称")
-    for j, k in enumerate(cols):
-        ws.cell(h, 2 + j, mdef[k]["n"])
-    ws.cell(h, 2 + len(cols), "实取天数")
-    for c in range(1, 3 + len(cols)):
-        hdr(ws.cell(h, c))
-    ws.row_dimensions[h].height = 28
+# ---------- Sheet1：总表（竖式利润表：科目竖排，列 = 全部→项目→事业部 逐级汇总） ----------
+LEVEL_STYLE = {0: ("1F4E78", "FFFFFF", "汇总"), 1: ("2E75B6", "FFFFFF", "项目"), 2: ("9DC3E6", "000000", "事业部")}
 
-    rows = []  # 扁平化：(node, row)
-    cur = [h + 1]
 
-    def place(node):
-        r = cur[0]; cur[0] += 1
-        node["_row"] = r
-        for child in node.get("children") or []:
-            place(child)
+def write_summary(ws, tree, chans, chans_by_id, meta, row_of, first_row):
+    metrics, inputs = meta["metrics"], set(meta["inputKeys"])
+    # 列 = 树上的非叶节点，DFS 顺序：全部、澳乐项目、其下各事业部、瑞眠项目、瑞眠事业部…
+    nodes = []
+
+    def collect(node):
+        if not node.get("children"):
+            return
+        nodes.append(node)
+        for c in node["children"]:
+            collect(c)
     for root in tree:
-        place(root)
+        collect(root)
+    for i, node in enumerate(nodes):
+        node["_idx"] = i
+        node["_col"] = get_column_letter(2 + i)
+        node["_leaves"] = [c for c in leaf_list(node) if c.get("id") in chans_by_id]
+        node["_is_bu"] = all(not c.get("children") for c in node["children"])
+    ch_col = {c["id"]: get_column_letter(3 + i) for i, c in enumerate(chans)}   # 「渠道对比」页各渠道所在列
+    first_ch_col = lambda node: ch_col[node["_leaves"][0]["id"]] if node["_leaves"] else None
 
-    def write_node(node):
-        r = node["_row"]; lvl = node["lvl"]
-        leaf = not node.get("children")
-        nm = ws.cell(r, 1, node["name"])
-        nm.border = BORDER
-        nm.alignment = Alignment(indent=lvl)
-        fill = {0: C_KEY, 1: C_L0}.get(lvl)
-        if leaf:
-            ch = chans_by_id.get(node.get("id"))
-            nm.font = Font(name=FONT, size=10, color=C_LINK, underline="single")
-            if ch:
-                nm.hyperlink = f"#{q(ch['sheet'])}!A1"
-            for j, k in enumerate(cols):
-                col = get_column_letter(2 + j)
-                if k in PCT_KEYS:
-                    cell = ws.cell(r, 2 + j, pct_formula(k, r))
+    title(ws, f"财务中心 · T4 日损益套表（{meta['scopeName']}）", 1 + len(nodes))
+    filled_n = sum(1 for c in chans if c["filled"] > 0)
+    note(ws, "A2", f"期间 {meta['period']}　生成 {meta['generated']}　渠道 {len(chans)} 个（实取 {filled_n} 个）")
+    note(ws, "A3", "竖式利润表：科目竖排，列为 全部→项目→事业部 逐级汇总（均为公式，可点格核对）。事业部列蓝色数字可点击跳到「渠道对比」同一科目行，再点渠道跳到逐日明细。一级科目加粗，二级科目缩进。")
+    # 表头两行：第 4 行层级色带，第 5 行名称（事业部带 └ 标识并可点击）
+    for r_, t_ in ((4, "层级"), (5, "损益项目")):
+        ws.cell(r_, 1, t_); hdr(ws.cell(r_, 1))
+    for node in nodes:
+        fill, fc, tag = LEVEL_STYLE.get(node["lvl"], LEVEL_STYLE[2])
+        col = 2 + node["_idx"]
+        band = ws.cell(4, col, tag)
+        name = ws.cell(5, col, ("└ " if node["_is_bu"] else "") + node["name"])
+        for cell in (band, name):
+            cell.font = Font(name=FONT, bold=True, color=fc, size=10)
+            cell.fill = PatternFill("solid", fgColor=fill)
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = BORDER
+        if node["_is_bu"] and first_ch_col(node):
+            name.hyperlink = f"#'渠道对比'!{first_ch_col(node)}5"
+    ws.row_dimensions[4].height = 16
+    ws.row_dimensions[5].height = 30
+
+    for m in metrics:
+        r = row_of[m["k"]]
+        metric_name_cell(ws.cell(r, 1), m)
+        for node in nodes:
+            if m["k"] in inputs:
+                # 取数项：事业部 = 各渠道明细页合计之和；项目/全部 = 子列之和
+                if node["_is_bu"]:
+                    terms = [f"{q(chans_by_id[c['id']]['sheet'])}!B{r}" for c in node["_leaves"]]
                 else:
-                    cell = ws.cell(r, 2 + j, f"={q(ch['sheet'])}!B{row_of[k]}" if ch else 0)
-                if ch:
-                    cell.hyperlink = f"#{q(ch['sheet'])}!B{row_of[k]}"
-                fmt_num(cell, k, bold=False, link=bool(ch), fill=None)
-            ws.cell(r, 2 + len(cols), f"{ch['filled']}/{days}" if ch else "").alignment = Alignment(horizontal="center")
-        else:
-            nm.font = Font(name=FONT, bold=True, size=11 if lvl == 0 else 10)
-            nm.hyperlink = "#'渠道对比'!A1"
-            nm.font = Font(name=FONT, bold=True, size=11 if lvl == 0 else 10, color=C_LINK)
-            kids = node["children"]
-            for j, k in enumerate(cols):
-                col = get_column_letter(2 + j)
-                if k in PCT_KEYS:
-                    cell = ws.cell(r, 2 + j, pct_formula(k, r))
-                else:
-                    cell = ws.cell(r, 2 + j, "=" + "+".join(f"{col}{c['_row']}" for c in kids))
-                fmt_num(cell, k, bold=True, link=False, fill=fill)
-            leaves = leaf_list(node)
-            cnt = sum(1 for c in leaves if (chans_by_id.get(c.get("id")) or {}).get("filled", 0) > 0)
-            cell = ws.cell(r, 2 + len(cols), f"{cnt}/{len(leaves)} 渠道有数")
-            cell.alignment = Alignment(horizontal="center"); cell.font = Font(name=FONT, size=9, color=C_SUB)
-        ws.cell(r, 2 + len(cols)).border = BORDER
-        if fill:
-            for c in range(1, 3 + len(cols)):
-                ws.cell(r, c).fill = PatternFill("solid", fgColor=fill)
-        for child in node.get("children") or []:
-            write_node(child)
-
-    def pct_formula(k, r):
-        num = {"grossMargin": "grossProfit", "contributionRate": "contribution", "netMargin": "netProfit"}[k]
-        ci = get_column_letter(2 + cols.index("salesIncome"))
-        cn = get_column_letter(2 + cols.index(num))
-        return f"=IF({ci}{r}=0,0,{cn}{r}/{ci}{r})"
-
-    def fmt_num(cell, k, bold, link, fill):
-        cell.number_format = FMT_PCT if k in PCT_KEYS else FMT_AMT
-        cell.border = BORDER
-        cell.alignment = Alignment(horizontal="right")
-        cell.font = Font(name=FONT, bold=bold, size=10, color=C_LINK if link else "000000")
-        if k in KEY_ROWS:
-            cell.font = Font(name=FONT, bold=True, size=10, color=C_LINK if link else "000000")
-
-    for root in tree:
-        write_node(root)
-
-    # 口径说明
-    end = cur[0] + 1
-    note(ws, f"A{end}", "口径：销售收入=零售收入+退货金额+退款金额；毛利=销售收入-销售成本；边际毛利=毛利-运营费-直接管理费；净利润=边际毛利-间接管理费。管理费按自然日分摊，费率类科目按参数页比例派生。")
-    ws.column_dimensions["A"].width = 30
-    for j in range(len(cols)):
-        ws.column_dimensions[get_column_letter(2 + j)].width = 14
-    ws.column_dimensions[get_column_letter(2 + len(cols))].width = 14
-    ws.freeze_panes = "B6"
+                    terms = [f"{c['_col']}{r}" for c in node["children"] if c.get("_col")]
+                f = "=" + "+".join(terms) if terms else 0
+            else:
+                f = formula_for(m["k"], node["_col"], row_of)   # 小计/比率：同口径公式作用于本列
+            cell = ws.cell(r, 2 + node["_idx"], f)
+            link = node["_is_bu"] and bool(node["_leaves"])
+            num_cell(cell, m, is_link=link)
+            if link:
+                cell.hyperlink = f"#'渠道对比'!{first_ch_col(node)}{r}"
+    # 底部：实取渠道数 + 口径说明
+    r_info = max(row_of.values()) + 1
+    c0 = ws.cell(r_info, 1, "实取渠道"); c0.font = Font(name=FONT, size=9, color=C_SUB); c0.border = BORDER
+    for node in nodes:
+        got = sum(1 for c in node["_leaves"] if chans_by_id[c["id"]]["filled"] > 0)
+        cell = ws.cell(r_info, 2 + node["_idx"], f"{got}/{len(node['_leaves'])}")
+        cell.font = Font(name=FONT, size=9, color=C_SUB); cell.alignment = Alignment(horizontal="center"); cell.border = BORDER
+    note(ws, f"A{r_info + 2}", "口径：销售收入=零售收入+退货金额+退款金额；毛利=销售收入-销售成本；边际毛利=毛利-运营费-直接管理费；净利润=边际毛利-间接管理费。管理费按自然日分摊，费率类科目按参数页比例派生。")
+    ws.column_dimensions["A"].width = 22
+    for i in range(len(nodes)):
+        ws.column_dimensions[get_column_letter(2 + i)].width = 16
+    ws.freeze_panes = f"B{first_row}"
     ws.sheet_properties.tabColor = "1F4E78"
 
 
@@ -334,7 +312,7 @@ def main(inp, outp):
     for ch in chans:
         write_channel(wb, ch, data["dailyByCh"].get(ch["id"], []), data, row_of, first_row)
     write_compare(ws_cmp, chans, data, row_of, first_row)
-    write_summary(ws_sum, data["tree"], chans_by_id, data, row_of)
+    write_summary(ws_sum, data["tree"], chans, chans_by_id, data, row_of, first_row)
     wb.calculation = CalcProperties(fullCalcOnLoad=True)   # 打开即重算
     wb.active = 0
     wb.save(outp)
