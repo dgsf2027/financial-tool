@@ -15,7 +15,7 @@ const T4_CH_BASE = [
     { k: 'ztc', n: '天猫直通车', hint: '按记账时间；仅取支出/扣款，排除充值' },
     { k: 'cps', n: '天猫 CPS', hint: '按日期取支出金额' },
   ] },
-  { id: 'jdzy', n: '京东自营', bu: 'ecom', tier: '特卖', files: [
+  { id: 'jdzy', n: '京东-澳乐京东自营', bu: 'ecom', tier: '特卖', files: [
     T4_DAILY_FILE,
     { k: 'jdIncome', n: '京东自营收入交易概况', hint: '日期 → 当日成交金额；零金额日也保留' },
     { k: 'jzt', n: '京准通推广费', hint: '投放日期 → 支出绝对值' },
@@ -24,7 +24,8 @@ const T4_CH_BASE = [
     T4_DAILY_FILE,
     { k: 'sales', n: '销售单明细账', hint: '仅取「京东-澳乐官方旗舰店」' },
   ] },
-  { id: 'vip', n: '唯品会', bu: 'ecom', tier: '特卖', files: [T4_DAILY_FILE] },
+  { id: 'vip', n: '唯品会-澳乐唯品会MP', bu: 'ecom', tier: '特卖', files: [T4_DAILY_FILE] },
+  { id: 'vip3pl', n: '唯品会-澳乐唯品会3PL', bu: 'ecom', tier: '特卖', files: [T4_DAILY_FILE] },
   { id: 'ks', n: '快手', bu: 'ecom', tier: '直属', files: [
     T4_DAILY_FILE,
     { k: 'sales', n: '销售单明细账', hint: '仅取「快手-澳乐母婴品牌店」' },
@@ -160,6 +161,7 @@ const T4_CFG_DEFAULT = {
     sharedLaborMonth: 200.180588463734, sharedRentMonth: 255.11, sharedOtherMonth: 296.93 },
   vip: { directLaborMonth: 7414.617, directRentMonth: 1026.29, directOtherMonth: 1806.66,
     sharedLaborMonth: 5.33824775458277, sharedRentMonth: 219.92, sharedOtherMonth: 255.97 },
+  vip3pl: {},
   ks: { directLaborMonth: 0, sharedLaborMonth: 82.5103681163978 },
   priv: { directLaborMonth: 5838.63 },
   pdd_aole: {},
@@ -606,7 +608,8 @@ function t4ResolveChannel(value) {
     // 吉客云「销售渠道」用店铺全名
     京东澳乐官方旗舰店: 'jdpop', 快手澳乐母婴品牌店: 'ks',
     // 渠道改店铺全名后，旧文件/旧数据里的简称仍要认
-    天猫: 'tmall', 私域: 'priv', 团购: 'groupbuy', 天门: 'tianmen', 抖音达人店: 'dycreator', 礼品单: 'gift' };
+    天猫: 'tmall', 私域: 'priv', 团购: 'groupbuy', 天门: 'tianmen', 抖音达人店: 'dycreator', 礼品单: 'gift',
+    京东自营: 'jdzy', 唯品会: 'vip' };
   const raw = String(value == null ? '' : value).trim();
   if (aliases[raw]) return aliases[raw];
   const n = norm(raw);
