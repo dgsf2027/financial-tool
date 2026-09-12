@@ -1,0 +1,12 @@
+{
+  "name": "promo-fetch",
+  "private": true,
+  "description": "店铺后台推广数据定时抓取（半自动/全自动），归档文件直接对接 T4 导入",
+  "scripts": {
+    "login": "node login.js",
+    "fetch": "node fetch.js"
+  },
+  "dependencies": {
+    "playwright-core": "^1.49.0"
+  }
+}
