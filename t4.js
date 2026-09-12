@@ -1139,10 +1139,13 @@ document.addEventListener('click', e => {
   else if (a.dataset.t4act === 'chTemplate') t4ChTemplate();
   else if (a.dataset.t4act === 'chPick') t4ChPickFile();
   else if (a.dataset.t4act === 'wipePeriod') {
-    if (confirm(`确认清空 ${T4.period} 期间全部渠道的收入、成本与费用数据？\n参数、管理费分摊和渠道列表不受影响，此操作不可恢复。`)) {
-      T4.data = {}; T4_CH.forEach(c => { T4.data[c.id] = {}; });
-      t4Save(); toast(`已清空 ${T4.period} 全部录入与导入数据`); t4Go('overview');
-    }
+    // 两步确认：先弹窗说明，再要求手动输入期间号，防误触
+    if (!confirm(`确认清空 ${T4.period} 期间全部渠道的收入、成本与费用数据？\n参数、管理费分摊和渠道列表不受影响，此操作不可恢复。\n\n点「确定」后还需输入期间号做二次确认。`)) return;
+    const typed = prompt(`二次确认：请输入当前期间「${T4.period}」以执行清空`);
+    if (typed == null) { toast('已取消清空'); return; }
+    if (String(typed).trim() !== T4.period) { toast(`输入「${String(typed).trim()}」与当前期间不一致，已取消清空`, 4200); return; }
+    T4.data = {}; T4_CH.forEach(c => { T4.data[c.id] = {}; });
+    t4Save(); toast(`已清空 ${T4.period} 全部录入与导入数据`); t4Go('overview');
   }
 });
 document.addEventListener('change', e => {
