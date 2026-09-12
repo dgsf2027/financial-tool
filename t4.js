@@ -1032,13 +1032,13 @@ S['t4-sheet'] = () => {
   const headers = [{t:'损益项目'}, ...chs.map(c => ({t:c.n,n:1})), ...sumSpecs.map(s => ({t:s.name,n:1}))];
   const rows = T4_METRICS.map(metric => {
     const vals = months.map(m => t4Fmt(m[metric.k], metric.pct));
-    const groupVals = sumSpecs.map(s => s.ok ? t4Fmt(s.g[metric.k], metric.pct) : '—');
+    const groupVals = sumSpecs.map(s => t4Fmt(s.g[metric.k], metric.pct));  // 始终显示合计，与渠道列前后对应
     const name = metric.lvl ? `<span class="mut">${H(metric.n)}</span>` : `<b>${H(metric.n)}</b>`;
     return [name, ...vals, ...groupVals];
   });
   const disabled = sumSpecs.filter(s => !s.ok).map(s => s.name);
   return head('渠道事业部日损益表', desc + '渠道分别归集到大电商、拼多多、瑞眠和经销事业部；特卖汇总作为大电商事业部的子组保留。', '工具箱 · T4', ctrl)
-    + (disabled.length ? `<div class="note c"><b>以下汇总暂不可用：</b>${disabled.join('、')}。${vr ? '区间汇总按区间内取数天数对齐校验' : '各事业部按内部渠道取数天数分别校验'}，渠道列仍可核对。</div>` : '')
+    + (disabled.length ? `<div class="note w"><b>取数天数提示：</b>${disabled.join('、')} 内部渠道取数天数不一致，其汇总为各渠道直接相加，跨期可比性有限，仅供参考。</div>` : '')
     + card(title, table(headers, rows))
     + `<div class="note c"><b>红线口径：</b>京东自营零售成本、退货金额和退货成本仍来自底稿设定比例，不是平台原始数据；所有比例与月度分摊可在「参数」中审阅和修改。</div>`;
 };
