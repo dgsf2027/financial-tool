@@ -228,7 +228,7 @@ T4_FILE_DEFS.summaryDaily = {
   required: ['channel', 'date'],
 };
 
-const T4 = { period: new Date().toISOString().slice(0, 7), data: {}, cfg: {}, editCh: 'tmall', imp: null, sumDate: '', sumScope: 'income', viewFrom: '', viewTo: '', mgmtFrom: '', mgmtTo: '', sheetMode: 'tree', treeCollapsed: {}, projFilter: 'all' };
+const T4 = { period: new Date().toISOString().slice(0, 7), data: {}, cfg: {}, editCh: 'tmall', imp: null, sumDate: '', sumScope: 'income', viewFrom: '', viewTo: '', mgmtFrom: '', mgmtTo: '', sheetMode: 'tree', treeCollapsed: {}, projFilter: 'all', dayCh: 'tmall' };
 
 // 项目筛选：全部 / 澳乐（大电商+拼多多+经销）/ 瑞眠
 const T4_PROJ_OPTS = [['all', '全部项目'], ['aole', '澳乐项目'], ['ruimian', '瑞眠项目']];
@@ -988,7 +988,7 @@ S['t4-sheet'] = () => {
   t4Load();
   const vr = t4ViewRange();
   const grpOf = ids => vr ? t4GroupRange(ids, vr.from, vr.to) : t4Group(ids);
-  const ctrl = t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="sheet" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="选起止日期看区间损益，清空回整月累计" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="sheet" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label>${t4ProjSelect('sheet')}<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="sheetMode">${T4.sheetMode === 'tree' ? '切换明细表' : '切换树视图'}</button><button class="btn pri" data-t4act="export">导出 CSV</button>`);
+  const ctrl = t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="sheet" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="选起止日期看区间损益，清空回整月累计" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="sheet" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label>${t4ProjSelect('sheet')}<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="sheetMode">${T4.sheetMode === 'tree' ? '切换明细表' : '切换树视图'}</button><button class="btn" data-t4go="chday">每日明细</button><button class="btn pri" data-t4act="export">导出 CSV</button>`);
   const desc = vr ? `${vr.from} ～ ${vr.to}（${vr.n} 天）区间损益。` : '渠道月累计损益。';
   const title = vr ? `${vr.from} ～ ${vr.to} 区间损益（${vr.n} 天）` : '月累计损益';
 
@@ -1038,6 +1038,34 @@ function t4CfgReadInputs() {
     (T4.cfg[ch] = T4.cfg[ch] || {})[k] = (Number(inp.value) || 0) / (meta && meta[2] === 'rate' ? 100 : 1);
   });
 }
+
+// 单渠道每日明细：按天列出该渠道的损益
+S['t4-chday'] = () => {
+  t4Load();
+  if (!T4_CHM[T4.dayCh]) T4.dayCh = T4_CH[0].id;
+  const c = T4_CHM[T4.dayCh];
+  const sel = `<label class="sel">渠道 <select id="t4DayCh">${T4_CH.map(x => `<option value="${x.id}" ${x.id === T4.dayCh ? 'selected' : ''}>${H(x.n)}</option>`).join('')}</select></label>`;
+  const cols = [['salesIncome', '销售收入'], ['salesCost', '销售成本'], ['grossProfit', '毛利'], ['operating', '运营费'], ['contribution', '边际毛利'], ['mgmt', '管理费'], ['netProfit', '净利润'], ['netMargin', '净利率', true]];
+  const rows = [];
+  for (let d = 1; d <= t4Days(); d++) {
+    const dt = t4Date(d), raw = t4Raw(c.id, dt), hasInc = t4DayHasIncome(c.id, dt);
+    const g = t4DayData(c.id, dt);
+    const md = t4MgmtDaily(c.id);
+    const src = hasInc ? (t4Row(c.id, dt)._hard.length ? pill('含参数', 'wa') : pill('实填', 'ok'))
+      : (md.any ? pill('仅管理费', 'wa') : pill('无数据', 'mu'));
+    // 无收入且无管理费的空日，值列留白更清爽
+    const blank = !hasInc && !md.any;
+    rows.push({ cls: hasInc ? '' : 'mut', d: [`<b class="mono">${d}</b>`,
+      ...cols.map(col => blank ? '—' : t4TreeCell(g, col)), src] });
+  }
+  const m = t4Month(c.id);
+  const foot = ['月合计', ...cols.map(col => t4TreeCell(m, col)), `${t4Filled(c.id)}/${t4Days()} 天`];
+  return head(`每日明细 · ${c.n}`, `${T4.period} 逐日损益。「实填」当日有导入/录入的真实数据；「含参数」当日损益含费率或分摊派生；「仅管理费」当日无收入、只计管理费日摊。`, '工具箱 · T4',
+    t4PeriodControl(`${sel}<button class="btn" data-t4go="sheet">← 返回损益表</button>`))
+    + card(`${c.n} · ${T4.period} 每日损益`, table(
+      [{t:'日'}, ...cols.map(col => ({t:col[1], n:1})), {t:'口径'}], rows, foot));
+};
+
 S['t4-cfg'] = () => {
   t4Load();
   const blocks = T4_CH.map(c => {
@@ -1247,6 +1275,7 @@ document.addEventListener('click', e => {
 document.addEventListener('change', e => {
   if (e.target.id === 't4Period') { T4.period = e.target.value || T4.period; T4.imp = null; T4.viewFrom = ''; T4.viewTo = ''; t4Go('overview'); }
   else if (e.target.id === 't4ProjSel') { T4.projFilter = e.target.value || 'all'; t4Go(e.target.dataset.view === 'sheet' ? 'sheet' : 'overview'); }
+  else if (e.target.id === 't4DayCh') { T4.dayCh = e.target.value || T4_CH[0].id; t4Go('chday'); }
   else if (e.target.id === 't4ViewFrom' || e.target.id === 't4ViewTo') {
     if (e.target.id === 't4ViewFrom') T4.viewFrom = e.target.value || ''; else T4.viewTo = e.target.value || '';
     if (T4.viewFrom && T4.viewTo && T4.viewTo < T4.viewFrom) T4.viewTo = T4.viewFrom;
