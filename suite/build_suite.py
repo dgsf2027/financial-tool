@@ -19,10 +19,11 @@ from openpyxl.utils import get_column_letter
 from openpyxl.workbook.properties import CalcProperties
 
 FONT = "微软雅黑"
-C_HEAD, C_L0, C_KEY, C_GRID, C_LINK, C_SUB, C_TITLE = "1F4E78", "DDEBF7", "BDD7EE", "D9D9D9", "0563C1", "595959", "1F4E78"
+# 极简报表风：无填充色、无网格线；层级靠字重与缩进，会计式细线；唯一含义色是负数红字
+C_TEXT, C_SUB, C_LINK, C_RULE = "000000", "595959", "1F3864", "808080"
 FMT_AMT = '#,##0.00;[Red]-#,##0.00;"-"'
 FMT_PCT = '0.0%;[Red]-0.0%;"-"'
-KEY_ROWS = {"grossProfit", "contribution", "netProfit"}          # 关键小计：加深底色
+KEY_ROWS = {"grossProfit", "contribution", "netProfit"}          # 关键小计：加粗 + 上划线
 OPERATING = ["platformFee", "platformOther", "promotion", "ztc", "cps", "research", "aftersales", "logistics", "warehouse", "tax"]
 DIRECT = ["directLabor", "directRent", "directOther"]
 INDIRECT = ["sharedLabor", "sharedRent", "sharedOther"]
@@ -30,8 +31,10 @@ SUMMARY_KEYS = ["salesIncome", "salesCost", "grossProfit", "grossMargin", "opera
                 "contribution", "contributionRate", "indirect", "netProfit", "netMargin"]
 PCT_KEYS = {"grossMargin", "contributionRate", "netMargin"}
 
-thin = Side(style="thin", color=C_GRID)
-BORDER = Border(left=thin, right=thin, top=thin, bottom=thin)
+RULE = Side(style="thin", color=C_RULE)        # 小计上划线
+RULE_M = Side(style="medium", color="000000")  # 表头下划线
+DOUBLE = Side(style="double", color="000000")  # 净利润双下划线
+BORDER = Border(top=RULE)                      # 信息行（实取渠道）上方细线
 
 
 # ---------- 公式：与系统 t4Row 完全一致 ----------
@@ -67,18 +70,18 @@ def derive(vals):
 
 
 # ---------- 样式 ----------
-def hdr(cell):
-    cell.font = Font(name=FONT, bold=True, color="FFFFFF", size=10)
-    cell.fill = PatternFill("solid", fgColor=C_HEAD)
+def hdr(cell, bold=True, link=False):
+    cell.font = Font(name=FONT, bold=bold, size=10, color=C_LINK if link else C_TEXT)
     cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    cell.border = BORDER
+    cell.border = Border(bottom=RULE_M)
 
 
 def title(ws, text, cols):
     ws["A1"] = text
-    ws["A1"].font = Font(name=FONT, bold=True, size=14, color=C_TITLE)
+    ws["A1"].font = Font(name=FONT, bold=True, size=14, color=C_TEXT)
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max(2, min(cols, 12)))
-    ws.row_dimensions[1].height = 24
+    ws.row_dimensions[1].height = 26
+    ws.sheet_view.showGridLines = False
 
 
 def note(ws, cell, text):
@@ -89,29 +92,39 @@ def note(ws, cell, text):
 def link(ws, cell, text, target):
     ws[cell] = text
     ws[cell].hyperlink = target
-    ws[cell].font = Font(name=FONT, size=10, color=C_LINK, underline="single")
+    ws[cell].font = Font(name=FONT, size=9, color=C_LINK, underline="single")
+
+
+def row_border(m):
+    """会计式横线：一级小计上划线，净利润再加双下划线，比率行与二级科目无线"""
+    if m["k"] == "netProfit":
+        return Border(top=RULE, bottom=DOUBLE)
+    if m["lvl"] == 0 and not m.get("pct"):
+        return Border(top=RULE)
+    return Border()
 
 
 def metric_name_cell(cell, m):
     cell.value = m["n"]
-    cell.border = BORDER
-    if m["lvl"] == 0:
-        cell.font = Font(name=FONT, bold=True, size=10)
-        cell.fill = PatternFill("solid", fgColor=C_KEY if m["k"] in KEY_ROWS else C_L0)
-    else:
+    cell.border = row_border(m)
+    if m.get("pct"):                                      # 比率：斜体灰，弱化
+        cell.font = Font(name=FONT, size=10, italic=True, color=C_SUB)
+        cell.alignment = Alignment(indent=1)
+    elif m["lvl"] == 0:                                   # 一级科目：加粗
+        cell.font = Font(name=FONT, bold=True, size=10, color=C_TEXT)
+    else:                                                 # 二级科目：缩进灰字
         cell.font = Font(name=FONT, size=10, color=C_SUB)
         cell.alignment = Alignment(indent=1)
 
 
 def num_cell(cell, m, is_link=False):
     cell.number_format = FMT_PCT if m.get("pct") else FMT_AMT
-    cell.border = BORDER
+    cell.border = row_border(m)
     cell.alignment = Alignment(horizontal="right")
-    if m["lvl"] == 0:
-        cell.font = Font(name=FONT, bold=True, size=10, color=C_LINK if is_link else "000000")
-        cell.fill = PatternFill("solid", fgColor=C_KEY if m["k"] in KEY_ROWS else C_L0)
-    else:
-        cell.font = Font(name=FONT, size=10, color=C_LINK if is_link else C_SUB)
+    pct = bool(m.get("pct"))
+    bold = m["lvl"] == 0 and not pct
+    color = C_LINK if is_link else (C_SUB if (m["lvl"] or pct) else C_TEXT)
+    cell.font = Font(name=FONT, bold=bold, italic=pct, size=10, color=color)
 
 
 def sheet_name(name, used):
@@ -152,7 +165,6 @@ def write_channel(wb, ch, days_data, meta, row_of, first_row):
         # 合计列 B：取数项 = SUM(各日)；派生项 = 同口径公式作用于 B 列
         cb = ws.cell(r, 2, f"=SUM(C{r}:{last_col}{r})" if is_input else formula_for(m["k"], "B", row_of))
         num_cell(cb, m)
-        cb.font = Font(name=FONT, bold=True, size=10)
         for d in range(1, days + 1):
             col = get_column_letter(2 + d)
             if is_input:
@@ -167,7 +179,6 @@ def write_channel(wb, ch, days_data, meta, row_of, first_row):
     for d in range(1, days + 1):
         ws.column_dimensions[get_column_letter(2 + d)].width = 11
     ws.freeze_panes = f"C{first_row}"
-    ws.sheet_properties.tabColor = "F4B183" if ch["project"].startswith("澳乐") else "A9D18E"
     return ws
 
 
@@ -184,7 +195,7 @@ def write_compare(ws, chans, meta, row_of, first_row):
         c = ws.cell(h, 3 + i, ch["name"])
         c.hyperlink = f"#{q(ch['sheet'])}!A1"
     for c in range(1, 3 + n):
-        hdr(ws.cell(h, c))
+        hdr(ws.cell(h, c), link=c >= 3)   # 渠道表头可点击，用链接色
     ws.row_dimensions[h].height = 30
     last_col = get_column_letter(2 + n) if n else "B"
     for m in metrics:
@@ -192,7 +203,7 @@ def write_compare(ws, chans, meta, row_of, first_row):
         metric_name_cell(ws.cell(r, 1), m)
         is_input = m["k"] in inputs
         cb = ws.cell(r, 2, (f"=SUM(C{r}:{last_col}{r})" if n else 0) if is_input else formula_for(m["k"], "B", row_of))
-        num_cell(cb, m); cb.font = Font(name=FONT, bold=True, size=10)
+        num_cell(cb, m)
         for i, ch in enumerate(chans):
             cell = ws.cell(r, 3 + i, f"={q(ch['sheet'])}!B{r}")
             cell.hyperlink = f"#{q(ch['sheet'])}!B{r}"
@@ -202,13 +213,9 @@ def write_compare(ws, chans, meta, row_of, first_row):
     for i in range(n):
         ws.column_dimensions[get_column_letter(3 + i)].width = 15
     ws.freeze_panes = f"C{first_row}"
-    ws.sheet_properties.tabColor = "2E75B6"
 
 
 # ---------- Sheet1：总表（竖式利润表：科目竖排，列 = 全部→项目→事业部 逐级汇总） ----------
-LEVEL_STYLE = {0: ("1F4E78", "FFFFFF", "汇总"), 1: ("2E75B6", "FFFFFF", "项目"), 2: ("9DC3E6", "000000", "事业部")}
-
-
 def write_summary(ws, tree, chans, chans_by_id, meta, row_of, first_row):
     metrics, inputs = meta["metrics"], set(meta["inputKeys"])
     # 列 = 树上的非叶节点，DFS 顺序：全部、澳乐项目、其下各事业部、瑞眠项目、瑞眠事业部…
@@ -237,13 +244,11 @@ def write_summary(ws, tree, chans, chans_by_id, meta, row_of, first_row):
     # 表头一行（第 5 行）：名称按层级配色，事业部带 └ 标识并可点击；第 4 行留作间隔
     ws.cell(5, 1, "损益项目"); hdr(ws.cell(5, 1))
     for node in nodes:
-        fill, fc, _ = LEVEL_STYLE.get(node["lvl"], LEVEL_STYLE[2])
+        # 层级用字重表达：全部/项目加粗，事业部常规并带 └；事业部可点击（链接色）
+        linkable = node["_is_bu"] and bool(first_ch_col(node))
         name = ws.cell(5, 2 + node["_idx"], ("└ " if node["_is_bu"] else "") + node["name"])
-        name.font = Font(name=FONT, bold=True, color=fc, size=10)
-        name.fill = PatternFill("solid", fgColor=fill)
-        name.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        name.border = BORDER
-        if node["_is_bu"] and first_ch_col(node):
+        hdr(name, bold=not node["_is_bu"], link=linkable)
+        if linkable:
             name.hyperlink = f"#'渠道对比'!{first_ch_col(node)}5"
     ws.row_dimensions[4].height = 6
     ws.row_dimensions[5].height = 30
@@ -278,7 +283,6 @@ def write_summary(ws, tree, chans, chans_by_id, meta, row_of, first_row):
     for i in range(len(nodes)):
         ws.column_dimensions[get_column_letter(2 + i)].width = 16
     ws.freeze_panes = f"B{first_row}"
-    ws.sheet_properties.tabColor = "1F4E78"
 
 
 def leaf_list(node):
