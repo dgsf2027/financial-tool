@@ -1071,6 +1071,7 @@ S['t4-chday'] = () => {
 const T4_EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 // 常见服务商 SMTP 预设（授权码获取方式见 tip）
 const T4_SMTP_PRESETS = {
+  dingtalk: { n: '钉钉邮箱', host: 'smtp.dingtalk.com', port: 465, secure: 'ssl', tip: '钉钉邮箱网页版 → 设置 → 账户与安全 → 开启 IMAP/SMTP 客户端服务 → 生成「客户端专用密码」（未开启专用密码时用邮箱登录密码）' },
   exmail: { n: '腾讯企业邮箱（企业微信）', host: 'smtp.exmail.qq.com', port: 465, secure: 'ssl', tip: '登录网页邮箱 → 设置 → 账户 → 开启 IMAP/SMTP 服务 → 生成「客户端专用密码」，即授权码' },
   qq: { n: 'QQ 邮箱', host: 'smtp.qq.com', port: 465, secure: 'ssl', tip: 'QQ 邮箱网页版 → 设置 → 账户 → 开启 SMTP 服务 → 生成授权码（16 位）' },
   n163: { n: '网易 163 邮箱', host: 'smtp.163.com', port: 465, secure: 'ssl', tip: '163 网页版 → 设置 → POP3/SMTP/IMAP → 开启服务 → 新增授权密码' },
