@@ -1318,7 +1318,64 @@ function t4SuitePayload() {
     tree: roots.map(mkNode), dailyByCh, monthByCh };
 }
 
-// 导出整套报表：优先服务端生成 Excel 工作簿（总表/渠道对比/各渠道明细，带公式与超链接）；失败回退 CSV
+// 浏览器端套表兜底：线上若只托管静态文件、没有转发 /api/t4/suite，仍要导出真正的多 Sheet xlsx。
+function t4SuiteClientWorkbook(payload) {
+  if (!window.XLSXWrite || typeof XLSXWrite.build !== 'function') throw new Error('Excel 导出组件未加载');
+  const metric = (ids, k) => {
+    const sum = key => ids.reduce((n, id) => n + Number((payload.monthByCh[id] || {})[key] || 0), 0);
+    if (k === 'grossMargin') { const d = sum('salesIncome'); return d ? sum('grossProfit') / d : 0; }
+    if (k === 'contributionRate') { const d = sum('salesIncome'); return d ? sum('contribution') / d : 0; }
+    if (k === 'netMargin') { const d = sum('salesIncome'); return d ? sum('netProfit') / d : 0; }
+    return sum(k);
+  };
+  const val = (v, pct) => pct ? `${(Number(v || 0) * 100).toFixed(2)}%` : { n: Number(v || 0) };
+  const leaves = node => node.children && node.children.length
+    ? node.children.reduce((out, child) => out.concat(leaves(child)), []) : (node.id ? [node.id] : []);
+  const sheets = [], used = new Set();
+  const sheetName = raw => {
+    const base = String(raw || '报表').replace(/[\\/*?:\[\]]/g, '·').slice(0, 28) || '报表';
+    let name = base, i = 2;
+    while (used.has(name)) name = `${base.slice(0, 25)}~${i++}`;
+    used.add(name); return name;
+  };
+  const meta = title => [[{ h: title }], [`期间：${payload.period}`, `范围：${payload.scopeName}`, `生成：${payload.generated}`], []];
+
+  const summary = meta(`财务中心 · T4 日损益套表（${payload.scopeName}）`);
+  summary.push([{ h: '层级/名称' }, ...payload.metrics.map(m => ({ h: m.n }))]);
+  const walk = (node, depth) => {
+    const ids = leaves(node);
+    summary.push(['　'.repeat(depth) + node.name, ...payload.metrics.map(m => val(metric(ids, m.k), m.pct))]);
+    (node.children || []).forEach(child => walk(child, depth + 1));
+  };
+  payload.tree.forEach(root => walk(root, 0));
+  sheets.push({ name: sheetName('总表'), rows: summary });
+
+  const byBu = [];
+  payload.channels.forEach(ch => {
+    let group = byBu.find(x => x.bu === ch.bu);
+    if (!group) { group = { bu: ch.bu, name: ch.buName, channels: [] }; byBu.push(group); }
+    group.channels.push(ch);
+  });
+  byBu.forEach(group => {
+    const rows = meta(`${group.name} · 渠道对比`);
+    rows.push([{ h: '损益项目' }, { h: `${group.name}合计` }, ...group.channels.map(ch => ({ h: ch.name }))]);
+    payload.metrics.forEach(m => rows.push([m.n, val(metric(group.channels.map(ch => ch.id), m.k), m.pct),
+      ...group.channels.map(ch => val((payload.monthByCh[ch.id] || {})[m.k], m.pct))]));
+    sheets.push({ name: sheetName(group.name), rows });
+  });
+
+  payload.channels.forEach(ch => {
+    const rows = meta(`${ch.name} · 每日利润表`);
+    rows.push([{ h: '损益项目' }, { h: '合计' }, ...Array.from({ length: payload.days }, (_, i) => ({ h: `${i + 1}日` }))]);
+    const daily = Array.from({ length: payload.days }, (_, i) => t4DayData(ch.id, t4Date(i + 1)));
+    payload.metrics.forEach(m => rows.push([m.n, val((payload.monthByCh[ch.id] || {})[m.k], m.pct),
+      ...daily.map((day, i) => (payload.dailyByCh[ch.id] || [])[i]?.has ? val(day[m.k], m.pct) : '')]));
+    sheets.push({ name: sheetName(ch.name), rows });
+  });
+  return XLSXWrite.build(sheets);
+}
+
+// 导出整套报表：优先服务端生成带公式/超链接的工作簿；接口不可用时在浏览器生成多 Sheet xlsx。
 async function t4ExportSuite() {
   const payload = t4SuitePayload();
   toast('正在生成套表工作簿…');
@@ -1328,9 +1385,14 @@ async function t4ExportSuite() {
     const blob = await res.blob();
     downloadBlob(`T4日损益套表_${payload.scopeName}_${payload.period}.xlsx`, blob);
     toast(`套表已生成：${payload.scopeName} · ${payload.channels.length} 个渠道（总表/渠道对比/逐日明细）`, 4500);
-  } catch (e) {
-    toast('服务端生成失败，改用 CSV 版：' + (e.message || e), 6000);
-    t4ExportSuiteCsv();
+  } catch (serverError) {
+    try {
+      const blob = t4SuiteClientWorkbook(payload);
+      downloadBlob(`T4日损益套表_${payload.scopeName}_${payload.period}.xlsx`, blob);
+      toast(`套表已生成：${payload.scopeName} · ${payload.channels.length} 个渠道（浏览器多 Sheet 版）`, 5000);
+    } catch (clientError) {
+      toast(`套表生成失败：${clientError.message || clientError}；服务端：${serverError.message || serverError}`, 8000);
+    }
   }
 }
 
