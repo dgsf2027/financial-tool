@@ -343,6 +343,38 @@ const T4_SUM_SCOPES = {
 const t4SumScope = () => T4_SUM_SCOPES[T4.sumScope] || T4_SUM_SCOPES.income;
 
 function t4Clone(x) { return JSON.parse(JSON.stringify(x)); }
+let T4_SERVER_VERSION = null;
+let T4_SERVER_LOADING = false;
+let T4_SERVER_LAST_KEY = '';
+function t4EntityKey() {
+  try { return localStorage.getItem('fsc_cur_ent') || 'global'; } catch (e) { return 'global'; }
+}
+async function t4LoadServer() {
+  if (T4_SERVER_LOADING) return;
+  const loadKey = `${T4.period}|${t4EntityKey()}`;
+  if (T4_SERVER_LAST_KEY === loadKey) return;
+  T4_SERVER_LAST_KEY = loadKey;
+  T4_SERVER_LOADING = true;
+  try {
+    const r = await fetch(`/api/t4/data?period=${encodeURIComponent(T4.period)}&entity=${encodeURIComponent(t4EntityKey())}`);
+    if (!r.ok) return;
+    const x = await r.json();
+    if (x.found) {
+      T4.data = x.data || T4.data;
+      T4.cfg = Object.assign(T4.cfg || {}, x.cfg || {});
+      T4_SERVER_VERSION = x.version;
+      if (typeof CURS === 'string' && CURS.startsWith('t4')) go(CURS);
+    }
+  } catch (e) { /* API 不可用时保留 localStorage 回退 */ }
+  finally { T4_SERVER_LOADING = false; }
+}
+async function t4SaveServer() {
+  try {
+    const r = await fetch('/api/t4/data', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ period: T4.period, entity: t4EntityKey(), data: T4.data, cfg: T4.cfg, version: T4_SERVER_VERSION }) });
+    if (r.status === 409) { toast('其他同事刚保存了数据，请刷新后再提交', 4200); return; }
+    if (r.ok) { const x = await r.json(); T4_SERVER_VERSION = x.version; }
+  } catch (e) { toast('共享保存暂不可用，已保留在本机浏览器', 4200); }
+}
 function t4Load() {
   try {
     const all = JSON.parse(localStorage.getItem(T4_KEY) || '{}');
@@ -356,6 +388,7 @@ function t4Load() {
   } catch (e) { T4.cfg = t4Clone(T4_CFG_DEFAULT); }
   t4MigrateV1();
   t4MigrateFileParts();
+  void t4LoadServer();
 }
 function t4MigrateV1() {
   try {
@@ -386,9 +419,10 @@ function t4Save() {
     const all = JSON.parse(localStorage.getItem(T4_KEY) || '{}');
     all[T4.period] = T4.data;
     localStorage.setItem(T4_KEY, JSON.stringify(all));
+    void t4SaveServer();
   } catch (e) { toast('保存失败：浏览器存储空间不足'); }
 }
-function t4SaveCfg() { localStorage.setItem(T4_CFG_KEY, JSON.stringify(T4.cfg)); }
+function t4SaveCfg() { localStorage.setItem(T4_CFG_KEY, JSON.stringify(T4.cfg)); void t4SaveServer(); }
 
 const t4Days = () => { const [y, m] = T4.period.split('-').map(Number); return new Date(y, m, 0).getDate(); };
 const t4Date = d => `${T4.period}-${String(d).padStart(2, '0')}`;
