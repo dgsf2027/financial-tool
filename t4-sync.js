@@ -1,7 +1,7 @@
 /* T4 shared workspace client.  It is intentionally tiny and framework-free so
    the existing static app can adopt server storage without a second build. */
 (function () {
-  const state = { ready: false, loading: false, version: 0, document: null };
+  const state = { ready: false, loading: false, version: 0, found: false, document: null };
   const clone = x => JSON.parse(JSON.stringify(x == null ? {} : x));
   function empty() { return { periods: {}, cfg: {}, channels: [] }; }
   async function load() {
@@ -10,7 +10,7 @@
     try {
       const r = await fetch('/api/t4/workspace', { cache: 'no-store' });
       if (!r.ok) throw new Error(r.status === 401 ? '未完成门户登录' : `服务端 ${r.status}`);
-      const x = await r.json(); state.version = Number(x.version) || 0;
+      const x = await r.json(); state.version = Number(x.version) || 0; state.found = x.found !== false;
       state.document = x.document && typeof x.document === 'object' ? x.document : empty();
       state.ready = true; return state;
     } finally { state.loading = false; }
