@@ -1341,13 +1341,25 @@ function t4SuiteClientWorkbook(payload) {
   const meta = title => [[{ h: title }], [`期间：${payload.period}`, `范围：${payload.scopeName}`, `生成：${payload.generated}`], []];
 
   const summary = meta(`财务中心 · T4 日损益套表（${payload.scopeName}）`);
-  summary.push([{ h: '层级/名称' }, ...payload.metrics.map(m => ({ h: m.n }))]);
-  const walk = (node, depth) => {
-    const ids = leaves(node);
-    summary.push(['　'.repeat(depth) + node.name, ...payload.metrics.map(m => val(metric(ids, m.k), m.pct))]);
-    (node.children || []).forEach(child => walk(child, depth + 1));
+  // 总表采用标准利润表方向：损益科目纵向，组织层级横向。
+  // 渠道已有独立明细 Sheet，总表只放全部/项目/事业部，避免再次横向铺满所有渠道。
+  const summaryNodes = [];
+  const collectSummaryNode = (node, depth) => {
+    if (!node.children || !node.children.length) return;
+    const isBu = node.children.every(child => !child.children || !child.children.length);
+    summaryNodes.push({ node, depth, isBu, ids: leaves(node) });
+    node.children.forEach(child => collectSummaryNode(child, depth + 1));
   };
-  payload.tree.forEach(root => walk(root, 0));
+  payload.tree.forEach(root => collectSummaryNode(root, 0));
+  summary.push([{ h: '损益项目' }, ...summaryNodes.map(x => ({ h: `${x.isBu ? '└ ' : ''}${x.node.name}` }))]);
+  payload.metrics.forEach(m => summary.push([
+    `${m.lvl ? '　' : ''}${m.n}`,
+    ...summaryNodes.map(x => val(metric(x.ids, m.k), m.pct)),
+  ]));
+  summary.push([], ['实取渠道', ...summaryNodes.map(x => {
+    const got = x.ids.filter(id => (payload.channels.find(ch => ch.id === id) || {}).filled > 0).length;
+    return `${got}/${x.ids.length}`;
+  })]);
   sheets.push({ name: sheetName('总表'), rows: summary });
 
   const byBu = [];
