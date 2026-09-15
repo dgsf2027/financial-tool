@@ -1,35 +1,37 @@
-# 财务中心 T4 服务端同步设计
+# 财务中心 T4 服务端同步设计（v2）
 
 ## 目标
 
-将 T4 日损益数据从浏览器 `localStorage` 迁移到财务中心自己的服务端 SQLite 数据库，使员工 A 保存后员工 B 在同一主体、月份和渠道下可见。
+将 T4 日损益数据从浏览器 `localStorage` 迁移到财务中心自己的服务端 SQLite 数据库，使员工 A 保存后员工 B 在同一财务工作区、月份和渠道下可见。T4 原有报表是跨渠道汇总口径，因此第一版不把顶栏主体选择器误当成数据库隔离边界。
 
 ## 范围
 
 - T4 业务数据：月份、渠道、日期、收入/成本/费用明细、来源标记
 - T4 参数与管理费分摊配置
-- 读取、整月保存、并发版本号
-- 旧浏览器数据一次性导入
+- 读取、整工作区保存、并发版本号和字段级冲突
+- 旧浏览器数据备份、预览后显式导入
+- 门户 auth_code 回验建立 HttpOnly 会话；未配置时 fail-closed
 
-不在本批：统一 SSO、细粒度角色权限、其他项目迁移。
+不在本批：自动扩大门户访问范围、其他项目迁移。门户权限范围必须先由业务确认。
 
 ## 架构
 
-Nginx 继续提供静态页面；新增独立 Python 标准库 API 容器和持久化 SQLite 文件。Nginx 将 `/api/t4/data` 反代到 API 容器。API 只接受同源 JSON，不接触其他项目数据库。
+静态服务器继续提供页面，并将 `/api/t4/workspace` 反代到独立 Python 标准库 API。API 使用独立 SQLite 文件，不接触其他项目数据库。生产默认拒绝匿名请求；隔离测试才显式启用 test mode。
 
 ## 数据模型
 
-- `t4_periods(period, entity_id, data_json, cfg_json, version, updated_at, updated_by)`
-- 唯一键：`(period, entity_id)`；第一版主体由前端当前主体 ID 传入
-- 更新使用 `version` 乐观锁，版本不一致返回 409，避免员工互相覆盖
+- `t4_workspaces(workspace, document_json, version, updated_at, updated_by)`
+- `t4_workspace_revisions` 保存每次提交的完整快照，便于恢复
+- workspace 固定为 `finance-t4`；文档包含 `periods`、`cfg`、`channels`
+- 整文档更新要求精确版本；字段 patch 比较 old 值，允许不同字段的并发合并，同字段冲突返回 409
 
 ## 兼容与回滚
 
-读取服务端无数据时回退本地数据；保存成功后服务端成为主数据源。本批不删除任何 localStorage。回滚只需停止 API 容器并恢复前端旧逻辑。
+服务端无数据时只在本机保留草稿，不自动覆盖服务端；首次导入必须先备份、预览并由用户确认。本批不删除任何 localStorage。服务端异常时不显示“已保存”，生产回滚可停止 API 并恢复旧前端。
 
 ## 验证
 
-1. API health 与读写接口
-2. 两个浏览器上下文：A 保存，B 刷新可见
-3. 版本冲突返回 409
-4. Docker 重启后数据仍在
+1. API health、匿名 401、读写和字段冲突接口
+2. 两个不同 origin 的真实浏览器：A 保存，B 读取，B F5 后仍可见
+3. 版本冲突和审计 revision 单测
+4. 生产灰度前完成门户授权码回验、独立卷备份和 Docker 重启后数据验证
