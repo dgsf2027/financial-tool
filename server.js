@@ -28,6 +28,7 @@ const PY = process.env.T4_PYTHON || (process.platform === 'win32'
 const SUITE = path.join(ROOT, 'suite'), OUT = path.join(SUITE, '_out'), CFG = path.join(SUITE, '_cfg');
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const T4_SYNC_PORT = Number(process.env.T4_SYNC_PORT || 8099);
+const T4_SYNC_HOST = String(process.env.T4_SYNC_HOST || '127.0.0.1');
 const PORTAL_SSO_BASE = String(process.env.T4_PORTAL_SSO_BASE || '').replace(/\/+$/, '');
 const SESSION_SECRET = String(process.env.T4_SESSION_SECRET || '');
 const PROXY_SECRET = String(process.env.T4_PROXY_SECRET || '');
@@ -83,7 +84,7 @@ function proxyT4Workspace(req, res) {
   const user = sessionUser(req);
   const proxySignature = user && PROXY_SECRET
     ? crypto.createHmac('sha256', PROXY_SECRET).update(user).digest('hex') : '';
-  const opts = { hostname: '127.0.0.1', port: T4_SYNC_PORT, path: '/api/t4/workspace', method: req.method,
+  const opts = { hostname: T4_SYNC_HOST, port: T4_SYNC_PORT, path: '/api/t4/workspace', method: req.method,
     headers: { 'Content-Length': req.headers['content-length'] || '0', 'Content-Type': req.headers['content-type'] || 'application/json',
       'X-T4-User': user || '', 'X-T4-Proxy-Signature': proxySignature } };
   const upstream = http.request(opts, r => { res.writeHead(r.statusCode || 502, r.headers); r.pipe(res); });
