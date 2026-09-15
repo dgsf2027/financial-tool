@@ -20,9 +20,12 @@ const T4_CH_BASE = [
     { k: 'jdIncome', n: '京东自营收入交易概况', hint: '日期 → 当日成交金额；零金额日也保留' },
     { k: 'jzt', n: '京准通推广费', hint: '投放日期 → 支出绝对值' },
   ] },
-  { id: 'jdpop', n: '京东 POP', bu: 'ecom', tier: '特卖', files: [
+  { id: 'jdpop', n: '京东POP', bu: 'ecom', tier: '特卖', files: [
     T4_DAILY_FILE,
-    { k: 'sales', n: '销售单明细账', hint: '仅取「京东-澳乐官方旗舰店」' },
+    { k: 'sales', n: '销售单明细账', hint: '仅取堂品/新堂品两家京东澳乐旗舰店' },
+  ] },
+  { id: 'jd_aole', n: '京东-澳乐官方旗舰店', bu: 'ecom', tier: '特卖', files: [
+    T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「京东-澳乐官方旗舰店」' },
   ] },
   { id: 'vip', n: '唯品会-澳乐唯品会MP', bu: 'ecom', tier: '特卖', files: [T4_DAILY_FILE] },
   { id: 'vip3pl', n: '唯品会-澳乐唯品会3PL', bu: 'ecom', tier: '特卖', files: [T4_DAILY_FILE] },
@@ -47,12 +50,100 @@ const T4_CH_BASE = [
     T4_DAILY_FILE,
     { k: 'sales', n: '销售单明细账', hint: '仅取「天猫-zzzrest旗舰店」；按发货时间归属' },
   ] },
+  { id: 'jd_zzzrest', n: '京东-zzzrest官方旗舰店', bu: 'ruimian', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「京东-zzzrest官方旗舰店」' }] },
+  { id: 'dy_zzzrest', n: '抖音-zzzrest旗舰店', bu: 'ruimian', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「抖音-zzzrest旗舰店」' }] },
+  { id: 'xhs_zzzrest', n: '小红书-zzzrest旗舰店', bu: 'ruimian', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「小红书-zzzrest旗舰店」' }] },
+  { id: 'tm_orange', n: '天猫-橘农旗舰店', bu: 'ecom', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「天猫-橘农滋补养生旗舰店」' }] },
+  { id: 'tb_orange', n: '淘宝-橘农滋补企业店', bu: 'ecom', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「淘宝-橘农滋补企业店」' }] },
+  { id: 'jd_orange', n: '京东-橘农旗舰店', bu: 'ecom', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「京东-橘农旗舰店」' }] },
   { id: 'tianmen', n: '分销-微商-天门（1688）', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
   { id: 'gift', n: '分销-澳乐礼品单', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
   { id: 'supply', n: '电商供货', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
   { id: 'groupbuy', n: '分销-团购-零售', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
   { id: 'dycreator', n: '抖音-BD达人成交店', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
 ];
+
+/* 财务提供的渠道列表（2026-09-15）：吉客云销售渠道 → T4 汇总渠道。 */
+const T4_SOURCE_CHANNEL_MAP = {
+  '京东-澳乐旗舰店（新堂品）': 'jdpop',
+  '快手-澳乐玩具': 'ks',
+  '分销-团购-零售': 'groupbuy',
+  '分销-礼品启尚': 'gift',
+  '京东-zzzrest官方旗舰店': 'jd_zzzrest',
+  '抖音-zzzrest旗舰店': 'dy_zzzrest',
+  '小红书-zzzrest旗舰店': 'xhs_zzzrest',
+  '分销-礼品盛夏光年': 'gift',
+  '天猫-zzzrest旗舰店': 'tm_zzzrest',
+  '分销-抖音BBG赠品仓': 'dycreator',
+  '分销-抖音麦得多赠品仓': 'dycreator',
+  '分销-抖音象迪咪赠品仓': 'dycreator',
+  '分销-抖音卷发暖暖妈妈赠品仓': 'dycreator',
+  '分销-上海元许礼品分销店': 'gift',
+  '分销-国虹礼品分销店': 'gift',
+  '分销-抖音多赞平台': 'dycreator',
+  '分销-上海安皇礼品分销店': 'gift',
+  '分销-佛山晋佳礼品分销店': 'gift',
+  '分销-抖音深圳萌鹿赠品仓': 'dycreator',
+  '分销-壹叁壹玖礼品分销店': 'gift',
+  '分销-哆啦哈蕾礼品分销店': 'gift',
+  '分销-宛初礼品分销店': 'gift',
+  '分销-卓瑞艺零售分销店': 'gift',
+  '分销-鑫津羽礼品分销店': 'gift',
+  '分销-抖音miko赠品仓': 'dycreator',
+  '义乌市忆泰包装有限公司': 'gift',
+  '分销-抖音江苏半夏赠品仓': 'dycreator',
+  '分销-上海嘉叠贸易有限公司': 'gift',
+  '分销-第一天空礼品分销店': 'gift',
+  '分销-抖音博杨赠品仓': 'dycreator',
+  '快手-澳乐母婴品牌店': 'ks',
+  '分销-碧芭山海经': 'gift',
+  '分销-抖音么么橙赠品仓': 'dycreator',
+  '京东-澳乐旗舰店（堂品）': 'jdpop',
+  '分销-豪悦': 'supply',
+  '分销-抖音亲抚赠品仓': 'dycreator',
+  '分销-抖音南昌海控赠品仓': 'dycreator',
+  '分销-瑞雪礼品分销店': 'gift',
+  '分销-抖音BIBI赠品仓': 'dycreator',
+  '快手-澳乐母婴专卖店': 'ks',
+  '分销-欧贝比礼品分销店': 'gift',
+  '天猫-橘农滋补养生旗舰店': 'tm_orange',
+  '淘宝-橘农滋补企业店': 'tb_orange',
+  '抖音-澳乐官方旗舰店': 'dycreator',
+  '快手-澳乐母婴官方旗舰店': 'ks',
+  '京东-橘农旗舰店': 'jd_orange',
+  '分销-巧巧手玩具': 'groupbuy',
+  '抖音-橘农滋补旗舰店': 'dycreator',
+  '拼多多-澳乐母婴旗舰店': 'pdd_mom',
+  '拼多多-澳乐旗舰店': 'pdd_aole',
+  '小红书-澳乐旗舰店': 'tmall',
+  '抖音-我爱我宝（妈咪生活馆）手工专用': 'dycreator',
+  '分销-大团主': 'groupbuy',
+  '京东-手工单专用（自营）': 'jdzy',
+  '唯品会-手工单专用': 'vip',
+  '抖音-我爱我宝（妈咪生活馆）': 'dycreator',
+  '抖音-澳乐旗舰店手工专用': 'dycreator',
+  '拼多多-澳乐母婴玩具旗舰店': 'pdd_toy',
+  '分销-团购-快团团': 'groupbuy',
+  '快手-澳乐旗舰店': 'ks',
+  '分销-微商-天门聚水潭': 'tianmen',
+  '分销- 澳乐抖音- 乐乐妈咪好物分享': 'dycreator',
+  '抖音-BD达人成交店': 'dycreator',
+  '分销-澳乐自营（天猫供销）': 'supply',
+  '分销-澳乐自营（零售）': 'supply',
+  '分销-澳乐礼品单': 'gift',
+  '分销-澳乐自营（1688）': 'supply',
+  '分销-微商-天门（1688）': 'tianmen',
+  '唯品会-澳乐唯品会3PL': 'vip3pl',
+  '天猫-澳乐旗舰店': 'tmall',
+  '有赞-澳乐乐姐心选': 'priv',
+  '分销代运营-澳乐苏宁自营旗舰店（玩具类）': 'supply',
+  '抖音-澳乐旗舰店': 'dycreator',
+  '唯品会-澳乐唯品会MP': 'vip',
+  '京东-澳乐官方旗舰店': 'jd_aole',
+  '京东-澳乐京东自营': 'jdzy',
+};
+const T4_SOURCE_CHANNEL_NORM = Object.fromEntries(Object.entries(T4_SOURCE_CHANNEL_MAP)
+  .map(([name, id]) => [name.toLowerCase().replace(/[\s\-_—（）()]/g, ''), id]));
 /* 渠道表 = 内置基础表 + localStorage 覆盖层（渠道列表页可导入模板批量改名/调事业部/新增） */
 const T4_CHLIST_KEY = 'fsc_t4_channels_v2';
 let T4_CH = [], T4_CHM = {}, T4_TMAI = [], T4_BIG_ECOM = [], T4_PDD = [], T4_RUIMIAN = [], T4_DEALER = [], T4_ALL = [];
@@ -170,6 +261,13 @@ const T4_CFG_DEFAULT = {
   groupbuy: {},
   dycreator: {},
   tm_zzzrest: {},
+  jd_aole: {},
+  jd_zzzrest: {},
+  dy_zzzrest: {},
+  xhs_zzzrest: {},
+  tm_orange: {},
+  tb_orange: {},
+  jd_orange: {},
 };
 
 const T4_CFG_FIELDS = [
@@ -580,13 +678,6 @@ function t4DateNorm(v) {
   if (m) return `${T4.period}-${String(+m[1]).padStart(2,'0')}-${String(+m[2]).padStart(2,'0')}`;
   const d = new Date(s); return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
 }
-function t4ChannelName(ch) {
-  return {
-    tmall: '天猫-澳乐旗舰店', jdpop: '京东-澳乐官方旗舰店', ks: '快手-澳乐母婴品牌店',
-    pdd_aole: '拼多多-澳乐旗舰店', pdd_toy: '拼多多-澳乐母婴玩具旗舰店', pdd_mom: '拼多多-澳乐母婴旗舰店',
-    tm_zzzrest: '天猫-zzzrest旗舰店',
-  }[ch] || '';
-}
 function t4Add(ch, dt, key, value, fileK) {
   const raw = T4.data[ch][dt] || { _src: 'file', _fileParts: {} };
   if (!raw._fileParts) raw._fileParts = {};
@@ -607,13 +698,14 @@ function t4ResolveChannel(value) {
   const norm = x => String(x == null ? '' : x).toLowerCase().replace(/[\s\-_—（）()]/g, '');
   const aliases = { 京东自营店: 'jdzy', 京东pop: 'jdpop', 抖音达人: 'dycreator',
     // 吉客云「销售渠道」用店铺全名
-    京东澳乐官方旗舰店: 'jdpop', 快手澳乐母婴品牌店: 'ks',
+    快手澳乐母婴品牌店: 'ks',
     // 渠道改店铺全名后，旧文件/旧数据里的简称仍要认
     天猫: 'tmall', 私域: 'priv', 团购: 'groupbuy', 天门: 'tianmen', 抖音达人店: 'dycreator', 礼品单: 'gift',
     京东自营: 'jdzy', 唯品会: 'vip' };
   const raw = String(value == null ? '' : value).trim();
   if (aliases[raw]) return aliases[raw];
   const n = norm(raw);
+  if (T4_SOURCE_CHANNEL_NORM[n]) return T4_SOURCE_CHANNEL_NORM[n];
   if (aliases[n]) return aliases[n];
   const hit = T4_CH.find(c => norm(c.n) === n || norm(c.id) === n || (c.aliases || []).some(a => norm(a) === n));
   return hit ? hit.id : '';
@@ -709,16 +801,15 @@ async function t4SummaryTemplate() {
 const T4_BU_ALIAS = { 大电商: 'ecom', 大电商事业部: 'ecom', 拼多多: 'pdd', 拼多多事业部: 'pdd',
   瑞眠: 'ruimian', 瑞眠事业部: 'ruimian', 经销: 'dealer', 经销事业部: 'dealer' };
 
-function t4ChTemplate() {
-  // 与用户渠道列表底稿同构：销售渠道（原始店铺）→ 渠道汇总（T4 渠道）→ 归属事业部
-  const hdr = ['编号', '销售渠道', '归属事业部', '渠道汇总'];
-  const rows = []; let i = 0;
-  const short = bu => (T4_BU_META[bu] || {}).short || bu;
-  T4_CH.forEach(c => {
-    rows.push([String(++i).padStart(4, '0'), c.n, short(c.bu), c.n]);
-    (c.aliases || []).forEach(a => rows.push([String(++i).padStart(4, '0'), a, short(c.bu), c.n]));
-  });
-  download(`T4渠道列表模板_${T4.period}.csv`, toCSV([hdr, ...rows])); toast('已下载渠道列表模板（当前渠道与映射已预填）');
+async function t4ChTemplate() {
+  // 财务确认版渠道底稿：76 条销售渠道映射，保留原 xlsx 的列序、编号与格式。
+  try {
+    const r = await fetch('示例文件/渠道列表.xlsx');
+    const u8 = new Uint8Array(await r.arrayBuffer());
+    if (!r.ok || u8[0] !== 0x50 || u8[1] !== 0x4b) throw new Error('模板文件缺失或损坏，请联系开发');
+    downloadBlob('渠道列表.xlsx', new Blob([u8]));
+    toast('已下载渠道列表模板（76 条销售渠道映射）');
+  } catch (e) { toast(`模板下载失败：${e.message || e}`, 5000); }
 }
 
 function t4ChApplyRows(rows) {
@@ -938,7 +1029,7 @@ function t4ImpRun() {
       });
       if (!wrote) { skipped++; return; }
     } else if (imp.fileK === 'sales') {
-      if (String(get('channel')).trim() !== t4ChannelName(ch)) { skipped++; return; }
+      if (t4ResolveChannel(get('channel')) !== ch) { skipped++; return; }
       const typ = String(get('type')).trim(), amount = t4Num(get('amount')), cost = t4Num(get('cost')), postage = t4Num(get('postage'));
       if (/售后发货/.test(typ)) { t4Add(ch, dt, 'aftersales', Math.abs(cost) + Math.abs(postage), imp.fileK); }
       else if (/退货/.test(typ)) {
