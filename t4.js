@@ -357,6 +357,18 @@ async function t4LoadServer() {
   try {
     const x = await window.T4Shared.load();
     T4_SERVER_VERSION = x.version; T4_SERVER_DOCUMENT = x.document || window.T4Shared.empty();
+    // 首次切到服务端时，把当前门户用户此前的本机草稿迁入空工作区。
+    // 只在 found=false/version=0 时执行，已有共享数据绝不被本机草稿覆盖。
+    if (!x.found && Number(x.version) === 0 && Object.keys(T4.data || {}).some(k => Object.keys(T4.data[k] || {}).length)) {
+      const migrated = window.T4Shared.clone(T4_SERVER_DOCUMENT);
+      migrated.periods = migrated.periods || {};
+      migrated.periods[T4.period] = window.T4Shared.clone(T4.data);
+      migrated.cfg = window.T4Shared.clone(T4.cfg || {});
+      migrated.channels = t4ChOverrides();
+      const saved = await window.T4Shared.save(migrated, (typeof CUR_USER === 'string' && CUR_USER) || 'portal-user');
+      T4_SERVER_VERSION = saved.version; T4_SERVER_DOCUMENT = migrated;
+      toast('已将本机 T4 草稿迁移到共享服务器', 4200);
+    }
     const cloud = T4_SERVER_DOCUMENT.periods && T4_SERVER_DOCUMENT.periods[T4.period];
     if (cloud && typeof cloud === 'object') T4.data = window.T4Shared.clone(cloud);
     if (T4_SERVER_DOCUMENT.cfg && typeof T4_SERVER_DOCUMENT.cfg === 'object')
