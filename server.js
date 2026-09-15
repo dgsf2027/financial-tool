@@ -2,6 +2,7 @@
 /* 财务中心 · 静态服务器（零依赖，只用 Node 内置模块）
    用法：node server.js [端口]     默认 5180 */
 const http = require('http');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -26,6 +27,69 @@ const PY = process.env.T4_PYTHON || (process.platform === 'win32'
   ? path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python312', 'python.exe') : 'python3');
 const SUITE = path.join(ROOT, 'suite'), OUT = path.join(SUITE, '_out'), CFG = path.join(SUITE, '_cfg');
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+const T4_SYNC_PORT = Number(process.env.T4_SYNC_PORT || 8099);
+const PORTAL_SSO_BASE = String(process.env.T4_PORTAL_SSO_BASE || '').replace(/\/+$/, '');
+const SESSION_SECRET = String(process.env.T4_SESSION_SECRET || '');
+const PROXY_SECRET = String(process.env.T4_PROXY_SECRET || '');
+const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+
+function signSession(payload) {
+  const body = Buffer.from(JSON.stringify({ ...payload, exp: Date.now() + SESSION_TTL_MS })).toString('base64url');
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(body).digest('base64url');
+  return `${body}.${sig}`;
+}
+function sessionUser(req) {
+  if (!SESSION_SECRET) return null;
+  const raw = String(req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith('t4_session='));
+  if (!raw) return null;
+  const token = decodeURIComponent(raw.slice('t4_session='.length));
+  const [body, sig] = token.split('.');
+  if (!body || !sig) return null;
+  const expected = crypto.createHmac('sha256', SESSION_SECRET).update(body).digest('base64url');
+  if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+  try {
+    const p = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (!p.portalUid || !p.tenantId || !p.exp || p.exp < Date.now()) return null;
+    return `${p.tenantId}:${p.portalUid}`;
+  } catch (_) { return null; }
+}
+
+async function portalVerifyAuthCode(authCode, appId, tenantId) {
+  if (!PORTAL_SSO_BASE || !SESSION_SECRET) throw new Error('T4 SSO 未配置');
+  const body = JSON.stringify({ authCode, appId, ...(tenantId ? { tenantId } : {}) });
+  const resp = await fetch(`${PORTAL_SSO_BASE}/v1/sso/verify`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+  const result = await resp.json().catch(() => ({}));
+  if (!resp.ok || !(result.code === 200 || result.code === 0 || result.success === true) || !result.data) throw new Error('门户授权码无效或已过期');
+  const data = result.data;
+  if (!data.portalUid || !data.tenantId || (tenantId && String(data.tenantId) !== String(tenantId))) throw new Error('门户租户校验失败');
+  return data;
+}
+
+async function handleSsoCallback(req, res) {
+  const q = new URL(req.url, 'http://localhost').searchParams;
+  const authCode = q.get('auth_code') || q.get('authCode');
+  const appId = q.get('app_id') || q.get('appId') || 'finance';
+  const tenantId = q.get('tenantId') || q.get('tenant_id') || '';
+  if (!authCode) return sendText(res, 400, '缺少 auth_code');
+  try {
+    const user = await portalVerifyAuthCode(authCode, appId, tenantId);
+    const token = signSession({ portalUid: String(user.portalUid), tenantId: String(user.tenantId), name: user.name || '' });
+    res.writeHead(302, { 'Set-Cookie': `t4_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`, Location: '/' });
+    res.end();
+  } catch (e) { sendText(res, 401, '门户登录失败：' + String(e.message || e).slice(0, 180)); }
+}
+
+function proxyT4Workspace(req, res) {
+  const user = sessionUser(req);
+  const proxySignature = user && PROXY_SECRET
+    ? crypto.createHmac('sha256', PROXY_SECRET).update(user).digest('hex') : '';
+  const opts = { hostname: '127.0.0.1', port: T4_SYNC_PORT, path: '/api/t4/workspace', method: req.method,
+    headers: { 'Content-Length': req.headers['content-length'] || '0', 'Content-Type': req.headers['content-type'] || 'application/json',
+      'X-T4-User': user || '', 'X-T4-Proxy-Signature': proxySignature } };
+  const upstream = http.request(opts, r => { res.writeHead(r.statusCode || 502, r.headers); r.pipe(res); });
+  upstream.on('error', e => { if (!res.headersSent) sendText(res, 503, 'T4 sync unavailable: ' + e.message); else res.destroy(); });
+  req.pipe(upstream);
+}
 
 function readBody(req, limit = 60 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
@@ -68,6 +132,7 @@ async function runMailJob(subject, sends) {
 }
 
 async function handleApi(req, res, urlPath) {
+  if (urlPath === '/api/t4/workspace' && (req.method === 'GET' || req.method === 'PUT')) return proxyT4Workspace(req, res);
   if (urlPath === '/api/t4/suite' && req.method === 'POST') {
     const buf = await readBody(req);
     try {
@@ -152,6 +217,12 @@ const server = http.createServer((req, res) => {
   if (urlPath === '/healthz') {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify({ ok: true, app: 'yc-finance-web', version: '1.0.0' }));
+  }
+
+  // 门户 ssoProtocol=1 的回调；未配置密钥/门户地址时会明确失败，不降级成匿名访问。
+  if (urlPath === '/sso/callback' && req.method === 'GET') {
+    handleSsoCallback(req, res).catch(e => sendText(res, 500, 'SSO 回调失败：' + e.message));
+    return;
   }
 
   // T4 套表 / 邮件接口

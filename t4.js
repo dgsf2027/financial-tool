@@ -343,7 +343,49 @@ const T4_SUM_SCOPES = {
 const t4SumScope = () => T4_SUM_SCOPES[T4.sumScope] || T4_SUM_SCOPES.income;
 
 function t4Clone(x) { return JSON.parse(JSON.stringify(x)); }
+let T4_SERVER_VERSION = null;
+let T4_SERVER_LOADING = false;
+let T4_SERVER_LAST_KEY = '';
+let T4_SERVER_READY = false;
+let T4_SERVER_DOCUMENT = null;
+function t4EntityKey() {
+  try { return localStorage.getItem('fsc_cur_ent') || 'global'; } catch (e) { return 'global'; }
+}
+async function t4LoadServer() {
+  if (T4_SERVER_LOADING || T4_SERVER_READY) return;
+  T4_SERVER_LOADING = true;
+  try {
+    const x = await window.T4Shared.load();
+    T4_SERVER_VERSION = x.version; T4_SERVER_DOCUMENT = x.document || window.T4Shared.empty();
+    const cloud = T4_SERVER_DOCUMENT.periods && T4_SERVER_DOCUMENT.periods[T4.period];
+    if (cloud && typeof cloud === 'object') T4.data = window.T4Shared.clone(cloud);
+    if (T4_SERVER_DOCUMENT.cfg && typeof T4_SERVER_DOCUMENT.cfg === 'object')
+      T4.cfg = Object.assign(T4.cfg || {}, window.T4Shared.clone(T4_SERVER_DOCUMENT.cfg));
+    if (Array.isArray(T4_SERVER_DOCUMENT.channels) && T4_SERVER_DOCUMENT.channels.length) {
+      t4SaveChOverrides(window.T4Shared.clone(T4_SERVER_DOCUMENT.channels)); t4RebuildChannels();
+    }
+    T4_CH.forEach(c => { if (!T4.data[c.id]) T4.data[c.id] = {}; });
+    T4_SERVER_READY = true;
+    if (typeof CURS === 'string' && CURS.startsWith('t4')) go(CURS);
+  } catch (e) {
+    T4_SERVER_LAST_KEY = `error:${Date.now()}`;
+    toast(`共享数据未加载：${e.message || e}。当前仍是本机草稿，未标记为已同步`, 5200);
+  } finally { T4_SERVER_LOADING = false; }
+}
+async function t4SaveServer() {
+  if (!window.T4Shared || !T4_SERVER_READY) throw new Error('共享数据尚未完成加载');
+  const doc = window.T4Shared.clone(T4_SERVER_DOCUMENT || window.T4Shared.empty());
+  doc.periods = doc.periods || {}; doc.periods[T4.period] = window.T4Shared.clone(T4.data);
+  doc.cfg = window.T4Shared.clone(T4.cfg || {});
+  doc.channels = t4ChOverrides();
+  const x = await window.T4Shared.save(doc, (typeof CUR_USER === 'string' && CUR_USER) || 'portal-user');
+  T4_SERVER_VERSION = x.version; T4_SERVER_DOCUMENT = doc; return x;
+}
 function t4Load() {
+  if (T4_SERVER_READY) {
+    T4_CH.forEach(c => { if (!T4.data[c.id]) T4.data[c.id] = {}; });
+    return;
+  }
   try {
     const all = JSON.parse(localStorage.getItem(T4_KEY) || '{}');
     T4.data = all[T4.period] || {};
@@ -356,6 +398,7 @@ function t4Load() {
   } catch (e) { T4.cfg = t4Clone(T4_CFG_DEFAULT); }
   t4MigrateV1();
   t4MigrateFileParts();
+  void t4LoadServer();
 }
 function t4MigrateV1() {
   try {
@@ -381,14 +424,17 @@ function t4MigrateFileParts() {
     delete raw._srcs;
   }));
 }
-function t4Save() {
+async function t4Save() {
+  let all;
   try {
-    const all = JSON.parse(localStorage.getItem(T4_KEY) || '{}');
+    all = JSON.parse(localStorage.getItem(T4_KEY) || '{}');
     all[T4.period] = T4.data;
     localStorage.setItem(T4_KEY, JSON.stringify(all));
   } catch (e) { toast('保存失败：浏览器存储空间不足'); }
+  if (T4_SERVER_READY) return t4SaveServer();
+  return { ok: true, localOnly: true };
 }
-function t4SaveCfg() { localStorage.setItem(T4_CFG_KEY, JSON.stringify(T4.cfg)); }
+async function t4SaveCfg() { localStorage.setItem(T4_CFG_KEY, JSON.stringify(T4.cfg)); if (T4_SERVER_READY) await t4SaveServer(); }
 
 const t4Days = () => { const [y, m] = T4.period.split('-').map(Number); return new Date(y, m, 0).getDate(); };
 const t4Date = d => `${T4.period}-${String(d).padStart(2, '0')}`;
@@ -1606,7 +1652,7 @@ function t4Export() {
 
 function t4Go(v) { go(v === 'overview' ? 't4' : `t4-${v}`); }
 
-document.addEventListener('click', e => {
+document.addEventListener('click', async e => {
   const nav = e.target.closest('[data-t4go]');
   if (nav) {
     const [v,ch] = nav.dataset.t4go.split(':');
@@ -1649,7 +1695,8 @@ document.addEventListener('click', e => {
       changed++;
       if (t4HasInputs(raw)) T4.data[T4.editCh][dt] = raw; else delete T4.data[T4.editCh][dt];
     });
-    t4Save(); toast(`已保存 ${changed} 个变更`); t4Go('overview');
+    try { await t4Save(); toast(`已保存 ${changed} 个变更`); t4Go('overview'); }
+    catch (err) { toast(`共享保存失败：${err.message || err}；本页数据未标记为成功`, 5200); }
   } else if (a.dataset.t4act === 'sumManSave') {
     let changed = 0; const dt = T4.sumDate;
     document.querySelectorAll('[data-t4sumcell]').forEach(inp => {
@@ -1660,7 +1707,8 @@ document.addEventListener('click', e => {
       changed++;
       if (t4HasInputs(raw)) T4.data[ch][dt] = raw; else delete T4.data[ch][dt];
     });
-    t4Save(); toast(`已保存全部渠道，共 ${changed} 个变更`); t4Go('overview');
+    try { await t4Save(); toast(`已保存全部渠道，共 ${changed} 个变更`); t4Go('overview'); }
+    catch (err) { toast(`共享保存失败：${err.message || err}；本页数据未标记为成功`, 5200); }
   } else if (a.dataset.t4act === 'impCancel') { T4.imp = null; t4Go('imp'); }
   else if (a.dataset.t4act === 'impRun') t4ImpRun();
   else if (a.dataset.t4act === 'sumPick') t4PickSummaryFile();
@@ -1683,14 +1731,16 @@ document.addEventListener('click', e => {
   else if (a.dataset.t4act === 'smtpTest') t4SmtpTest();
   else if (a.dataset.t4act === 'cfgSave') {
     t4CfgReadInputs();
-    t4SaveCfg(); toast('✓ 参数已保存，损益表已按新规则重算', 3500);  // 留在本页，不跳转，滚动位置不丢
+    try { await t4SaveCfg(); toast('✓ 参数已保存，损益表已按新规则重算', 3500); }
+    catch (err) { toast(`共享保存失败：${err.message || err}`, 5200); }
   } else if (a.dataset.t4act === 'cfgReset') {
     // 只重置比例类底稿参数；管理费分摊是用户数据，原样保留
     const keep = {};
     T4_CH.forEach(c => { const cur = T4.cfg[c.id] || {}; keep[c.id] = {}; T4_MGMT_FIELDS.forEach(([k]) => { if (cur[k] != null) keep[c.id][k] = cur[k]; }); });
     T4.cfg = t4Clone(T4_CFG_DEFAULT);
     T4_CH.forEach(c => { T4.cfg[c.id] = Object.assign(T4.cfg[c.id] || {}, keep[c.id]); });
-    t4SaveCfg(); toast('已恢复底稿参数（管理费分摊保留）'); t4Go('cfg');
+    try { await t4SaveCfg(); toast('已恢复底稿参数（管理费分摊保留）'); t4Go('cfg'); }
+    catch (err) { toast(`共享保存失败：${err.message || err}`, 5200); }
   }
   else if (a.dataset.t4act === 'mgmtSave') {
     let changed = 0;
@@ -1700,7 +1750,8 @@ document.addEventListener('click', e => {
       if (val === '') delete T4.cfg[ch][k]; else T4.cfg[ch][k] = Number(val) || 0;
       changed++;
     });
-    t4SaveCfg(); toast(`已保存管理费分摊，共 ${changed} 个变更`); t4Go('overview');
+    try { await t4SaveCfg(); toast(`已保存管理费分摊，共 ${changed} 个变更`); t4Go('overview'); }
+    catch (err) { toast(`共享保存失败：${err.message || err}`, 5200); }
   }
   else if (a.dataset.t4act === 'mgmtTemplate') t4MgmtTemplate();
   else if (a.dataset.t4act === 'mgmtPick') t4MgmtPickFile();
