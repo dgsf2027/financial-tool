@@ -26,6 +26,16 @@ const PY = process.env.T4_PYTHON || (process.platform === 'win32'
   ? path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python312', 'python.exe') : 'python3');
 const SUITE = path.join(ROOT, 'suite'), OUT = path.join(SUITE, '_out'), CFG = path.join(SUITE, '_cfg');
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+const T4_SYNC_PORT = Number(process.env.T4_SYNC_PORT || 8099);
+
+function proxyT4Workspace(req, res) {
+  const opts = { hostname: '127.0.0.1', port: T4_SYNC_PORT, path: '/api/t4/workspace', method: req.method,
+    headers: { 'Content-Length': req.headers['content-length'] || '0', 'Content-Type': req.headers['content-type'] || 'application/json',
+      'X-T4-User': req.headers['x-t4-user'] || '' } };
+  const upstream = http.request(opts, r => { res.writeHead(r.statusCode || 502, r.headers); r.pipe(res); });
+  upstream.on('error', e => { if (!res.headersSent) sendText(res, 503, 'T4 sync unavailable: ' + e.message); else res.destroy(); });
+  req.pipe(upstream);
+}
 
 function readBody(req, limit = 60 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
@@ -68,6 +78,7 @@ async function runMailJob(subject, sends) {
 }
 
 async function handleApi(req, res, urlPath) {
+  if (urlPath === '/api/t4/workspace' && (req.method === 'GET' || req.method === 'PUT')) return proxyT4Workspace(req, res);
   if (urlPath === '/api/t4/suite' && req.method === 'POST') {
     const buf = await readBody(req);
     try {
