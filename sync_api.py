@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Dependency-free T4 shared workspace service with CAS patches."""
-import json, os, re, sqlite3, time
+import hashlib, hmac, json, os, re, sqlite3, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 DB = os.environ.get('T4_DB', '/data/t4.sqlite3')
 PORT = int(os.environ.get('PORT', '8099'))
 AUTH_MODE = os.environ.get('T4_AUTH_MODE', 'deny').lower()
+PROXY_SECRET = os.environ.get('T4_PROXY_SECRET', '')
 MAX_BODY = 16 * 1024 * 1024
 WORKSPACE = 'finance-t4'
 PERIOD_RE = re.compile(r'^20\d{2}-(0[1-9]|1[0-2])$')
@@ -36,10 +37,19 @@ def reply(h, code, obj):
     h.end_headers(); h.wfile.write(body)
 
 def auth_user(h):
-    # Production is fail-closed. Isolated local test compose sets T4_AUTH_MODE=allow.
-    if AUTH_MODE != 'allow': return None
-    user = (h.headers.get('X-T4-User') or 'local-test').strip()
-    return user[:128] if user else None
+    # Production is fail-closed. Local tests may use allow; production uses a
+    # shared HMAC between the Node session proxy and this private service.
+    user = (h.headers.get('X-T4-User') or '').strip()
+    if AUTH_MODE == 'allow':
+        user = user or 'local-test'
+        return user[:128] if user else None
+    if AUTH_MODE != 'proxy' or not PROXY_SECRET or not user:
+        return None
+    supplied = (h.headers.get('X-T4-Proxy-Signature') or '').strip()
+    expected = hmac.new(PROXY_SECRET.encode(), user.encode(), hashlib.sha256).hexdigest()
+    if not supplied or not hmac.compare_digest(supplied, expected):
+        return None
+    return user[:128]
 
 def read_json(h):
     try: n = int(h.headers.get('Content-Length') or '0')

@@ -30,6 +30,7 @@ const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.s
 const T4_SYNC_PORT = Number(process.env.T4_SYNC_PORT || 8099);
 const PORTAL_SSO_BASE = String(process.env.T4_PORTAL_SSO_BASE || '').replace(/\/+$/, '');
 const SESSION_SECRET = String(process.env.T4_SESSION_SECRET || '');
+const PROXY_SECRET = String(process.env.T4_PROXY_SECRET || '');
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 
 function signSession(payload) {
@@ -80,9 +81,11 @@ async function handleSsoCallback(req, res) {
 
 function proxyT4Workspace(req, res) {
   const user = sessionUser(req);
+  const proxySignature = user && PROXY_SECRET
+    ? crypto.createHmac('sha256', PROXY_SECRET).update(user).digest('hex') : '';
   const opts = { hostname: '127.0.0.1', port: T4_SYNC_PORT, path: '/api/t4/workspace', method: req.method,
     headers: { 'Content-Length': req.headers['content-length'] || '0', 'Content-Type': req.headers['content-type'] || 'application/json',
-      'X-T4-User': user || '' } };
+      'X-T4-User': user || '', 'X-T4-Proxy-Signature': proxySignature } };
   const upstream = http.request(opts, r => { res.writeHead(r.statusCode || 502, r.headers); r.pipe(res); });
   upstream.on('error', e => { if (!res.headersSent) sendText(res, 503, 'T4 sync unavailable: ' + e.message); else res.destroy(); });
   req.pipe(upstream);
