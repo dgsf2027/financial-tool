@@ -1344,7 +1344,7 @@ S['t4-mail'] = () => {
     `<button class="btn sm" data-t4maildel="${i}">删除</button>`]);
   const cfg = st.status;
   const cfgNote = !cfg ? '<div class="note">正在读取发件配置…</div>'
-    : cfg.configured ? `<div class="note g"><b>发件邮箱已就绪：</b>${H(cfg.fromName ? cfg.fromName + ' ' : '')}${H(cfg.from)}（${H(cfg.host)}:${H(String(cfg.port))}）</div>`
+    : cfg.configured ? `<div class="note g"><b>发件配置已保存，请发送测试邮件验证：</b>${H(cfg.fromName ? cfg.fromName + ' ' : '')}${H(cfg.from)}（${H(cfg.host)}:${H(String(cfg.port))}）</div>`
     : `<div class="note c"><b>发件邮箱尚未配置。</b>在下方选择服务商、填写发件账号和授权码后点「保存配置」，再发一封测试邮件确认。</div>`;
   return head('邮件发送套表', '维护收件人清单，每人指定报表范围（全部 / 澳乐 / 瑞眠）；发送时按范围各生成一份套表工作簿，逐人附上对应的那份。', '工具箱 · T4',
     '<button class="btn" data-t4go="sheet">← 返回损益表</button><button class="btn" data-t4act="mailSave">保存收件人</button><button class="btn pri" data-t4act="mailSend">生成并发送</button>')
