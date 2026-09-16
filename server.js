@@ -32,19 +32,32 @@ const T4_SYNC_HOST = String(process.env.T4_SYNC_HOST || '127.0.0.1');
 const PORTAL_SSO_BASE = String(process.env.T4_PORTAL_SSO_BASE || '').replace(/\/+$/, '');
 const SESSION_SECRET = String(process.env.T4_SESSION_SECRET || '');
 const PROXY_SECRET = String(process.env.T4_PROXY_SECRET || '');
+const T4_AUTH_MODE = String(process.env.T4_AUTH_MODE || 'strict').toLowerCase();
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 
+function sameOriginRequest(req) {
+  const host = String(req.headers.host || '').toLowerCase();
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  const origin = String(req.headers.origin || '').replace(/\/+$/, '').toLowerCase();
+  if (origin) return origin === `${forwardedProto || 'http'}://${host}`;
+  const fetchSite = String(req.headers['sec-fetch-site'] || '').toLowerCase();
+  return fetchSite === 'same-origin' || fetchSite === 'same-site';
+}
+
 function requireT4Auth(req, res) {
-  if (!SESSION_SECRET) {
+  if (SESSION_SECRET && sessionUser(req)) return true;
+  // The current finance portal uses ssoProtocol=0 and opens this app directly.
+  // In that compatibility mode, browser same-origin requests are accepted while
+  // direct/cross-site requests remain denied. Full portal SSO can use the strict
+  // signed-cookie path above without changing the API surface.
+  if (T4_AUTH_MODE === 'same-origin' && sameOriginRequest(req)) return true;
+  if (!SESSION_SECRET && T4_AUTH_MODE === 'strict') {
     sendText(res, 503, 'T4 登录服务未配置');
     return false;
   }
-  if (!sessionUser(req)) {
-    res.setHeader('WWW-Authenticate', 'Bearer realm="finance-t4"');
-    sendText(res, 401, '需要门户登录');
-    return false;
-  }
-  return true;
+  res.setHeader('WWW-Authenticate', 'Bearer realm="finance-t4"');
+  sendText(res, 401, '需要门户登录');
+  return false;
 }
 
 function signSession(payload) {
