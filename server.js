@@ -8,6 +8,12 @@ const path = require('path');
 
 const ROOT = __dirname;
 const PORT = Number(process.argv[2] || process.env.PORT || 5180);
+process.umask(0o077);
+const PUBLIC_FILES = new Set([
+  'index.html', 'app.css', 'app.js', 'acct.js', 'rpt.js', 'inv.js', 'base.js',
+  'cons.js', 'dash.js', 'fa.js', 'pay.js', 'rec.js', 't1.js', 't3.js',
+  't4.js', 't4-sync.js', 'lib/xlsx-lite.js', 'lib/xlsx-write.js',
+]);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -56,7 +62,8 @@ function sessionUser(req) {
   if (!SESSION_SECRET) return null;
   const raw = String(req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith('t4_session='));
   if (!raw) return null;
-  const token = decodeURIComponent(raw.slice('t4_session='.length));
+  let token;
+  try { token = decodeURIComponent(raw.slice('t4_session='.length)); } catch (_) { return null; }
   const [body, sig] = token.split('.');
   if (!body || !sig) return null;
   const expected = crypto.createHmac('sha256', SESSION_SECRET).update(body).digest('base64url');
@@ -85,6 +92,7 @@ async function handleSsoCallback(req, res) {
   const appId = q.get('app_id') || q.get('appId') || 'finance';
   const tenantId = q.get('tenantId') || q.get('tenant_id') || '';
   if (!authCode) return sendText(res, 400, '缺少 auth_code');
+  if (appId !== 'finance') return sendText(res, 400, '应用标识不匹配');
   try {
     const user = await portalVerifyAuthCode(authCode, appId, tenantId);
     const token = signSession({ portalUid: String(user.portalUid), tenantId: String(user.tenantId), name: user.name || '' });
@@ -257,25 +265,15 @@ const server = http.createServer((req, res) => {
   // 防目录穿越
   const target = path.normalize(path.join(ROOT, urlPath));
   const relative = path.relative(ROOT, target);
-  const parts = relative.split(path.sep).filter(Boolean);
-  const blocked = relative.startsWith('..') || path.isAbsolute(relative)
-    || parts[0] === '.git' || parts[0] === 'suite' && ['_cfg', '_out'].includes(parts[1])
-    || parts.some(p => p === '.env' || p.startsWith('.env.'))
-    || parts.some(p => p.endsWith('.py'))
-    || ['server.js', 'sync_api.py', 't4-sync.js', 'package.json', 'Dockerfile.sync'].includes(parts[0]);
-  if (blocked) {
+  const publicPath = relative.split(path.sep).join('/');
+  const isTemplate = /^示例文件\/[^/]+\.(csv|xlsx)$/.test(publicPath);
+  if (relative.startsWith('..') || path.isAbsolute(relative) || !(PUBLIC_FILES.has(publicPath) || isTemplate)) {
     res.writeHead(403); return res.end('Forbidden');
   }
 
-  fs.stat(target, (err, st) => {
-    if (err || !st.isFile()) {
-      // SPA 回落
-      const idx = path.join(ROOT, 'index.html');
-      return fs.readFile(idx, (e2, buf) => {
-        if (e2) { res.writeHead(404); return res.end('Not found'); }
-        res.writeHead(200, { 'Content-Type': MIME['.html'] });
-        res.end(buf);
-      });
+  fs.lstat(target, (err, st) => {
+    if (err || !st.isFile() || st.isSymbolicLink()) {
+      res.writeHead(404); return res.end('Not found');
     }
     fs.readFile(target, (e3, buf) => {
       if (e3) { res.writeHead(500); return res.end('Read error'); }

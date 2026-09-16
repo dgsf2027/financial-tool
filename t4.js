@@ -1288,11 +1288,16 @@ function t4SmtpCard(cfg) {
     <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap"><button class="btn pri" data-t4act="smtpSave">保存配置</button><span style="width:14px"></span><input id="t4SmtpTestTo" value="${H(c.user || '')}" placeholder="测试收件邮箱" style="width:230px"><button class="btn" data-t4act="smtpTest">发测试邮件</button></div>`);
 }
 async function t4MailLoad() {
-  const st = T4.mail; st.loading = true;
+  const st = T4.mail; st.loading = true; st.error = '';
   try {
-    const [list, status] = await Promise.all([fetch('/api/t4/recipients').then(r => r.json()), fetch('/api/t4/mail/status').then(r => r.json())]);
+    const read = async url => {
+      const r = await fetch(url, { cache: 'no-store' });
+      if (!r.ok) throw new Error(r.status === 401 ? '登录已失效或尚未登录，请从星逸门户重新进入财务中心。' : `读取配置失败（${r.status}），请稍后重试。`);
+      return r.json();
+    };
+    const [list, status] = await Promise.all([read('/api/t4/recipients'), read('/api/t4/mail/status')]);
     st.list = Array.isArray(list) ? list : []; st.status = status;
-  } catch (e) { st.status = { configured: false, missing: ['服务端不可达：' + (e.message || e)] }; }
+  } catch (e) { st.status = null; st.error = String(e.message || e); }
   st.loaded = true; st.loading = false;
   if (document.getElementById('t4MailSubject')) t4Go('mail');   // 仍在本页才刷新
 }
@@ -1335,6 +1340,8 @@ S['t4-mail'] = () => {
   t4Load();
   const st = T4.mail;
   if (!st.loaded && !st.loading) t4MailLoad();
+  if (st.error) return head('邮件发送套表', '发件配置暂未加载。', '工具箱 · T4', '<button class="btn" data-t4go="sheet">← 返回损益表</button>')
+    + `<div class="note c">${H(st.error)}</div>`;
   const opts = (v, attr) => `<select ${attr}>${T4_PROJ_OPTS.map(([k, n]) => `<option value="${k}" ${v === k ? 'selected' : ''}>${n}</option>`).join('')}</select>`;
   const rows = st.list.map((r, i) => [
     `<input type="checkbox" data-t4mailon="${i}" ${r.enabled !== false ? 'checked' : ''}>`,
