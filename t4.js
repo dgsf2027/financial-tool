@@ -6,6 +6,9 @@
 const T4_GAP_LIMIT = 2;
 const T4_KEY = 'fsc_t4_data_v2';
 const T4_CFG_KEY = 'fsc_t4_cfg_v1';
+const T4_PERIOD_CFG_KEY = 'fsc_t4_cfg_periods_v1';
+const T4_LOCK_KEY = 'fsc_t4_period_locks_v1';
+const T4_PENDING_DRAFT_KEY = 'fsc_t4_pending_migration_v1';
 const T4_DAILY_FILE = { k: 'daily', n: '标准日损益明细', hint: '按日期映射收入、成本、费用和管理费用等完整科目' };
 
 const T4_CH_BASE = [
@@ -53,12 +56,15 @@ const T4_CH_BASE = [
   { id: 'jd_zzzrest', n: '京东-zzzrest官方旗舰店', bu: 'ruimian', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「京东-zzzrest官方旗舰店」' }] },
   { id: 'dy_zzzrest', n: '抖音-zzzrest旗舰店', bu: 'ruimian', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「抖音-zzzrest旗舰店」' }] },
   { id: 'xhs_zzzrest', n: '小红书-zzzrest旗舰店', bu: 'ruimian', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「小红书-zzzrest旗舰店」' }] },
-  { id: 'tm_orange', n: '天猫-橘农旗舰店', bu: 'ecom', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「天猫-橘农滋补养生旗舰店」' }] },
-  { id: 'tb_orange', n: '淘宝-橘农滋补企业店', bu: 'ecom', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「淘宝-橘农滋补企业店」' }] },
-  { id: 'jd_orange', n: '京东-橘农旗舰店', bu: 'ecom', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「京东-橘农旗舰店」' }] },
+  { id: 'tm_orange', n: '天猫-橘农旗舰店', bu: 'orange', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「天猫-橘农滋补养生旗舰店」' }] },
+  { id: 'tb_orange', n: '淘宝-橘农滋补企业店', bu: 'orange', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「淘宝-橘农滋补企业店」' }] },
+  { id: 'jd_orange', n: '京东-橘农旗舰店', bu: 'orange', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「京东-橘农旗舰店」' }] },
+  { id: 'dy_orange', n: '抖音-橘农滋补旗舰店', bu: 'orange', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「抖音-橘农滋补旗舰店」' }] },
   { id: 'tianmen', n: '分销-微商-天门（1688）', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
   { id: 'gift', n: '分销-澳乐礼品单', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
   { id: 'supply', n: '电商供货', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
+  { id: 'dealer_retail', n: '分销-澳乐自营（零售）', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
+  { id: 'dealer_1688', n: '分销-澳乐自营（1688）', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
   { id: 'groupbuy', n: '分销-团购-零售', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
   { id: 'dycreator', n: '抖音-BD达人成交店', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
 ];
@@ -112,7 +118,7 @@ const T4_SOURCE_CHANNEL_MAP = {
   '快手-澳乐母婴官方旗舰店': 'ks',
   '京东-橘农旗舰店': 'jd_orange',
   '分销-巧巧手玩具': 'groupbuy',
-  '抖音-橘农滋补旗舰店': 'dycreator',
+  '抖音-橘农滋补旗舰店': 'dy_orange',
   '拼多多-澳乐母婴旗舰店': 'pdd_mom',
   '拼多多-澳乐旗舰店': 'pdd_aole',
   '小红书-澳乐旗舰店': 'tmall',
@@ -129,9 +135,9 @@ const T4_SOURCE_CHANNEL_MAP = {
   '分销- 澳乐抖音- 乐乐妈咪好物分享': 'dycreator',
   '抖音-BD达人成交店': 'dycreator',
   '分销-澳乐自营（天猫供销）': 'supply',
-  '分销-澳乐自营（零售）': 'supply',
+  '分销-澳乐自营（零售）': 'dealer_retail',
   '分销-澳乐礼品单': 'gift',
-  '分销-澳乐自营（1688）': 'supply',
+  '分销-澳乐自营（1688）': 'dealer_1688',
   '分销-微商-天门（1688）': 'tianmen',
   '唯品会-澳乐唯品会3PL': 'vip3pl',
   '天猫-澳乐旗舰店': 'tmall',
@@ -146,7 +152,7 @@ const T4_SOURCE_CHANNEL_NORM = Object.fromEntries(Object.entries(T4_SOURCE_CHANN
   .map(([name, id]) => [name.toLowerCase().replace(/[\s\-_—（）()]/g, ''), id]));
 /* 渠道表 = 内置基础表 + localStorage 覆盖层（渠道列表页可导入模板批量改名/调事业部/新增） */
 const T4_CHLIST_KEY = 'fsc_t4_channels_v2';
-let T4_CH = [], T4_CHM = {}, T4_TMAI = [], T4_BIG_ECOM = [], T4_PDD = [], T4_RUIMIAN = [], T4_DEALER = [], T4_ALL = [];
+let T4_CH = [], T4_CHM = {}, T4_TMAI = [], T4_BIG_ECOM = [], T4_PDD = [], T4_RUIMIAN = [], T4_ORANGE = [], T4_DEALER = [], T4_ALL = [];
 function t4ChOverrides() { try { const v = JSON.parse(localStorage.getItem(T4_CHLIST_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; } }
 function t4SaveChOverrides(list) { localStorage.setItem(T4_CHLIST_KEY, JSON.stringify(list)); }
 function t4RebuildChannels() {
@@ -167,6 +173,7 @@ function t4RebuildChannels() {
   T4_BIG_ECOM = T4_CH.filter(c => c.bu === 'ecom').map(c => c.id);
   T4_PDD = T4_CH.filter(c => c.bu === 'pdd').map(c => c.id);
   T4_RUIMIAN = T4_CH.filter(c => c.bu === 'ruimian').map(c => c.id);
+  T4_ORANGE = T4_CH.filter(c => c.bu === 'orange').map(c => c.id);
   T4_DEALER = T4_CH.filter(c => c.bu === 'dealer').map(c => c.id);
   T4_ALL = T4_CH.map(c => c.id);
 }
@@ -175,12 +182,14 @@ const T4_BU_META = {
   ecom: { n: '大电商事业部', short: '大电商', pill: 'in' },
   pdd: { n: '拼多多事业部', short: '拼多多', pill: 'ok' },
   ruimian: { n: '瑞眠事业部', short: '瑞眠', pill: 'mu' },
+  orange: { n: '橘农事业部', short: '橘农', pill: 'ok' },
   dealer: { n: '经销事业部', short: '经销', pill: 'wa' },
 };
 const t4BuName = id => (T4_BU_META[id] || {}).n || id;
 // 项目层：瑞眠事业部归瑞眠项目，其余（大电商/拼多多/经销）归澳乐项目
-const t4Project = bu => bu === 'ruimian' ? '瑞眠项目' : '澳乐项目';
-const t4ProjectPill = bu => bu === 'ruimian' ? pill('瑞眠项目', 'mu') : pill('澳乐项目', 'in');
+const t4ProjectId = bu => ['ruimian', 'orange'].includes(bu) ? bu : 'aole';
+const t4Project = bu => ({ ruimian: '瑞眠项目', orange: '橘农项目', aole: '澳乐项目' })[t4ProjectId(bu)];
+const t4ProjectPill = bu => pill(t4Project(bu), bu === 'ruimian' ? 'mu' : bu === 'orange' ? 'ok' : 'in');
 const t4BuPill = id => { const m = T4_BU_META[id] || { short:id, pill:'mu' }; return pill(m.short, m.pill); };
 
 const T4_INPUTS = [
@@ -317,6 +326,7 @@ T4_FILE_DEFS.summaryDaily = {
     ['bu', '归属事业部', ['归属事业部', '事业部']],
     ['channel', '渠道', ['渠道', '渠道名称', '店铺', '销售渠道']],
     ['type', '订单类型', ['订单类型', '业务类型']],
+    ['product', '货品名称', ['货品名称', '商品名称', '产品名称']],
     // 吉客云明细列名：发货时间→日期、分摊后金额→销售收入、货品成本→销售成本
     ...T4_FILE_DEFS.daily.fields.map(f =>
       f[0] === 'date' ? ['date', '日期', ['日期', '发货时间']]
@@ -330,8 +340,8 @@ const T4 = { period: new Date().toISOString().slice(0, 7), data: {}, cfg: {}, ed
   mail: { list: [], status: null, loaded: false, loading: false, result: null, subject: '', body: '' } };
 
 // 项目筛选：全部 / 澳乐（大电商+拼多多+经销）/ 瑞眠
-const T4_PROJ_OPTS = [['all', '全部项目'], ['aole', '澳乐项目'], ['ruimian', '瑞眠项目']];
-const t4InProj = bu => T4.projFilter === 'all' || (T4.projFilter === 'ruimian' ? bu === 'ruimian' : bu !== 'ruimian');
+const T4_PROJ_OPTS = [['all', '全部项目'], ['aole', '澳乐项目'], ['ruimian', '瑞眠项目'], ['orange', '橘农项目']];
+const t4InProj = bu => T4.projFilter === 'all' || t4ProjectId(bu) === T4.projFilter;
 const t4ProjCH = () => T4_CH.filter(c => t4InProj(c.bu));
 const t4ProjSelect = view => `<label class="sel">项目 <select id="t4ProjSel" data-view="${view}">${T4_PROJ_OPTS.map(([v, n]) => `<option value="${v}" ${T4.projFilter === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>`;
 
@@ -348,53 +358,109 @@ let T4_SERVER_LOADING = false;
 let T4_SERVER_LAST_KEY = '';
 let T4_SERVER_READY = false;
 let T4_SERVER_DOCUMENT = null;
+let T4_LOADED_PERIOD = '';
+let T4_SERVER_SAVING = false;
+let T4_PENDING_DRAFT = null;
+function t4Stored(key, fallback) { try { return JSON.parse(localStorage.getItem(key) || 'null') || fallback; } catch (_) { return fallback; } }
+function t4CurrentMonth() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit' }).format(new Date()).slice(0, 7);
+}
+function t4IsPeriodLocked(period = T4.period) {
+  const locks = T4.periodLocks || t4Stored(T4_LOCK_KEY, {});
+  return typeof locks[period] === 'boolean' ? locks[period] : period < t4CurrentMonth();
+}
+function t4AssertEditable() {
+  if (T4_SERVER_LOADING || T4_SERVER_SAVING) throw new Error('正在同步，请稍后再操作');
+  if (t4IsPeriodLocked()) throw new Error(`${T4.period} 已锁定，请先解锁该月再修改`);
+}
+function t4ConfigForPeriod(doc, period) {
+  const saved = (doc.cfgByPeriod || {})[period] || doc.cfg || {};
+  const cfg = t4Clone(T4_CFG_DEFAULT);
+  T4_CH.forEach(c => { cfg[c.id] = Object.assign(cfg[c.id] || {}, saved[c.id] || {}); });
+  return cfg;
+}
+function t4ApplyPeriod(doc) {
+  T4.data = t4Clone((doc.periods || {})[T4.period] || {});
+  T4.cfg = t4ConfigForPeriod(doc, T4.period);
+  T4.periodLocks = t4Clone(doc.periodLocks || {});
+  T4_CH.forEach(c => { if (!T4.data[c.id]) T4.data[c.id] = {}; });
+  t4MigrateFileParts();
+  T4_LOADED_PERIOD = T4.period;
+}
 function t4EntityKey() {
   try { return localStorage.getItem('fsc_cur_ent') || 'global'; } catch (e) { return 'global'; }
 }
 async function t4LoadServer() {
-  if (T4_SERVER_LOADING || T4_SERVER_READY) return;
+  if (T4_SERVER_LOADING || T4_SERVER_READY || T4_SERVER_LAST_KEY.startsWith('error:')) return;
   T4_SERVER_LOADING = true;
   try {
     const x = await window.T4Shared.load();
     T4_SERVER_VERSION = x.version; T4_SERVER_DOCUMENT = x.document || window.T4Shared.empty();
+    const pending = t4Stored(T4_PENDING_DRAFT_KEY, null);
+    if (pending && pending.period && pending.data && pending.cfg) {
+      const cloudData = (T4_SERVER_DOCUMENT.periods || {})[pending.period] || {};
+      if (!Object.values(cloudData).some(days => Object.keys(days || {}).length)) T4_PENDING_DRAFT = pending;
+      else { T4_PENDING_DRAFT = null; localStorage.setItem(T4_PENDING_DRAFT_KEY, 'null'); }
+    }
     // 首次切到服务端时，把当前门户用户此前的本机草稿迁入空工作区。
     // 只在 found=false/version=0 时执行，已有共享数据绝不被本机草稿覆盖。
     if (!x.found && Number(x.version) === 0 && Object.keys(T4.data || {}).some(k => Object.keys(T4.data[k] || {}).length)) {
       const migrated = window.T4Shared.clone(T4_SERVER_DOCUMENT);
       migrated.periods = migrated.periods || {};
       migrated.periods[T4.period] = window.T4Shared.clone(T4.data);
-      migrated.cfg = window.T4Shared.clone(T4.cfg || {});
+      migrated.cfg = t4Stored(T4_CFG_KEY, {});
+      migrated.cfgByPeriod = { [T4.period]: window.T4Shared.clone(T4.cfg || {}) };
+      migrated.periodLocks = t4Clone(T4.periodLocks || {});
       migrated.channels = t4ChOverrides();
-      const saved = await window.T4Shared.save(migrated, (typeof CUR_USER === 'string' && CUR_USER) || 'portal-user');
-      T4_SERVER_VERSION = saved.version; T4_SERVER_DOCUMENT = migrated;
-      toast('已将本机 T4 草稿迁移到共享服务器', 4200);
+      const cloudLocks = T4_SERVER_DOCUMENT.periodLocks || {};
+      const locked = typeof cloudLocks[T4.period] === 'boolean' ? cloudLocks[T4.period] : T4.period < t4CurrentMonth();
+      if (locked) {
+        T4_PENDING_DRAFT = { period: T4.period, data: t4Clone(T4.data), cfg: t4Clone(T4.cfg) };
+        localStorage.setItem(T4_PENDING_DRAFT_KEY, JSON.stringify(T4_PENDING_DRAFT));
+        toast('本机往期草稿已保留。请先解锁，再点“导入本机草稿”写入共享工作区。', 6000);
+      } else {
+        const saved = await window.T4Shared.save(migrated, (typeof CUR_USER === 'string' && CUR_USER) || 'portal-user');
+        T4_SERVER_VERSION = saved.version; T4_SERVER_DOCUMENT = migrated;
+        toast('已将本机 T4 草稿迁移到共享服务器', 4200);
+      }
     }
-    const cloud = T4_SERVER_DOCUMENT.periods && T4_SERVER_DOCUMENT.periods[T4.period];
-    if (cloud && typeof cloud === 'object') T4.data = window.T4Shared.clone(cloud);
-    if (T4_SERVER_DOCUMENT.cfg && typeof T4_SERVER_DOCUMENT.cfg === 'object')
-      T4.cfg = Object.assign(T4.cfg || {}, window.T4Shared.clone(T4_SERVER_DOCUMENT.cfg));
     if (Array.isArray(T4_SERVER_DOCUMENT.channels) && T4_SERVER_DOCUMENT.channels.length) {
       t4SaveChOverrides(window.T4Shared.clone(T4_SERVER_DOCUMENT.channels)); t4RebuildChannels();
     }
-    T4_CH.forEach(c => { if (!T4.data[c.id]) T4.data[c.id] = {}; });
+    T4_CH.forEach(c => { if (!T4.data[c.id]) T4.data[c.id] = {}; if (!T4.cfg[c.id]) T4.cfg[c.id] = {}; });
+    t4ApplyPeriod(T4_SERVER_DOCUMENT);
     T4_SERVER_READY = true;
+    T4_SERVER_LAST_KEY = '';
     if (typeof CURS === 'string' && CURS.startsWith('t4')) go(CURS);
   } catch (e) {
     T4_SERVER_LAST_KEY = `error:${Date.now()}`;
     toast(`共享数据未加载：${e.message || e}。当前仍是本机草稿，未标记为已同步`, 5200);
-  } finally { T4_SERVER_LOADING = false; }
+  } finally {
+    T4_SERVER_LOADING = false;
+    const picker = document.getElementById('t4Period');
+    if (picker) picker.disabled = T4_SERVER_SAVING;
+  }
 }
-async function t4SaveServer() {
+async function t4SaveServer(lockOnly = false) {
   if (!window.T4Shared || !T4_SERVER_READY) throw new Error('共享数据尚未完成加载');
+  if (T4_SERVER_SAVING) throw new Error('正在同步，请稍后再操作');
   const doc = window.T4Shared.clone(T4_SERVER_DOCUMENT || window.T4Shared.empty());
-  doc.periods = doc.periods || {}; doc.periods[T4.period] = window.T4Shared.clone(T4.data);
-  doc.cfg = window.T4Shared.clone(T4.cfg || {});
+  if (!lockOnly) {
+    doc.periods = doc.periods || {}; doc.periods[T4.period] = window.T4Shared.clone(T4.data);
+    doc.cfgByPeriod = doc.cfgByPeriod || {};
+    doc.cfgByPeriod[T4.period] = window.T4Shared.clone(T4.cfg || {});
+  }
+  doc.periodLocks = t4Clone(T4.periodLocks || {});
   doc.channels = t4ChOverrides();
-  const x = await window.T4Shared.save(doc, (typeof CUR_USER === 'string' && CUR_USER) || 'portal-user');
-  T4_SERVER_VERSION = x.version; T4_SERVER_DOCUMENT = doc; return x;
+  T4_SERVER_SAVING = true;
+  try {
+    const x = await window.T4Shared.save(doc, (typeof CUR_USER === 'string' && CUR_USER) || 'portal-user');
+    T4_SERVER_VERSION = x.version; T4_SERVER_DOCUMENT = doc; return x;
+  } finally { T4_SERVER_SAVING = false; }
 }
 function t4Load() {
   if (T4_SERVER_READY) {
+    if (T4_LOADED_PERIOD !== T4.period) t4ApplyPeriod(T4_SERVER_DOCUMENT);
     T4_CH.forEach(c => { if (!T4.data[c.id]) T4.data[c.id] = {}; });
     return;
   }
@@ -404,10 +470,10 @@ function t4Load() {
   } catch (e) { T4.data = {}; }
   T4_CH.forEach(c => { if (!T4.data[c.id]) T4.data[c.id] = {}; });
   try {
-    const saved = JSON.parse(localStorage.getItem(T4_CFG_KEY) || '{}');
-    T4.cfg = t4Clone(T4_CFG_DEFAULT);
-    T4_CH.forEach(c => { T4.cfg[c.id] = Object.assign(T4.cfg[c.id] || {}, saved[c.id] || {}); });
+    T4.cfg = t4ConfigForPeriod({ cfg: t4Stored(T4_CFG_KEY, {}), cfgByPeriod: t4Stored(T4_PERIOD_CFG_KEY, {}) }, T4.period);
   } catch (e) { T4.cfg = t4Clone(T4_CFG_DEFAULT); }
+  T4.periodLocks = t4Stored(T4_LOCK_KEY, {});
+  T4_LOADED_PERIOD = T4.period;
   t4MigrateV1();
   t4MigrateFileParts();
   void t4LoadServer();
@@ -437,20 +503,65 @@ function t4MigrateFileParts() {
   }));
 }
 async function t4Save() {
+  t4AssertEditable();
   let all;
   try {
     all = JSON.parse(localStorage.getItem(T4_KEY) || '{}');
     all[T4.period] = T4.data;
     localStorage.setItem(T4_KEY, JSON.stringify(all));
-  } catch (e) { toast('保存失败：浏览器存储空间不足'); }
+  } catch (e) { throw new Error('保存失败：浏览器存储空间不足'); }
   if (T4_SERVER_READY) return t4SaveServer();
   return { ok: true, localOnly: true };
 }
-async function t4SaveCfg() { localStorage.setItem(T4_CFG_KEY, JSON.stringify(T4.cfg)); if (T4_SERVER_READY) await t4SaveServer(); }
+async function t4SaveCfg() {
+  t4AssertEditable();
+  const all = t4Stored(T4_PERIOD_CFG_KEY, {});
+  all[T4.period] = t4Clone(T4.cfg);
+  localStorage.setItem(T4_PERIOD_CFG_KEY, JSON.stringify(all));
+  if (T4_SERVER_READY) await t4SaveServer();
+}
+
+async function t4SetPeriodLock(locked) {
+  if (T4_SERVER_LOADING || T4_SERVER_SAVING) throw new Error('正在同步，请稍后再操作');
+  const before = t4Clone(T4.periodLocks || {});
+  T4.periodLocks = { ...before, [T4.period]: locked };
+  try {
+    if (T4_SERVER_READY) await t4SaveServer(true);
+    localStorage.setItem(T4_LOCK_KEY, JSON.stringify(T4.periodLocks));
+  } catch (e) { T4.periodLocks = before; throw e; }
+}
+
+async function t4ClearPeriodData(project, scope) {
+  t4AssertEditable();
+  const keys = scope === 'all' ? T4_INPUT_KEYS : scope === 'income' ? T4_SUM_SCOPES.income.keys
+    : scope === 'cost' ? T4_SUM_SCOPES.cost.keys : scope === 'expenses'
+      ? T4_INPUTS.filter(f => f.g === '运营费用').map(f => f.k) : [];
+  if (!T4_PROJ_OPTS.some(([id]) => id === project) || !keys.length) throw new Error('请选择有效的清空范围');
+  const previous = t4Clone(T4.data);
+  T4_CH.filter(c => project === 'all' || t4ProjectId(c.bu) === project).forEach(c => {
+    Object.entries(T4.data[c.id] || {}).forEach(([dt, raw]) => {
+      keys.forEach(k => delete raw[k]);
+      Object.values(raw._fileParts || {}).forEach(part => keys.forEach(k => delete part[k]));
+      if (!t4HasInputs(raw)) delete T4.data[c.id][dt];
+    });
+  });
+  try { await t4Save(); } catch (e) { T4.data = previous; const all = t4Stored(T4_KEY, {}); all[T4.period] = previous; localStorage.setItem(T4_KEY, JSON.stringify(all)); throw e; }
+}
 
 const t4Days = () => { const [y, m] = T4.period.split('-').map(Number); return new Date(y, m, 0).getDate(); };
 const t4Date = d => `${T4.period}-${String(d).padStart(2, '0')}`;
 const t4Num = v => { const n = Number(String(v == null ? '' : v).replace(/[,，\s¥￥]/g, '')); return Number.isFinite(n) ? n : 0; };
+function t4ImportAmount(value) {
+  const text = String(value == null ? '' : value).trim().replace(/，/g, ',').replace(/^[¥￥$]\s*/, '');
+  if (!text) return null;
+  if (!/^[+-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d*)?|\.\d+)$/.test(text)) return NaN;
+  const n = Number(text.replace(/,/g, '')); return Number.isFinite(n) ? n : NaN;
+}
+function t4RestorePeriodData(data) {
+  T4.data = data;
+  const all = t4Stored(T4_KEY, {}); all[T4.period] = data;
+  localStorage.setItem(T4_KEY, JSON.stringify(all));
+}
 const t4Raw = (ch, dt) => (T4.data[ch] || {})[dt] || null;
 function t4InputValue(raw, key) {
   if (!raw) return null;
@@ -607,8 +718,20 @@ const t4SumOK = (ids = T4_ALL) => { const g = t4Gap(ids); return g.max > 0 && g.
 const t4Fmt = (v, pct) => pct ? `${(v * 100).toFixed(1)}%` : money(v || 0);
 
 function t4PeriodControl(extra) {
-  return `<label class="sel">期间 <input id="t4Period" type="month" value="${T4.period}" style="width:116px"></label>${extra || ''}`;
+  const locked = t4IsPeriodLocked();
+  const draft = T4_PENDING_DRAFT && T4_PENDING_DRAFT.period === T4.period ? '<button class="btn" data-t4act="migrateDraft">导入本机草稿</button>' : '';
+  const retry = T4_SERVER_LAST_KEY.startsWith('error:') ? '<button class="btn" data-t4act="retrySync">本机草稿 · 重新连接</button>' : '';
+  return `<label class="sel">期间 <input id="t4Period" type="month" value="${T4.period}" style="width:116px" ${T4_SERVER_LOADING || T4_SERVER_SAVING ? 'disabled' : ''}></label><button class="btn" data-t4act="togglePeriodLock" title="往期默认锁定；锁定后禁止修改、导入与清空">${locked ? '本月已锁定 · 解锁' : '锁定本月'}</button>${draft}${retry}${extra || ''}`;
 }
+S['t4-clear'] = () => {
+  t4Load();
+  return head('清空本期数据', '选择本月要清空的项目与数据板块，其他月份不受影响。', '工具箱 · T4',
+    t4PeriodControl('<button class="btn" data-t4go="overview">返回</button>'))
+    + cardp('清空范围', `<div class="frow"><label>项目 <select id="t4ClearProject">${T4_PROJ_OPTS.map(([id,n]) => `<option value="${id}" ${id === T4.projFilter ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+      <label>板块 <select id="t4ClearScope"><option value="income">销售收入</option><option value="cost">销售成本</option><option value="expenses">运营费用</option><option value="all">全部录入与导入数据</option></select></label>
+      <button class="btn" data-t4act="clearSelected" ${t4IsPeriodLocked() ? 'disabled' : ''}>清空所选板块</button></div>`)
+    + `<div class="note ${t4IsPeriodLocked() ? 'w' : ''}">${t4IsPeriodLocked() ? `${T4.period} 已锁定。往期月份默认受保护，需主动解锁才能清空。` : '清空前需输入期间号确认。'} 参数与月度工资/费用分摊保留；由参数推算的费用仍会显示。</div>`;
+};
 function t4Cal(ch) {
   let h = '<div class="t4cal">';
   for (let d = 1; d <= t4Days(); d++) {
@@ -625,7 +748,7 @@ S.t4 = () => {
   const vr = t4ViewRange();
   const okOf = ids => vr ? t4RangeOK(ids, vr.from, vr.to) : t4SumOK(ids);
   const g = t4Gap(), ok = vr ? t4RangeOK(T4_ALL, vr.from, vr.to) : t4SumOK(),
-    ecomOK = okOf(T4_BIG_ECOM), pddOK = okOf(T4_PDD), rmOK = okOf(T4_RUIMIAN), dealerOK = okOf(T4_DEALER);
+    ecomOK = okOf(T4_BIG_ECOM), pddOK = okOf(T4_PDD), rmOK = okOf(T4_RUIMIAN), orangeOK = okOf(T4_ORANGE), dealerOK = okOf(T4_DEALER);
   const shownCH = t4ProjCH();
   const rows = shownCH.map(c => {
     const n = t4Filled(c.id), rn = vr ? t4FilledRange(c.id, vr.from, vr.to) : 0;
@@ -639,17 +762,19 @@ S.t4 = () => {
       `${c.files.length ? `<button class="btn sm" data-t4go="imp:${c.id}">导入</button>` : ''}
        <button class="btn sm" data-t4go="man:${c.id}">录入</button>`];
   });
-  return head('T4　日损益表', `按底稿完整科目重算 ${T4_CH.length} 个渠道，并分别归集到大电商、拼多多、瑞眠和经销事业部。`, '工具箱 · 已更新',
-    t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="overview" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="选起止日期看区间损益，清空回整月累计" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="overview" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label>${t4ProjSelect('overview')}<button class="btn" data-t4go="sumimp:income">收入导入</button><button class="btn" data-t4go="sumimp:cost">成本导入</button><button class="btn" data-t4go="summan:income">收入录入</button><button class="btn" data-t4go="summan:cost">成本录入</button><button class="btn" data-t4go="channels">渠道列表</button><button class="btn" data-t4go="rules">取数口径</button><button class="btn" data-t4go="mgmt">管理费分摊</button><button class="btn" data-t4go="cfg">参数</button><button class="btn" data-t4act="wipePeriod" title="清空当前期间全部渠道的收入/成本/费用数据；参数、管理费分摊和渠道列表不受影响">清空本期</button><button class="btn pri" data-t4go="sheet">看损益表</button>`))
+  return head('T4　日损益表', `按底稿完整科目重算 ${T4_CH.length} 个渠道，并分别归集到大电商、拼多多、瑞眠、橘农和经销事业部。`, '工具箱 · 已更新',
+    t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="overview" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="选起止日期看区间损益，清空回整月累计" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="overview" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label>${t4ProjSelect('overview')}<button class="btn" data-t4go="sumimp:income">收入导入</button><button class="btn" data-t4go="sumimp:cost">成本导入</button><button class="btn" data-t4go="summan:income">收入录入</button><button class="btn" data-t4go="summan:cost">成本录入</button><button class="btn" data-t4go="channels">渠道列表</button><button class="btn" data-t4go="rules">取数口径</button><button class="btn" data-t4go="mgmt">工资 / 费用分摊</button><button class="btn" data-t4go="cfg">参数</button><button class="btn" data-t4act="wipePeriod" title="清空当前期间全部渠道的收入/成本/费用数据；参数、管理费分摊和渠道列表不受影响">清空本期</button><button class="btn pri" data-t4go="sheet">看损益表</button>`))
     + kpis([
       { k: '渠道', v: String(T4_CH.length), u: '个' },
       { k: '大电商', v: String(T4_BIG_ECOM.length), u: '个渠道' },
       { k: '拼多多', v: String(T4_PDD.length), u: '个渠道' },
       { k: '瑞眠', v: String(T4_RUIMIAN.length), u: '个渠道' },
+      { k: '橘农', v: String(T4_ORANGE.length), u: '个渠道' },
       { k: '经销', v: String(T4_DEALER.length), u: '个渠道' },
       { k: '大电商汇总', v: ecomOK ? '可用' : '禁用', t: ecomOK ? 'g' : 'c' },
       { k: '拼多多汇总', v: pddOK ? '可用' : '禁用', t: pddOK ? 'g' : 'c' },
       { k: '瑞眠汇总', v: rmOK ? '可用' : '禁用', t: rmOK ? 'g' : 'c' },
+      { k: '橘农汇总', v: orangeOK ? '可用' : '禁用', t: orangeOK ? 'g' : 'c' },
       { k: '经销汇总', v: dealerOK ? '可用' : '禁用', t: dealerOK ? 'g' : 'c' },
       { k: '全部汇总', v: ok ? '可用' : '禁用', t: ok ? 'g' : 'c', d: vr ? `${vr.from} ～ ${vr.to}（${vr.n} 天）` : `全渠道极差 ${g.gap} 天` },
       (() => { // 管理费分摊全渠道月合计——分摊值随有收入数据的日子计入损益
@@ -659,7 +784,7 @@ S.t4 = () => {
       })(),
     ])
     + (vr ? `<div class="note"><b>区间视图 ${vr.from} ～ ${vr.to}，共 ${vr.n} 天。</b>渠道列为区间累计损益（无收入数据的日子仅计管理费日摊）；汇总卡按区间内取数天数对齐校验。清空起止日期返回整月累计。</div>` : '')
-    + (vr ? '' : ok ? `<div class="note g"><b>四个事业部取数天数已对齐。</b>大电商、拼多多、瑞眠、经销和全部汇总均可用。</div>`
+    + (vr ? '' : ok ? `<div class="note g"><b>各事业部取数天数已对齐。</b>大电商、拼多多、瑞眠、橘农、经销和全部汇总均可用。</div>`
       : g.max === 0 ? '<div class="note"><b>本期尚无数据。</b>先导入平台文件或逐日录入；已设置的管理费分摊会随有收入数据的日子自动计入损益。</div>'
       : `<div class="note c"><b>部分汇总不可用。</b>大电商事业部：${ecomOK ? '可用' : '禁用'}；拼多多事业部：${pddOK ? '可用' : '禁用'}；瑞眠事业部：${rmOK ? '可用' : '禁用'}；经销事业部：${dealerOK ? '可用' : '禁用'}；全部汇总：禁用。请补齐对应事业部的渠道数据。</div>`)
     + card((T4.projFilter === 'all' ? '' : T4_PROJ_OPTS.find(o => o[0] === T4.projFilter)[1] + ' · ') + (vr ? `${shownCH.length} 渠道 · ${vr.from} ～ ${vr.to} 区间损益` : `${shownCH.length} 渠道取数进度`), table(
@@ -754,15 +879,20 @@ function t4ClearSource(ch, fileK) {
 
 function t4ResolveChannel(value) {
   const norm = x => String(x == null ? '' : x).toLowerCase().replace(/[\s\-_—（）()]/g, '');
-  const aliases = { 京东自营店: 'jdzy', 京东pop: 'jdpop', 抖音达人: 'dycreator',
+  const aliases = { 京东自营店: 'jdzy', 京东pop: 'jdpop', 抖音达人: 'dycreator', 有赞: 'priv',
+    京东澳乐玩具旗舰店: 'jdpop', 快手澳乐母婴旗舰店: 'ks',
     // 吉客云「销售渠道」用店铺全名
     快手澳乐母婴品牌店: 'ks',
     // 渠道改店铺全名后，旧文件/旧数据里的简称仍要认
     天猫: 'tmall', 私域: 'priv', 团购: 'groupbuy', 天门: 'tianmen', 抖音达人店: 'dycreator', 礼品单: 'gift',
     京东自营: 'jdzy', 唯品会: 'vip' };
   const raw = String(value == null ? '' : value).trim();
-  if (aliases[raw]) return aliases[raw];
   const n = norm(raw);
+  const override = t4ChOverrides().slice().reverse().find(c => (c.aliases || []).some(a => norm(a) === n));
+  if (override && T4_CHM[override.id]) return override.id;
+  const exact = T4_CH.find(c => norm(c.n) === n || norm(c.id) === n);
+  if (exact) return exact.id;
+  if (aliases[raw]) return aliases[raw];
   if (T4_SOURCE_CHANNEL_NORM[n]) return T4_SOURCE_CHANNEL_NORM[n];
   if (aliases[n]) return aliases[n];
   const hit = T4_CH.find(c => norm(c.n) === n || norm(c.id) === n || (c.aliases || []).some(a => norm(a) === n));
@@ -781,17 +911,18 @@ S['t4-sumimp'] = () => {
       ['渠道 / 销售渠道', `必填；支持渠道名或店铺全名：${T4_CH.map(c => c.n).join('、')}、天猫-澳乐旗舰店、京东-澳乐官方旗舰店、快手-澳乐母婴品牌店`],
       ['日期 / 发货时间', '必填；只导入当前期间的数据，同渠道同日多行自动累加'],
       [`${sc.n}科目`, `${sc.fileK === 'summaryIncome' ? '分摊后金额（即销售收入）' : '货品成本（即销售成本）'}；也认${scItems.map(x => x.n).join('、')}列名。空白不覆盖，明确的 0 会导入`],
-      ['订单类型', '选填；「退货」行自动按负数计入退货科目，「售后发货」行跳过'],
+      ['订单类型', '选填；「退货」行自动按负数计入退货科目；「售后发货」按源表实际金额计入收入/成本，包括明确的 0'],
     ]))
     + `<div class="note"><b>支持 .xlsx、.xls、.csv、.tsv。</b>本入口只写${sc.n}科目；与${sc.n === '销售收入' ? '成本' : '收入'}导入、各渠道专用文件导入互不覆盖，重复导入不会重复累计。</div>`;
   const def = T4_FILE_DEFS.summaryDaily, hdr = imp.rows[imp.headRow] || [];
-  const fields = def.fields.filter(([k]) => ['date','bu','channel','type'].includes(k) || sc.keys.includes(k));
+  const fields = def.fields.filter(([k]) => ['date','bu','channel','type','product'].includes(k) || sc.keys.includes(k));
   const options = k => hdr.map((x, i) => `<option value="${i}" ${imp.map[k] === i ? 'selected' : ''}>${H(String(x || '(空)').slice(0,30))}</option>`).join('');
   return head(`汇总导入 · ${sc.n} · ${H(imp.fileName)}`, `确认渠道、日期及${sc.n}科目的列对应关系。`, '工具箱 · T4', '<button class="btn" data-t4act="sumImpCancel">取消</button>')
     + `<div class="frow" style="margin-bottom:13px"><span class="fi">✓</span><span><span class="fn">${H(imp.fileName)}</span><br><span class="fm">${imp.rows.length} 行</span></span></div>`
     + cardp('表头行', `<select id="t4head">${imp.rows.slice(0,15).map((r,i) => `<option value="${i}" ${i===imp.headRow?'selected':''}>第 ${i+1} 行：${H(r.filter(Boolean).slice(0,6).join(' | ').slice(0,80))}</option>`).join('')}</select>`)
     + card('列对应', table([{t:'目标字段'},{t:'文件字段'}], fields.map(([k,n]) => [`${H(n)}${def.required.includes(k) ? ' <span class="red">*</span>' : ''}`, `<select data-t4map="${k}"><option value="">— 不使用 —</option>${options(k)}</select>`])))
-    + `<div style="display:flex;justify-content:flex-end"><button class="btn pri" data-t4act="sumImpRun" ${t4SummaryReady(imp)?'':'disabled'}>导入全部渠道</button></div>`;
+    + t4ChannelReview(imp)
+    + `<div style="display:flex;justify-content:flex-end"><button class="btn pri" data-t4act="sumImpRun" ${t4SummaryReady(imp) && !t4IsPeriodLocked() ? '' : 'disabled'}>导入全部渠道</button></div>`;
 };
 
 async function t4PickSummaryFile() {
@@ -808,35 +939,60 @@ async function t4PickSummaryFile() {
   input.click();
 }
 
-function t4SummaryImpRun() {
+function t4ImportChannel(imp, row, index) {
+  return (imp.channelOverrides || {})[index] || t4ResolveChannel(row[imp.map.channel]);
+}
+function t4ChannelReview(imp) {
+  if (imp.map.channel == null) return '';
+  const rows = [];
+  imp.rows.slice(imp.headRow + 1).forEach((row, i) => {
+    const index = imp.headRow + 1 + i, source = String(row[imp.map.channel] || '');
+    if (!/有赞/.test(source)) return;
+    const product = imp.map.product == null ? '' : String(row[imp.map.product] || '');
+    const ch = t4ImportChannel(imp, row, index);
+    rows.push([String(index + 1), H(source), H(product || '未提供货品名称'), /枕/.test(product) ? pill('枕头待核对', 'wa') : '',
+      `<select aria-label="第 ${index + 1} 行目标渠道" data-t4rowchannel="${index}">${T4_CH.map(c => `<option value="${c.id}" ${ch === c.id ? 'selected' : ''}>${H(c.n)}</option>`).join('')}</select>`]);
+  });
+  return rows.length ? card('有赞明细渠道调整', table([{t:'源行'},{t:'原渠道'},{t:'货品名称'},{t:'提示'},{t:'本次入账渠道'}], rows))
+    + '<div class="note">有赞枕头可在这里手动调至对应 zzzrest 渠道。收入和成本分开导入时，请确认两次选择一致。</div>' : '';
+}
+
+async function t4SummaryImpRun() {
   const imp = T4.imp;
   if (!imp || imp.mode !== 'summary' || !t4SummaryReady(imp)) return;
+  try { t4AssertEditable(); } catch (e) { toast(e.message); return; }
   const sc = t4SumScope();
-  T4_CH.forEach(c => t4ClearSource(c.id, sc.fileK));
+  const pending = [], errors = [];
   let used = 0, skipped = 0; const seen = new Set(), channels = new Set(), unknown = new Set();
-  imp.rows.slice(imp.headRow + 1).forEach(row => {
+  imp.rows.slice(imp.headRow + 1).forEach((row, i) => {
     const get = k => imp.map[k] == null ? '' : row[imp.map[k]];
-    const ch = t4ResolveChannel(get('channel')), dt = t4DateNorm(get('date'));
+    const ch = t4ImportChannel(imp, row, imp.headRow + 1 + i), dt = t4DateNorm(get('date'));
     if (!ch) { const name = String(get('channel') || '').trim(); if (name) unknown.add(name); skipped++; return; }
     if (!dt || !dt.startsWith(T4.period + '-')) { skipped++; return; }
-    // 明细口径（吉客云）：售后发货行不属于收入/成本；退货行转入退货科目并保证负数
+    // 售后发货保留源表实际收入/成本；退货行转入退货科目并保证负数。
     const typ = imp.map.type != null ? String(get('type')).trim() : '';
-    if (/售后发货/.test(typ)) { skipped++; return; }
     const isReturn = /退货/.test(typ);
     let wrote = false;
     sc.keys.forEach(k => {
       if (imp.map[k] == null) return;
       const value = get(k);
       if (value == null || String(value).trim() === '') return;
-      let key = k, num = t4Num(value);
+      let key = k, num = t4ImportAmount(value);
+      if (!Number.isFinite(num)) { errors.push(`第 ${imp.headRow + i + 2} 行 ${k} 金额无效`); return; }
       if (isReturn && k === 'retailIncome') { key = 'returnAmount'; num = num > 0 ? -num : num; }
       else if (isReturn && k === 'retailCost') { key = 'returnCost'; num = num > 0 ? -num : num; }
-      t4Add(ch, dt, key, num, sc.fileK); wrote = true;
+      pending.push({ ch, dt, key, num }); wrote = true;
     });
     if (!wrote) { skipped++; return; }
     seen.add(`${ch}:${dt}`); channels.add(ch); used++;
   });
-  t4Save(); T4.imp = null; t4Go('overview');
+  if (errors.length) { toast(`${errors.slice(0, 3).join('；')}。原数据已保留，请修正文件。`, 5200); return; }
+  if (!pending.length) { toast('没有可导入的当前月份明细，原数据已保留。请核对渠道、日期及金额列。', 5200); return; }
+  const before = t4Clone(T4.data);
+  channels.forEach(ch => t4ClearSource(ch, sc.fileK));
+  pending.forEach(({ch, dt, key, num}) => t4Add(ch, dt, key, num, sc.fileK));
+  try { await t4Save(); } catch (e) { t4RestorePeriodData(before); toast(`导入未同步：${e.message}`, 5200); return; }
+  T4.imp = null; t4Go('overview');
   const bad = unknown.size ? `；未识别渠道：${[...unknown].slice(0,5).join('、')}` : '';
   toast(`${sc.n}汇总导入 ${channels.size} 个渠道、${seen.size} 个渠道日、${used} 行${skipped ? `，跳过 ${skipped} 行` : ''}${bad}`, 5200);
 }
@@ -857,16 +1013,21 @@ async function t4SummaryTemplate() {
 
 /* ---------- 渠道列表：模板导入维护（批量改名/调事业部/新增） ---------- */
 const T4_BU_ALIAS = { 大电商: 'ecom', 大电商事业部: 'ecom', 拼多多: 'pdd', 拼多多事业部: 'pdd',
-  瑞眠: 'ruimian', 瑞眠事业部: 'ruimian', 经销: 'dealer', 经销事业部: 'dealer' };
+  瑞眠: 'ruimian', 瑞眠事业部: 'ruimian', 橘农: 'orange', 橘农事业部: 'orange', 经销: 'dealer', 经销事业部: 'dealer' };
 
 async function t4ChTemplate() {
-  // 财务确认版渠道底稿：76 条销售渠道映射，保留原 xlsx 的列序、编号与格式。
+  // 读取底稿以保留原编号与销售渠道，用当前配置更新归属和汇总渠道。
   try {
     const r = await fetch('示例文件/渠道列表.xlsx');
     const u8 = new Uint8Array(await r.arrayBuffer());
     if (!r.ok || u8[0] !== 0x50 || u8[1] !== 0x4b) throw new Error('模板文件缺失或损坏，请联系开发');
-    downloadBlob('渠道列表.xlsx', new Blob([u8]));
-    toast('已下载渠道列表模板（76 条销售渠道映射）');
+    const rows = await XLSXLite.readTable(new File([u8], '渠道列表.xlsx'));
+    const h = rows.findIndex(row => row.includes('销售渠道') && row.includes('归属事业部'));
+    if (h < 0) throw new Error('模板表头缺失');
+    const header = rows[h], source = header.indexOf('销售渠道'), bu = header.indexOf('归属事业部'), target = header.indexOf('渠道汇总');
+    rows.slice(h + 1).forEach(row => { const id = t4ResolveChannel(row[source]); if (id && target >= 0) { row[bu] = t4BuName(T4_CHM[id].bu); row[target] = T4_CHM[id].n; } });
+    downloadBlob('渠道列表.xlsx', XLSXWrite.build([{ name: '渠道列表', rows }]));
+    toast('已下载当前渠道映射，含橘农项目与独立分摊渠道');
   } catch (e) { toast(`模板下载失败：${e.message || e}`, 5000); }
 }
 
@@ -911,6 +1072,7 @@ function t4ChApplyRows(rows) {
       if (!raw || !tgt) return;
       const tid = t4ResolveChannel(tgt); if (!tid) return;
       if (t4ResolveChannel(raw) === tid) return; // 本名或已有映射
+      ov.forEach(o => { if (o.id !== tid && o.aliases) o.aliases = o.aliases.filter(name => clean(name) !== clean(raw)); });
       const i = ov.findIndex(x => x.id === tid);
       const prev = i >= 0 ? (ov[i].aliases || []) : [];
       if (i >= 0) ov[i] = { ...ov[i], aliases: [...new Set(prev.concat(raw))] };
@@ -954,6 +1116,7 @@ function t4ChPickFile() {
     const file = input.files && input.files[0]; if (!file) return;
     try {
       const r = t4ChApplyRows(await XLSXLite.readTable(file));
+      if (T4_SERVER_READY) await t4SaveServer(true);
       t4Load(); t4Go('channels');
       const warn = r.bad.length ? `；注意：${r.bad.slice(0, 3).join('、')}` : '';
       toast(`渠道列表导入完成：新增渠道 ${r.added}、映射销售渠道 ${r.mapped}、改名 ${r.renamed}、调事业部 ${r.moved}${warn}`, 5600);
@@ -969,39 +1132,44 @@ function t4MgmtTemplate() {
   download(`T4管理费分摊模板_${T4.period}.csv`, toCSV([hdr, ...rows])); toast('已下载管理费分摊模板（当前值已预填）');
 }
 
-function t4MgmtApplyRows(rows) {
-  // 去 BOM/零宽字符/所有空白后再比对，容忍 Excel、WPS 带入的不可见字符
-  const clean = c => String(c == null ? '' : c).replace(/[﻿​\s]+/g, '');
-  const names = T4_MGMT_FIELDS.map(([,n]) => n);
-  let headRow = rows.findIndex(r => r.some(c => clean(c) === '渠道' || clean(c) === '渠道名称')
-    && r.some(c => names.includes(clean(c))));
-  let chCol, cols;
-  if (headRow >= 0) {
-    const hdr = rows[headRow].map(clean);
-    chCol = hdr.indexOf('渠道'); if (chCol < 0) chCol = hdr.indexOf('渠道名称');
-    cols = T4_MGMT_FIELDS.map(([k, n]) => [k, hdr.indexOf(n)]).filter(x => x[1] >= 0);
-  } else {
-    // 兜底：没有可识别的表头时，找到能认出渠道名的列，按模板列序取其右侧 6 列
-    for (const r of rows) { const i = r.findIndex(c => t4ResolveChannel(c)); if (i >= 0) { chCol = i; break; } }
-    if (chCol == null) {
-      const first = (rows.find(r => r.some(c => String(c == null ? '' : c).trim())) || [])
-        .map(c => String(c == null ? '' : c).trim()).filter(Boolean).join(' | ').slice(0, 80);
-      throw new Error(`未找到表头行，也没认出任何渠道名。请保留模板的表头和渠道列。文件首行读到的是：「${first}」`);
-    }
-    headRow = -1;
-    cols = T4_MGMT_FIELDS.map(([k], j) => [k, chCol + 1 + j]);
+function t4MgmtApplyRows(rows, kind = 'expense') {
+  t4AssertEditable();
+  const result = T4Allocation.analyze(rows, kind, t4ResolveChannel);
+  if (result.errors.length || result.unknown.length) throw new Error('分摊表有无效金额或未匹配渠道，请在预览中核对');
+  result.entries.forEach(entry => Object.assign(T4.cfg[entry.channel] ||= {}, entry.values));
+  return result;
+}
+
+function t4AnalyzeAllocation() {
+  const imp = T4.allocImport;
+  if (imp) imp.result = T4Allocation.analyze(imp.sheets[imp.sheet], imp.kind, t4ResolveChannel);
+}
+function t4AllocationPreview() {
+  const imp = T4.allocImport; if (!imp) return '';
+  const r = imp.result, valid = r.entries.length && !r.errors.length && !r.unknown.length && !t4IsPeriodLocked();
+  const issues = r.errors.map(x => `第 ${x.row} 行：${x.message}`).concat(r.unknown.map(x => `第 ${x.row} 行：未匹配渠道「${x.name}」`));
+  return cardp(`${imp.kind === 'payroll' ? '工资底稿' : '费用分摊表'} · ${H(imp.fileName)}`,
+    `<label>工作表 <select id="t4AllocationSheet">${imp.sheets.map((_, i) => `<option value="${i}" ${i === imp.sheet ? 'selected' : ''}>第 ${i + 1} 张工作表</option>`).join('')}</select></label><p>写入 ${T4.period}，已匹配 ${r.entries.length} 个渠道。空白保留原值，零金额按 0 写入。相同渠道多行自动合计。</p>`)
+    + (issues.length ? `<div class="note w">${issues.map(H).join('<br>')}<br>请修正源文件或渠道列表后重新导入。</div>` : '')
+    + card('导入预览（元/月）', table([{t:'源行'},{t:'渠道'}, ...T4_MGMT_FIELDS.map(([,n]) => ({t:n,n:1}))],
+      r.entries.map(entry => [entry.rows.join('、'), H(T4_CHM[entry.channel].n), ...T4_MGMT_FIELDS.map(([k]) => entry.values[k] == null ? '保留原值' : money(entry.values[k]))])))
+    + `<div class="frow"><button class="btn" data-t4act="allocationCancel">取消导入</button><button class="btn pri" data-t4act="allocationApply" ${valid ? '' : 'disabled'}>确认写入 ${T4.period}</button></div>`;
+}
+async function t4ApplyAllocationImport() {
+  t4AssertEditable();
+  const imp = T4.allocImport; if (!imp) return;
+  const before = t4Clone(T4.cfg), period = T4.period;
+  try {
+    const r = t4MgmtApplyRows(imp.sheets[imp.sheet], imp.kind);
+    if (!r.entries.length) throw new Error('没有可写入的分摊金额');
+    await t4SaveCfg(); T4.allocImport = null; t4Go('mgmt');
+    toast(`已写入 ${period} 的 ${r.entries.length} 个渠道，日损益自动按月分摊`);
+  } catch (e) {
+    if (T4.period === period) T4.cfg = before;
+    const all = t4Stored(T4_PERIOD_CFG_KEY, {}); all[period] = before;
+    localStorage.setItem(T4_PERIOD_CFG_KEY, JSON.stringify(all));
+    toast(`未完成导入：${e.message}`, 5200);
   }
-  let set = 0; const channels = new Set(), unknown = new Set();
-  rows.slice(headRow + 1).forEach(row => {
-    const ch = t4ResolveChannel(row[chCol]);
-    if (!ch) { const nm = String(row[chCol] == null ? '' : row[chCol]).trim(); if (nm && !['归属事业部','渠道','渠道名称'].includes(nm)) unknown.add(nm); return; }
-    cols.forEach(([k, i]) => {
-      const v = row[i];
-      if (v == null || String(v).trim() === '' || String(v).trim() === '—') return; // 留空 = 不改动该格
-      (T4.cfg[ch] = T4.cfg[ch] || {})[k] = t4Num(v); set++; channels.add(ch);
-    });
-  });
-  return { set, channels: channels.size, unknown: [...unknown], fallback: headRow < 0 };
 }
 
 /* 区间天数（含首尾） */
@@ -1020,15 +1188,16 @@ function t4RangeAmount(monthTotal, from, to) {
   return sum;
 }
 
-function t4MgmtPickFile() {
+function t4MgmtPickFile(kind = 'expense') {
   const input = document.createElement('input'); input.type = 'file'; input.accept = '.xlsx,.xls,.csv,.tsv,.txt';
   input.onchange = async () => {
     const file = input.files && input.files[0]; if (!file) return;
     try {
-      const r = t4MgmtApplyRows(await XLSXLite.readTable(file));
-      t4SaveCfg(); t4Go('mgmt');
-      const bad = r.unknown.length ? `；未识别渠道：${r.unknown.slice(0, 5).join('、')}` : '';
-      toast(`分摊导入完成：${r.channels} 个渠道、${r.set} 个金额${r.fallback ? '（未见表头，已按模板列序取数，请核对）' : ''}${bad}`, 5200);
+      const sheets = await XLSXLite.readSheets(file);
+      const results = sheets.map(rows => T4Allocation.analyze(rows, kind, t4ResolveChannel));
+      const sheet = results.reduce((best, r, i) => r.entries.length > results[best].entries.length ? i : best, 0);
+      T4.allocImport = { kind, sheets, sheet, fileName: file.name, result: results[sheet] };
+      t4Go('mgmt');
     } catch (e) { toast(`读取失败：${e.message || e}`, 5000); }
   };
   input.click();
@@ -1067,14 +1236,21 @@ async function t4PickFile(fileK) {
   input.click();
 }
 
-function t4ImpRun() {
+async function t4ImpRun() {
+  try { t4AssertEditable(); } catch (e) { toast(e.message); return; }
   const imp = T4.imp, ch = T4.editCh, def = imp && T4_FILE_DEFS[imp.fileK];
   if (!imp || !def || !def.required.every(k => imp.map[k] != null)
     || (imp.fileK === 'daily' && !T4_INPUT_KEYS.some(k => imp.map[k] != null))) return;
-  t4ClearSource(ch, imp.fileK);
+  const pending = [], errors = [];
+  const add = (channel, date, key, amount, source) => pending.push({ channel, date, key, amount, source });
   let used = 0, skipped = 0; const seen = new Set();
-  imp.rows.slice(imp.headRow + 1).forEach(row => {
+  imp.rows.slice(imp.headRow + 1).forEach((row, index) => {
     const get = k => imp.map[k] == null ? '' : row[imp.map[k]];
+    const numeric = key => {
+      const n = t4ImportAmount(get(key));
+      if (Number.isNaN(n)) errors.push(`第 ${imp.headRow + index + 2} 行金额无效`);
+      return n == null ? 0 : n;
+    };
     const dt = t4DateNorm(get('date'));
     if (!dt || !dt.startsWith(T4.period + '-')) { skipped++; return; }
     if (imp.fileK === 'daily') {
@@ -1083,30 +1259,35 @@ function t4ImpRun() {
         if (imp.map[k] == null) return;
         const value = get(k);
         if (value == null || String(value).trim() === '') return;
-        t4Add(ch, dt, k, t4Num(value), imp.fileK); wrote = true;
+        add(ch, dt, k, numeric(k), imp.fileK); wrote = true;
       });
       if (!wrote) { skipped++; return; }
     } else if (imp.fileK === 'sales') {
       if (t4ResolveChannel(get('channel')) !== ch) { skipped++; return; }
-      const typ = String(get('type')).trim(), amount = t4Num(get('amount')), cost = t4Num(get('cost')), postage = t4Num(get('postage'));
-      if (/售后发货/.test(typ)) { t4Add(ch, dt, 'aftersales', Math.abs(cost) + Math.abs(postage), imp.fileK); }
-      else if (/退货/.test(typ)) {
-        t4Add(ch, dt, 'returnAmount', amount > 0 ? -amount : amount, imp.fileK);
-        t4Add(ch, dt, 'returnCost', cost > 0 ? -cost : cost, imp.fileK);
+      const typ = String(get('type')).trim(), amount = numeric('amount'), cost = numeric('cost'), postage = numeric('postage');
+      if (/退货/.test(typ)) {
+        add(ch, dt, 'returnAmount', amount > 0 ? -amount : amount, imp.fileK);
+        add(ch, dt, 'returnCost', cost > 0 ? -cost : cost, imp.fileK);
       } else {
-        t4Add(ch, dt, 'retailIncome', amount, imp.fileK); t4Add(ch, dt, 'retailCost', Math.abs(cost), imp.fileK);
+        add(ch, dt, 'retailIncome', amount, imp.fileK); add(ch, dt, 'retailCost', Math.abs(cost), imp.fileK);
       }
-      if (imp.map.research != null) t4Add(ch, dt, 'research', Math.abs(t4Num(get('research'))), imp.fileK);
+      if (imp.map.research != null) add(ch, dt, 'research', Math.abs(numeric('research')), imp.fileK);
     } else if (imp.fileK === 'ztc') {
       const direction = String(get('direction')), typ = String(get('type'));
       if ((direction && !/支出/.test(direction)) || /充值/.test(typ)) { skipped++; return; }
-      t4Add(ch, dt, 'ztc', Math.abs(t4Num(get('amount'))), imp.fileK);
-    } else if (imp.fileK === 'cps') t4Add(ch, dt, 'cps', Math.abs(t4Num(get('amount'))), imp.fileK);
-    else if (imp.fileK === 'jzt') t4Add(ch, dt, 'promotion', Math.abs(t4Num(get('amount'))), imp.fileK);
-    else if (imp.fileK === 'jdIncome') t4Add(ch, dt, 'retailIncome', t4Num(get('amount')), imp.fileK);
+      add(ch, dt, 'ztc', Math.abs(numeric('amount')), imp.fileK);
+    } else if (imp.fileK === 'cps') add(ch, dt, 'cps', Math.abs(numeric('amount')), imp.fileK);
+    else if (imp.fileK === 'jzt') add(ch, dt, 'promotion', Math.abs(numeric('amount')), imp.fileK);
+    else if (imp.fileK === 'jdIncome') add(ch, dt, 'retailIncome', numeric('amount'), imp.fileK);
     seen.add(dt); used++;
   });
-  t4Save(); T4.imp = null; t4Go('overview');
+  if (errors.length) { toast(`${errors.slice(0,3).join('；')}。原数据已保留。`, 5200); return; }
+  if (!pending.length) { toast('没有可导入的当前月份明细，原数据已保留。', 5200); return; }
+  const before = t4Clone(T4.data);
+  t4ClearSource(ch, imp.fileK);
+  pending.forEach(x => t4Add(x.channel, x.date, x.key, x.amount, x.source));
+  try { await t4Save(); } catch (e) { t4RestorePeriodData(before); toast(`导入未同步：${e.message}`, 5200); return; }
+  T4.imp = null; t4Go('overview');
   toast(`已导入 ${seen.size} 天、${used} 行${skipped ? `，跳过 ${skipped} 行` : ''}`, 4200);
 }
 
@@ -1136,6 +1317,9 @@ function t4TreeNodes() {
       ].filter(n => n.ids.length) },
       { id: 'proj:ruimian', name: '瑞眠项目', lvl: 1, ids: T4_RUIMIAN, children: [
         buNode('ruimian', '瑞眠事业部', T4_RUIMIAN),
+      ].filter(n => n.ids.length) },
+      { id: 'proj:orange', name: '橘农项目', lvl: 1, ids: T4_ORANGE, children: [
+        buNode('orange', '橘农事业部', T4_ORANGE),
       ].filter(n => n.ids.length) },
     ].filter(n => n.ids.length),
   }];
@@ -1393,8 +1577,8 @@ S['t4-cfg'] = () => {
 S['t4-mgmt'] = () => {
   t4Load();
   const days = t4Days();
-  let from = /^\d{4}-\d{2}-\d{2}$/.test(T4.mgmtFrom) ? T4.mgmtFrom : t4Date(1);
-  let to = /^\d{4}-\d{2}-\d{2}$/.test(T4.mgmtTo) ? T4.mgmtTo : t4Date(days);
+  let from = T4.mgmtFrom.startsWith(T4.period + '-') ? T4.mgmtFrom : t4Date(1);
+  let to = T4.mgmtTo.startsWith(T4.period + '-') ? T4.mgmtTo : t4Date(days);
   if (to < from) to = from;
   const rangeN = t4RangeDays(from, to);
   const rows = T4_CH.map(c => {
@@ -1406,11 +1590,13 @@ S['t4-mgmt'] = () => {
       `<b class="mono">${money(total)}</b>`, `<span class="mono">${money(total / days)}</span>`,
       `<b class="mono">${money(t4RangeAmount(total, from, to))}</b>`];
   });
-  return head('T4 管理费用分摊', `按项目录入各渠道当月分摊金额，系统平均分摊到每一天（月度金额 ÷ 当月自然日）。当前区间 ${from} ～ ${to}，共 ${rangeN} 天；「区间合计」= 日摊 × 区间天数。留空表示该渠道该项目不分摊。`, '工具箱 · T4',
-    `<label class="sel">起 <input id="t4MgmtFrom" type="date" value="${from}" style="width:132px"></label><label class="sel">止 <input id="t4MgmtTo" type="date" value="${to}" min="${from}" style="width:132px"></label><button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="mgmtTemplate">下载模板</button><button class="btn" data-t4act="mgmtPick">导入分摊</button><button class="btn pri" data-t4act="mgmtSave">保存分摊</button>`)
+  return head('T4 工资与费用分摊', `按项目录入各渠道当月分摊金额，系统平均分摊到每一天（月度金额 ÷ 当月自然日）。当前区间 ${from} ～ ${to}，共 ${rangeN} 天；「区间合计」= 日摊 × 区间天数。留空表示该渠道该项目不分摊。`, '工具箱 · T4',
+    t4PeriodControl(`<label class="sel">起 <input id="t4MgmtFrom" type="date" min="${t4Date(1)}" max="${t4Date(days)}" value="${from}" style="width:132px"></label><label class="sel">止 <input id="t4MgmtTo" type="date" value="${to}" min="${from}" max="${t4Date(days)}" style="width:132px"></label><button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="mgmtTemplate">下载模板</button><button class="btn" data-t4act="payrollPick">导入工资底稿</button><button class="btn" data-t4act="mgmtPick">导入费用分摊表</button><button class="btn pri" data-t4act="mgmtSave" ${t4IsPeriodLocked() ? 'disabled' : ''}>保存分摊</button>`))
+    + t4AllocationPreview()
+    + '<div class="note">工资底稿按“店铺直接人工 + 企业社保直接”取直接人工，按“公摊人工 + 企业社保间接”取人力公摊；已有同名分摊合计列时直接取合计。导入后先核对预览再写入本月。</div>'
     + card(`月度分摊金额（元/月） · 区间 ${from} ～ ${to}（${rangeN} 天）`, table(
       [{t:'归属事业部'},{t:'渠道'}, ...T4_MGMT_FIELDS.map(([,n]) => ({t:n,n:1})), {t:'月合计',n:1},{t:'折算每日',n:1},{t:`区间合计（${rangeN} 天）`,n:1}], rows))
-    + '<div class="note"><b>口径：</b>直接管理费用 = 直接人工 + 直接租金物业 + 直接其他管理；间接管理费用 = 人力公摊 + 房租水电公摊 + 其他公摊。每日分摊额 = 月度金额 ÷ 当月自然日，区间跨月时按各月天数分别折算；某天人工或文件实填的同名科目优先于分摊值。修改立即影响对应日期的派生结果与汇总。</div>';
+    + '<div class="note"><b>口径：</b>直接管理费用 = 直接人工 + 直接租金物业 + 直接其他管理；间接管理费用 = 人力公摊 + 房租水电公摊 + 其他公摊。每日分摊额 = 月度金额 ÷ 当月自然日，分摊数据按月份独立保存；某天人工或文件实填的同名科目优先于分摊值。修改立即影响对应日期的派生结果与汇总。</div>';
 };
 
 S['t4-channels'] = () => {
@@ -1423,14 +1609,14 @@ S['t4-channels'] = () => {
   return head('T4 渠道列表', `当前 ${T4_CH.length} 个渠道。下载模板修改后导入：按渠道ID（留空则按名称）匹配已有渠道，改名或调整归属事业部；匹配不上的行作为新渠道加入。改名后旧名在数据导入时仍会被识别。`, '工具箱 · T4',
     '<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="chTemplate">下载模板</button><button class="btn pri" data-t4act="chPick">导入渠道列表</button>')
     + card(`渠道清单（${T4_CH.length} 个）`, table([{t:'渠道ID'},{t:'归属事业部'},{t:'渠道汇总'},{t:'关联销售渠道'},{t:'来源'},{t:''}], rows))
-    + '<div class="note"><b>与吉客云的关系：</b>渠道列表底稿的「销售渠道」列是吉客云明细里的原始店铺名，导入后挂为对应「渠道汇总」渠道的关联名；此后收入/成本导入吉客云明细时，各店铺数据自动归集到渠道汇总。事业部填大电商、拼多多、瑞眠或经销；新增渠道自动获得录入/导入/分摊全部能力；移除仅限自定义渠道，历史数据保留。</div>';
+    + '<div class="note"><b>与吉客云的关系：</b>渠道列表底稿的「销售渠道」列是吉客云明细里的原始店铺名，导入后挂为对应「渠道汇总」渠道的关联名；此后收入/成本导入吉客云明细时，各店铺数据自动归集到渠道汇总。事业部填大电商、拼多多、瑞眠、橘农或经销；新增渠道自动获得录入/导入/分摊全部能力；移除仅限自定义渠道，历史数据保留。</div>';
 };
 
 S['t4-rules'] = () => head('T4 取数口径', '以下规则来自用户提供的销售明细、平台推广明细和 2026-08 日损益底稿。', '工具箱 · T4', '<button class="btn" data-t4go="overview">← 返回</button>')
   + card('文件取数', table([{t:'渠道/文件'},{t:'落表规则'},{t:'控制'}], [
     ['汇总导入', '一个文件按渠道 + 日期导入全部渠道；归属事业部由系统配置确定', pill('批量导入','ok')],
     ['全部渠道 · 标准日损益明细', '按日期映射完整损益科目；至少选择一个金额字段', pill('通用导入','ok')],
-    ['销售单明细账', '按发货时间；普通/代销售计零售收入与成本，售后退货计负数，售后发货成本及邮资计售后费用', pill('渠道精确匹配','in')],
+    ['销售单明细账', '按发货时间；普通/代销售计零售收入与成本，售后退货计负数，售后发货按实际金额计入零售收入和成本', pill('渠道精确匹配','in')],
     ['天猫直通车', '按记账时间；只取支出/扣款，排除充值', pill('符号取绝对值','wa')],
     ['天猫 CPS', '按日期取支出金额', pill('直取','ok')],
     ['京东自营收入', '按日期取成交金额，保留零金额日', pill('直取','ok')],
@@ -1660,6 +1846,7 @@ function t4Export() {
     ['特卖汇总','大电商事业部',T4_TMAI], ['大电商事业部汇总','大电商事业部',T4_BIG_ECOM],
     ['拼多多事业部汇总','拼多多事业部',T4_PDD],
     ['瑞眠事业部汇总','瑞眠事业部',T4_RUIMIAN],
+    ['橘农事业部汇总','橘农事业部',T4_ORANGE],
     ['经销事业部汇总','经销事业部',T4_DEALER], ['全部汇总','全部',T4_ALL],
   ].forEach(([n,bu,ids]) => {
     const ok = t4SumOK(ids), m = ok ? t4Group(ids) : null;
@@ -1672,6 +1859,11 @@ function t4Export() {
 function t4Go(v) { go(v === 'overview' ? 't4' : `t4-${v}`); }
 
 document.addEventListener('click', async e => {
+  const write = e.target.closest('[data-t4act], [data-t4cfgadd], [data-t4cfgdel]');
+  const writeActions = ['saveMan','sumManSave','impRun','sumImpRun','cfgSave','cfgReset','mgmtSave','allocationApply','clearSelected'];
+  if (write && (writeActions.includes(write.dataset.t4act) || write.dataset.t4cfgadd || write.dataset.t4cfgdel)) {
+    try { t4AssertEditable(); } catch (err) { toast(err.message, 4200); return; }
+  }
   const nav = e.target.closest('[data-t4go]');
   if (nav) {
     const [v,ch] = nav.dataset.t4go.split(':');
@@ -1687,7 +1879,10 @@ document.addEventListener('click', async e => {
   const chdel = e.target.closest('[data-t4chdel]');
   if (chdel) {
     t4SaveChOverrides(t4ChOverrides().filter(x => x.id !== chdel.dataset.t4chdel));
-    t4RebuildChannels(); t4Load(); toast('已移除自定义渠道（历史数据保留）'); t4Go('channels'); return;
+    t4RebuildChannels();
+    try { if (T4_SERVER_READY) await t4SaveServer(true); t4Load(); toast('已移除自定义渠道（历史数据保留）'); t4Go('channels'); }
+    catch (err) { toast(`渠道未同步：${err.message}`, 5200); }
+    return;
   }
   const cfgadd = e.target.closest('[data-t4cfgadd]');
   if (cfgadd) {
@@ -1704,7 +1899,22 @@ document.addEventListener('click', async e => {
     toast('已删除该费用规则'); t4Go('cfg'); return;
   }
   const a = e.target.closest('[data-t4act]'); if (!a) return;
-  if (a.dataset.t4act === 'saveMan') {
+  if (a.dataset.t4act === 'retrySync') { T4_SERVER_LAST_KEY = ''; await t4LoadServer(); t4Go('overview'); }
+  else if (a.dataset.t4act === 'migrateDraft') {
+    try {
+      t4AssertEditable();
+      if (!T4_PENDING_DRAFT || T4_PENDING_DRAFT.period !== T4.period) return;
+      T4.data = t4Clone(T4_PENDING_DRAFT.data); T4.cfg = t4Clone(T4_PENDING_DRAFT.cfg);
+      await t4SaveCfg(); await t4Save(); T4_PENDING_DRAFT = null; localStorage.setItem(T4_PENDING_DRAFT_KEY, 'null');
+      toast('本机草稿已导入共享工作区'); t4Go('overview');
+    } catch (err) { toast(`草稿未同步：${err.message}`, 5200); }
+  }
+  else if (a.dataset.t4act === 'togglePeriodLock') {
+    const locked = t4IsPeriodLocked();
+    if (locked && !confirm(`解锁 ${T4.period} 后可修改、导入及清空该月份。确认解锁？`)) return;
+    try { await t4SetPeriodLock(!locked); toast(locked ? '本月已解锁，处理完成后可重新锁定' : '本月已锁定，数据受保护'); t4Go('overview'); }
+    catch (err) { toast(`锁定状态保存失败：${err.message}`, 5200); }
+  } else if (a.dataset.t4act === 'saveMan') {
     let changed = 0;
     document.querySelectorAll('[data-t4cell]').forEach(inp => {
       const [dt,k] = inp.dataset.t4cell.split(':'), val = inp.value.trim();
@@ -1773,22 +1983,38 @@ document.addEventListener('click', async e => {
     catch (err) { toast(`共享保存失败：${err.message || err}`, 5200); }
   }
   else if (a.dataset.t4act === 'mgmtTemplate') t4MgmtTemplate();
-  else if (a.dataset.t4act === 'mgmtPick') t4MgmtPickFile();
+  else if (a.dataset.t4act === 'mgmtPick') t4MgmtPickFile('expense');
+  else if (a.dataset.t4act === 'payrollPick') t4MgmtPickFile('payroll');
+  else if (a.dataset.t4act === 'allocationCancel') { T4.allocImport = null; t4Go('mgmt'); }
+  else if (a.dataset.t4act === 'allocationApply') await t4ApplyAllocationImport();
   else if (a.dataset.t4act === 'chTemplate') t4ChTemplate();
   else if (a.dataset.t4act === 'chPick') t4ChPickFile();
   else if (a.dataset.t4act === 'sheetMode') { T4.sheetMode = T4.sheetMode === 'tree' ? 'matrix' : 'tree'; t4Go('sheet'); }
   else if (a.dataset.t4act === 'wipePeriod') {
-    // 两步确认：先弹窗说明，再要求手动输入期间号，防误触
-    if (!confirm(`确认清空 ${T4.period} 期间全部渠道的收入、成本与费用数据？\n参数、管理费分摊和渠道列表不受影响，此操作不可恢复。\n\n点「确定」后还需输入期间号做二次确认。`)) return;
-    const typed = prompt(`二次确认：请输入当前期间「${T4.period}」以执行清空`);
+    t4Go('clear');
+  }
+  else if (a.dataset.t4act === 'clearSelected') {
+    const project = document.getElementById('t4ClearProject').value, scope = document.getElementById('t4ClearScope').value;
+    const projectName = T4_PROJ_OPTS.find(([id]) => id === project)[1];
+    const scopeName = { income: '销售收入', cost: '销售成本', expenses: '运营费用', all: '全部录入与导入数据' }[scope];
+    const typed = prompt(`将清空 ${projectName} 在 ${T4.period} 的${scopeName}。此操作不可恢复。\n请输入期间「${T4.period}」确认：`);
     if (typed == null) { toast('已取消清空'); return; }
     if (String(typed).trim() !== T4.period) { toast(`输入「${String(typed).trim()}」与当前期间不一致，已取消清空`, 4200); return; }
-    T4.data = {}; T4_CH.forEach(c => { T4.data[c.id] = {}; });
-    t4Save(); toast(`已清空 ${T4.period} 全部录入与导入数据`); t4Go('overview');
+    try { await t4ClearPeriodData(project, scope); toast(`已清空 ${T4.period} · ${projectName} · ${scopeName}`); t4Go('overview'); }
+    catch (err) { toast(`清空失败，原数据已保留：${err.message}`, 5200); }
   }
 });
 document.addEventListener('change', e => {
-  if (e.target.id === 't4Period') { T4.period = e.target.value || T4.period; T4.imp = null; T4.viewFrom = ''; T4.viewTo = ''; t4Go('overview'); }
+  if (e.target.id === 't4Period') {
+    if (T4_SERVER_LOADING || T4_SERVER_SAVING) { e.target.value = T4.period; toast('正在同步，请稍后切换月份'); return; }
+    T4.period = e.target.value || T4.period; T4.imp = null; T4.allocImport = null; T4.viewFrom = ''; T4.viewTo = ''; T4.mgmtFrom = ''; T4.mgmtTo = ''; t4Go('overview');
+  }
+  else if (e.target.dataset && e.target.dataset.t4rowchannel) {
+    if (T4.imp) { T4.imp.channelOverrides ||= {}; T4.imp.channelOverrides[e.target.dataset.t4rowchannel] = e.target.value; }
+  }
+  else if (e.target.id === 't4AllocationSheet' && T4.allocImport) {
+    T4.allocImport.sheet = +e.target.value; t4AnalyzeAllocation(); t4Go('mgmt');
+  }
   else if (e.target.id === 't4ProjSel') { T4.projFilter = e.target.value || 'all'; t4Go(e.target.dataset.view === 'sheet' ? 'sheet' : 'overview'); }
   else if (e.target.id === 't4DayCh') { T4.dayCh = e.target.value || T4_CH[0].id; t4Go('chday'); }
   else if (e.target.id === 't4SmtpPreset') {   // 选服务商自动填 SMTP 参数
@@ -1803,9 +2029,12 @@ document.addEventListener('change', e => {
     t4Go(e.target.dataset.view === 'sheet' ? 'sheet' : 'overview');
   }
   else if (e.target.id === 't4MgmtFrom' || e.target.id === 't4MgmtTo') {
+    if (T4_SERVER_LOADING || T4_SERVER_SAVING || (e.target.value && !e.target.value.startsWith(T4.period + '-'))) {
+      e.target.value = e.target.id === 't4MgmtFrom' ? (T4.mgmtFrom || t4Date(1)) : (T4.mgmtTo || t4Date(t4Days()));
+      toast('请在同步完成后选择本月内的日期；切换月份请用期间选择框'); return;
+    }
     if (e.target.id === 't4MgmtFrom') T4.mgmtFrom = e.target.value || ''; else T4.mgmtTo = e.target.value || '';
     if (T4.mgmtFrom && T4.mgmtTo && T4.mgmtTo < T4.mgmtFrom) T4.mgmtTo = T4.mgmtFrom;
-    if (T4.mgmtFrom && T4.mgmtFrom.slice(0, 7) !== T4.period) { T4.period = T4.mgmtFrom.slice(0, 7); T4.imp = null; T4.viewFrom = ''; T4.viewTo = ''; }
     t4Go('mgmt');
   }
   else if (e.target.id === 't4chSel') { T4.editCh = e.target.value; t4Go('man'); }

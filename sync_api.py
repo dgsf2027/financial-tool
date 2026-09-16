@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Dependency-free T4 shared workspace service with CAS patches."""
 import hashlib, hmac, json, os, re, sqlite3, time
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -60,8 +61,45 @@ def read_json(h):
     return obj
 
 def valid_path(path):
-    return (isinstance(path, list) and 3 <= len(path) <= 6 and path[0] in ('periods','cfg','channels')
-            and all(isinstance(x, str) and len(x) <= 120 and '..' not in x for x in path))
+    if not (isinstance(path, list) and 2 <= len(path) <= 6
+            and all(isinstance(x, str) and len(x) <= 120 and '..' not in x for x in path)):
+        return False
+    if path[0] == 'periodLocks':
+        return len(path) == 2 and bool(PERIOD_RE.fullmatch(path[1]))
+    if path[0] == 'cfgByPeriod':
+        return bool(PERIOD_RE.fullmatch(path[1]))
+    return len(path) >= 3 and path[0] in ('periods','cfg','channels')
+
+def validate_document(doc):
+    for field in ('periods', 'cfg', 'periodLocks', 'cfgByPeriod'):
+        if not isinstance(doc.get(field, {}), dict):
+            raise ValueError(field + ' must be an object')
+    for field in ('periods', 'periodLocks', 'cfgByPeriod'):
+        if any(not PERIOD_RE.fullmatch(period) for period in doc.get(field, {})):
+            raise ValueError(field + ' must use YYYY-MM keys')
+    if any(not isinstance(locked, bool) for locked in doc.get('periodLocks', {}).values()):
+        raise ValueError('periodLocks values must be booleans')
+    if any(not isinstance(cfg, dict) for cfg in doc.get('cfgByPeriod', {}).values()):
+        raise ValueError('cfgByPeriod values must be objects')
+
+def protected_period_changes(current, next_doc):
+    # Check the persisted lock state, never an unlock in the candidate write.
+    # China has no daylight saving time; UTC+8 is the business month boundary.
+    current_month = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m')
+    old_periods, new_periods = current.get('periods', {}), next_doc.get('periods', {})
+    old_cfgs, new_cfgs = current.get('cfgByPeriod', {}), next_doc.get('cfgByPeriod', {})
+    locks = current.get('periodLocks', {})
+    protected = []
+    for period in sorted(set(old_periods) | set(new_periods) | set(old_cfgs) | set(new_cfgs)):
+        if not locks.get(period, period < current_month):
+            continue
+        old_data = (period in old_periods, old_periods.get(period))
+        new_data = (period in new_periods, new_periods.get(period))
+        old_cfg = old_cfgs.get(period, current.get('cfg', {}))
+        new_cfg = new_cfgs.get(period, next_doc.get('cfg', {}))
+        if old_data != new_data or old_cfg != new_cfg:
+            protected.append(period)
+    return protected
 
 def get_at(doc, path):
     cur = doc
@@ -117,6 +155,10 @@ class Handler(BaseHTTPRequestHandler):
                 if changes is None:
                     if base != current_version: c.execute('ROLLBACK'); return reply(self,409,{'ok':False,'error':'version_conflict','version':current_version})
                     next_doc = document
+                    # Older clients do not know about lock overrides. A full
+                    # save from one must not discard the persisted decisions.
+                    if 'periodLocks' not in next_doc and 'periodLocks' in current:
+                        next_doc['periodLocks'] = current['periodLocks']
                 else:
                     next_doc = json.loads(json.dumps(current, ensure_ascii=False)); conflicts=[]
                     for change in changes:
@@ -126,6 +168,11 @@ class Handler(BaseHTTPRequestHandler):
                         elif old_exists and new_exists and old == value: continue
                         else: conflicts.append({'path':path,'current':old if old_exists else None,'currentExists':old_exists})
                     if conflicts: c.execute('ROLLBACK'); return reply(self,409,{'ok':False,'error':'field_conflict','version':current_version,'conflicts':conflicts[:100]})
+                validate_document(next_doc)
+                protected = protected_period_changes(current, next_doc)
+                if protected:
+                    c.execute('ROLLBACK')
+                    return reply(self,409,{'ok':False,'error':'period_locked','version':current_version,'periods':protected})
                 encoded=json.dumps(next_doc,ensure_ascii=False,separators=(',',':'),allow_nan=False); next_version=current_version+1
                 c.execute('''INSERT INTO t4_workspaces(workspace,document_json,version,updated_at,updated_by) VALUES(?,?,?,?,?)
                   ON CONFLICT(workspace) DO UPDATE SET document_json=excluded.document_json,version=excluded.version,updated_at=excluded.updated_at,updated_by=excluded.updated_by''',(WORKSPACE,encoded,next_version,now,user))

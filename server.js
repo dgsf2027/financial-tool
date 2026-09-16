@@ -12,7 +12,7 @@ process.umask(0o077);
 const PUBLIC_FILES = new Set([
   'index.html', 'app.css', 'app.js', 'acct.js', 'rpt.js', 'inv.js', 'base.js',
   'cons.js', 'dash.js', 'fa.js', 'pay.js', 'rec.js', 't1.js', 't3.js',
-  't4.js', 't4-sync.js', 'lib/xlsx-lite.js', 'lib/xlsx-write.js',
+  't4.js', 't4-sync.js', 't4-allocation.js', 'lib/xlsx-lite.js', 'lib/xlsx-write.js',
 ]);
 
 const MIME = {
