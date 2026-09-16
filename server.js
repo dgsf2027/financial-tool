@@ -34,6 +34,19 @@ const SESSION_SECRET = String(process.env.T4_SESSION_SECRET || '');
 const PROXY_SECRET = String(process.env.T4_PROXY_SECRET || '');
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 
+function requireT4Auth(req, res) {
+  if (!SESSION_SECRET) {
+    sendText(res, 503, 'T4 登录服务未配置');
+    return false;
+  }
+  if (!sessionUser(req)) {
+    res.setHeader('WWW-Authenticate', 'Bearer realm="finance-t4"');
+    sendText(res, 401, '需要门户登录');
+    return false;
+  }
+  return true;
+}
+
 function signSession(payload) {
   const body = Buffer.from(JSON.stringify({ ...payload, exp: Date.now() + SESSION_TTL_MS })).toString('base64url');
   const sig = crypto.createHmac('sha256', SESSION_SECRET).update(body).digest('base64url');
@@ -105,6 +118,12 @@ const sendText = (res, code, text) => { res.writeHead(code, { 'Content-Type': 't
 const readJsonFile = (file, fallback) => { try { return JSON.parse(fs.readFileSync(file, 'utf-8')); } catch (e) { return fallback; } };
 const runPy = (script, args) => execFileP(PY, [path.join(SUITE, script), ...args],
   { timeout: 180000, env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, maxBuffer: 10 * 1024 * 1024 });
+function formatPyError(error) {
+  if (error && (error.code === 'ENOENT' || String(error.message || '').includes('ENOENT'))) {
+    return '服务器无法启动 Python，请管理员检查 Python 安装与 T4_PYTHON 配置。';
+  }
+  return String(error && (error.stderr || error.message) || error || '未知错误').slice(0, 2000);
+}
 
 // 数据包 → build_suite.py → xlsx 路径 + 校验日志
 async function buildSuite(payloadBuf, tag) {
@@ -133,6 +152,7 @@ async function runMailJob(subject, sends) {
 }
 
 async function handleApi(req, res, urlPath) {
+  if (!requireT4Auth(req, res)) return;
   if (urlPath === '/api/t4/workspace' && (req.method === 'GET' || req.method === 'PUT')) return proxyT4Workspace(req, res);
   if (urlPath === '/api/t4/suite' && req.method === 'POST') {
     const buf = await readBody(req);
@@ -141,7 +161,7 @@ async function handleApi(req, res, urlPath) {
       res.writeHead(200, { 'Content-Type': XLSX_MIME, 'Content-Disposition': 'attachment; filename="suite.xlsx"',
         'X-Suite-Log': encodeURIComponent(String(log || '').slice(0, 600)) });
       return res.end(fs.readFileSync(outFile));
-    } catch (e) { return sendText(res, 500, '套表生成失败：' + String(e.stderr || e.message).slice(0, 2000)); }
+    } catch (e) { return sendText(res, 500, '套表生成失败：' + formatPyError(e)); }
   }
   if (urlPath === '/api/t4/recipients' && req.method === 'GET') return sendJson(res, 200, readJsonFile(path.join(CFG, 'recipients.json'), []));
   if (urlPath === '/api/t4/recipients' && req.method === 'POST') {
@@ -176,7 +196,7 @@ async function handleApi(req, res, urlPath) {
       const results = await runMailJob('财务中心 · 发件配置测试', [{ to, name: '', scopeName: '测试',
         body: `这是财务中心 T4 套表的发件配置测试邮件。\n发件：${st.from}（${st.host}:${st.port}）\n时间：${new Date().toLocaleString('zh-CN')}\n\n收到此邮件即表示 SMTP 配置正确，可以正式发送套表。` }]);
       return sendJson(res, 200, { ok: true, results });
-    } catch (e) { return sendText(res, 500, '测试发送失败：' + String(e.stderr || e.message).slice(0, 1500)); }
+    } catch (e) { return sendText(res, 500, '测试发送失败：' + formatPyError(e).slice(0, 1500)); }
   }
   if (urlPath === '/api/t4/mail' && req.method === 'POST') {
     const st = mailStatus();
@@ -200,7 +220,7 @@ async function handleApi(req, res, urlPath) {
     try {
       const { stdout } = await runPy('send_mail.py', [path.join(CFG, 'mail.config.json'), jobFile]);
       return sendJson(res, 200, { ok: true, results: JSON.parse(stdout.trim().split('\n').pop()) });
-    } catch (e) { return sendText(res, 500, '发送失败：' + String(e.stderr || e.message).slice(0, 2000)); }
+    } catch (e) { return sendText(res, 500, '发送失败：' + formatPyError(e)); }
     finally { fs.unlink(jobFile, () => {}); }
   }
   sendText(res, 404, 'Not found');
@@ -236,7 +256,14 @@ const server = http.createServer((req, res) => {
 
   // 防目录穿越
   const target = path.normalize(path.join(ROOT, urlPath));
-  if (!target.startsWith(ROOT)) {
+  const relative = path.relative(ROOT, target);
+  const parts = relative.split(path.sep).filter(Boolean);
+  const blocked = relative.startsWith('..') || path.isAbsolute(relative)
+    || parts[0] === '.git' || parts[0] === 'suite' && ['_cfg', '_out'].includes(parts[1])
+    || parts.some(p => p === '.env' || p.startsWith('.env.'))
+    || parts.some(p => p.endsWith('.py'))
+    || ['server.js', 'sync_api.py', 't4-sync.js', 'package.json', 'Dockerfile.sync'].includes(parts[0]);
+  if (blocked) {
     res.writeHead(403); return res.end('Forbidden');
   }
 
