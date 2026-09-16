@@ -3,7 +3,7 @@ FROM node:22-alpine
 # T4 套表和邮件发送使用隔离的 Python 环境，避免依赖宿主机 PATH。
 RUN apk add --no-cache python3 py3-pip \
     && python3 -m venv /opt/t4-venv \
-    && /opt/t4-venv/bin/pip install --no-cache-dir openpyxl
+    && /opt/t4-venv/bin/pip install --no-cache-dir openpyxl==3.1.5 et_xmlfile==2.0.0
 
 ENV T4_PYTHON=/opt/t4-venv/bin/python \
     PYTHONUNBUFFERED=1
