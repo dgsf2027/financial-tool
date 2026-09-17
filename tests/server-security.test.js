@@ -25,11 +25,14 @@ before(async () => {
   child = spawn(process.execPath, [path.join(root, 'server.js'), String(port)], {
     env: { ...process.env, T4_SESSION_SECRET: secret, T4_PYTHON: path.join(root, 'missing-python') }, stdio: 'ignore',
   });
-  for (let i = 0; i < 60; i++) {
+  // 整套测试并行跑时机器负载高（含多个 python 实例），3 秒不够，会偶发全绿变全红。
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error(`test server exited early (${child.exitCode})`);
     try { if ((await fetch(base + '/healthz')).ok) return; } catch (_) {}
     await new Promise(r => setTimeout(r, 50));
   }
-  throw new Error('test server did not start');
+  throw new Error('test server did not start within 30s');
 });
 after(() => { child?.kill(); if (root) fs.rmSync(root, { recursive: true, force: true }); });
 
