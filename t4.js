@@ -1640,7 +1640,7 @@ S['t4-cfg'] = () => {
     return card(c.n,
       (rows.length ? table([{t:'参数'},{t:'值',n:1},{t:'单位'},{t:''}], rows)
         : '<div class="mut" style="padding:14px 14px 0">暂无费用规则；用下方「添加费用规则」为本渠道设置分摊。</div>')
-      + `<div style="padding:11px 14px;display:flex;gap:7px;align-items:center;flex-wrap:wrap">${addCtrl}<span style="flex:1"></span><button class="btn sm pri" data-t4act="cfgSave">保存参数</button></div>`);
+      + `<div style="padding:11px 14px;display:flex;gap:7px;align-items:center;flex-wrap:wrap">${addCtrl}<span style="flex:1"></span><button class="btn sm pri" data-t4act="cfgSave">保存参数</button></div>`, '', `t4-cfg:${c.id}`);
   }).join('');
   return head('T4 参数', '比例基于每日零售收入；月度金额按当月自然日平均分摊。可为每个渠道单独添加费用分摊规则；直接/间接管理费用请在「管理费分摊」页维护。', '工具箱 · T4',
     `<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="cfgReset">恢复底稿值</button><button class="btn pri" data-t4act="cfgSave">保存参数</button>`)
@@ -1929,7 +1929,7 @@ function t4Export() {
   download(`渠道事业部日损益表_${T4.period}.csv`, toCSV([hdr, ...rows])); toast('已导出日损益明细');
 }
 
-function t4Go(v) { go(v === 'overview' ? 't4' : `t4-${v}`); }
+function t4Go(v, options) { go(v === 'overview' ? 't4' : `t4-${v}`, options); }
 
 document.addEventListener('click', async e => {
   const write = e.target.closest('[data-t4act], [data-t4cfgadd], [data-t4cfgdel]');
@@ -1942,7 +1942,7 @@ document.addEventListener('click', async e => {
     const [v,ch] = nav.dataset.t4go.split(':');
     if (ch && (v === 'sumimp' || v === 'summan')) T4.sumScope = ch;
     else if (ch) T4.editCh = ch;
-    if (v === 'imp' || v === 'sumimp') T4.imp = null; t4Go(v); return;
+    if (v === 'imp' || v === 'sumimp') T4.imp = null; t4Go(v, { resetScroll: true }); return;
   }
   const file = e.target.closest('[data-t4file]'); if (file) { t4PickFile(file.dataset.t4file); return; }
   const mdel = e.target.closest('[data-t4maildel]');

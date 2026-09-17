@@ -135,7 +135,7 @@ document.addEventListener('change', e => {
 });
 document.addEventListener('click', e => {
   const ed = e.target.closest('[data-faedit]');
-  if (ed) { FA.edit = ed.dataset.faedit; go('p-fa'); return; }
+  if (ed) { FA.edit = ed.dataset.faedit; go('p-fa', { resetScroll: true }); return; }
   const del = e.target.closest('[data-fadel]');
   if (del) {
     const list = faLoad(); const a = list.find(x => x.id === del.dataset.fadel);

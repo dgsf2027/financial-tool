@@ -472,7 +472,7 @@ async function recImport(file) {
 /* ============ 事件 ============ */
 document.addEventListener('click', e => {
   const ed = e.target.closest('[data-recedit]');
-  if (ed) { RECV.edit = ed.dataset.recedit; go('p-rec-ar'); return; }
+  if (ed) { RECV.edit = ed.dataset.recedit; go('p-rec-ar', { resetScroll: true }); return; }
   const dl = e.target.closest('[data-recdel]');
   if (dl && CUR_ENT) {
     const list = recLoad(); const x = list.find(v => v.id === dl.dataset.recdel);
@@ -549,7 +549,7 @@ document.addEventListener('click', e => {
 /* ---- 应付 / 核销事件 ---- */
 document.addEventListener('click', e => {
   const ed = e.target.closest('[data-apedit]');
-  if (ed) { RECV.apEdit = ed.dataset.apedit; go('p-rec-ap'); return; }
+  if (ed) { RECV.apEdit = ed.dataset.apedit; go('p-rec-ap', { resetScroll: true }); return; }
   const dl = e.target.closest('[data-apdel]');
   if (dl && CUR_ENT) {
     const list = recApLoad(); const x = list.find(v => v.id === dl.dataset.apdel);

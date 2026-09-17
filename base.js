@@ -130,9 +130,9 @@ document.addEventListener('change', e => {
 });
 document.addEventListener('click', e => {
   const sub = e.target.closest('[data-bssub]');
-  if (sub) { BSS.parent = sub.dataset.bssub; BSS.edit = ''; go('bs-acct'); return; }
+  if (sub) { BSS.parent = sub.dataset.bssub; BSS.edit = ''; go('bs-acct', { resetScroll: true }); return; }
   const ed = e.target.closest('[data-bsedit]');
-  if (ed) { BSS.edit = ed.dataset.bsedit; go('bs-acct'); return; }
+  if (ed) { BSS.edit = ed.dataset.bsedit; go('bs-acct', { resetScroll: true }); return; }
   const del = e.target.closest('[data-bsdel]');
   if (del && RS) {
     const code = del.dataset.bsdel;
@@ -389,7 +389,7 @@ S['p-entity'] = () => {
 /* ============ 主体档案事件 ============ */
 document.addEventListener('click', e => {
   const ed = e.target.closest('[data-enedit]');
-  if (ed) { ENT_ADM.edit = ed.dataset.enedit; go('p-entity'); return; }
+  if (ed) { ENT_ADM.edit = ed.dataset.enedit; go('p-entity', { resetScroll: true }); return; }
   const off = e.target.closest('[data-enoff]');
   if (off) {
     const x = ENTITIES.find(v => v.id === off.dataset.enoff);
@@ -538,7 +538,7 @@ document.addEventListener('click', e => {
   const kindOf = () => (CURS === 'bs-cust' ? 'cust' : CURS === 'bs-supp' ? 'supp'
     : CURS === 'bs-dept' ? 'dept' : CURS === 'bs-staff' ? 'staff' : 'supp');
   const de = e.target.closest('[data-dimedit]');
-  if (de) { DIMS.edit = de.dataset.dimedit; go(CURS); return; }
+  if (de) { DIMS.edit = de.dataset.dimedit; go(CURS, { resetScroll: true }); return; }
   const dt = e.target.closest('[data-dimtoggle]');
   if (dt) {
     const list = dimLoad(kindOf());
@@ -555,7 +555,7 @@ document.addEventListener('click', e => {
     toast('已删除'); go(CURS); return;
   }
   const pe = e.target.closest('[data-pjedit]');
-  if (pe) { DIMS.edit = pe.dataset.pjedit; go('bs-proj'); return; }
+  if (pe) { DIMS.edit = pe.dataset.pjedit; go('bs-proj', { resetScroll: true }); return; }
   const pd = e.target.closest('[data-pjdel]');
   if (pd && RS) {
     if (!confirm('确认删除该项目？')) return;

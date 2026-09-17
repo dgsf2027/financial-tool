@@ -1074,7 +1074,7 @@ function t1Export() {
 
 document.addEventListener('click', e => {
   const g = e.target.closest('[data-t1go]');
-  if (g) { const v = g.dataset.t1go; go(v === 'daily' ? 't1' : 't1-' + v); return; }
+  if (g) { const v = g.dataset.t1go; go(v === 'daily' ? 't1' : 't1-' + v, { resetScroll: true }); return; }
   const de = e.target.closest('[data-t1ent]');
   if (de) { T1.drillEnt = de.dataset.t1ent; go('t1-ent'); return; }
   const dtx = e.target.closest('[data-t1txn]');

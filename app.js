@@ -28,7 +28,7 @@ function table(cols, rows, foot) {
   }).join('')}</tbody>
   ${foot ? `<tfoot><tr>${foot.map((c, i) => `<td class="${cols[i] && cols[i].n ? 'num' : ''}">${c}</td>`).join('')}</tr></tfoot>` : ''}</table></div>`;
 }
-const card = (t, b, tools) => `<div class="card"><div class="ch"><h3>${H(t)}</h3><span class="sp"></span>${tools || ''}</div><div class="cb flush">${b}</div></div>`;
+const card = (t, b, tools, key) => `<div class="card"${key ? ` data-view-key="${H(key)}"` : ''}><div class="ch"><h3>${H(t)}</h3><span class="sp"></span>${tools || ''}</div><div class="cb flush">${b}</div></div>`;
 const cardp = (t, b, tools) => `<div class="card"><div class="ch"><h3>${H(t)}</h3><span class="sp"></span>${tools || ''}</div><div class="cb">${b}</div></div>`;
 const head = (t, sub, code, tools) => `<div class="phead"><div><h2>${H(t)}</h2><div class="sub2">${sub}</div></div>
   <div class="mid">${code ? `<span class="mcode">${H(code)}</span>` : ''}${tools || ''}</div></div>`;
@@ -1462,7 +1462,88 @@ function renderNav() {
         : `<button data-s="${it[0]}" class="${it[0] === CURS ? 'on' : ''}">${it[1]}</button>`).join('')
     : `<button class="on">${d ? d.n : ''}</button>`;
 }
-function go(id) {
+/* 同页重绘保留操作位置；真正切换页面才回顶。定位使用 id / data 属性，
+   参数卡片另用稳定的渠道 key，避免增删规则后错认另一张表或按钮。 */
+function viewElementSelector(element) {
+  const parts = [];
+  for (let node = element; node && node.nodeType === 1; node = node.parentElement) {
+    if (node.id) { parts.unshift('#' + CSS.escape(node.id)); break; }
+    if (node.hasAttribute('data-view-key')) {
+      parts.unshift(`[data-view-key="${CSS.escape(node.dataset.viewKey)}"]`); break;
+    }
+    let part = node.localName;
+    if (node === element) {
+      Array.from(node.attributes).filter(a => a.name.startsWith('data-') && a.name !== 'data-t4orig')
+        .forEach(a => { part += `[${a.name}="${CSS.escape(a.value)}"]`; });
+    }
+    if (node.parentElement && node.parentElement.querySelectorAll(':scope > ' + part).length > 1) {
+      part += `:nth-child(${Array.from(node.parentElement.children).indexOf(node) + 1})`;
+    }
+    parts.unshift(part);
+  }
+  return parts.join(' > ');
+}
+function captureViewPosition() {
+  const active = document.activeElement;
+  const focus = active && active.matches('input, select, textarea, button, a[href]')
+    ? { element: active, selector: viewElementSelector(active), start: active.selectionStart,
+        end: active.selectionEnd, direction: active.selectionDirection } : null;
+  const scroll = Array.from(document.querySelectorAll('#view .tw, #view .t1pre, #domNav, #subNav'))
+    .map(el => ({ selector: viewElementSelector(el), top: el.scrollTop, left: el.scrollLeft }));
+  return { focus, scroll, top: window.scrollY, left: window.scrollX };
+}
+function restoreViewPosition(position) {
+  const { focus } = position;
+  if (focus && !focus.element.isConnected) {
+    const target = document.querySelector(focus.selector);
+    if (target && !target.disabled) {
+      target.focus({ preventScroll: true });
+      if (typeof focus.start === 'number' && typeof target.selectionStart === 'number') {
+        target.setSelectionRange(focus.start, focus.end, focus.direction);
+      }
+    }
+  }
+  position.scroll.forEach(({ selector, top, left }) => {
+    const el = document.querySelector(selector);
+    if (el) { el.scrollTop = top; el.scrollLeft = left; }
+  });
+  window.scrollTo({ top: position.top, left: position.left, behavior: 'instant' });
+}
+// change 在失焦时先于下一格的 focus / click 触发。等当前交互完成再重绘，
+// 包括鼠标/触屏按下到松开的间隔，避免把准备点击的元素提前删除。
+let viewChangeEvent, viewRefreshTimer, viewPending, viewPointerDown = false;
+function flushViewRefresh() {
+  if (!viewPending || viewPointerDown) return;
+  clearTimeout(viewRefreshTimer);
+  viewRefreshTimer = setTimeout(() => {
+    const pending = viewPending; viewPending = null;
+    if (pending && pending.id === CURS) go(pending.id, pending.options);
+  }, 0);
+}
+document.addEventListener('change', event => {
+  viewChangeEvent = event;
+  setTimeout(() => { if (viewChangeEvent === event) viewChangeEvent = null; }, 0);
+}, true);
+document.addEventListener('pointerdown', event => {
+  if (event.isPrimary && event.button === 0) viewPointerDown = true;
+}, true);
+function releaseViewPointer(event) {
+  if (event.type !== 'blur' && !event.isPrimary) return;
+  viewPointerDown = false;
+  flushViewRefresh();
+}
+window.addEventListener('pointerup', releaseViewPointer, true);
+window.addEventListener('pointercancel', releaseViewPointer, true);
+window.addEventListener('blur', releaseViewPointer);
+function go(id, options = {}) {
+  clearTimeout(viewRefreshTimer);
+  viewPending = null;
+  if (id === CURS && (viewPointerDown || (viewChangeEvent && viewChangeEvent.eventPhase !== 0))) {
+    viewPending = { id, options };
+    flushViewRefresh();
+    return;
+  }
+  const position = id === CURS && !options.resetScroll ? captureViewPosition() : null;
   if (/^t[1234]($|-)/.test(id) || id.startsWith('tool-')) CURD = 'tools';
   else if (id.startsWith('ac-')) CURD = 'close';
   else if (id.startsWith('rp-') || id.startsWith('cs-')) CURD = 'report';
@@ -1481,7 +1562,8 @@ function go(id) {
   renderNav();
   renderEntBar();
   bindDynamic();
-  window.scrollTo({ top: 0, behavior: 'instant' });
+  if (position) restoreViewPosition(position);
+  else window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
 }
 
 /* ============ 事件 ============ */
@@ -1497,7 +1579,7 @@ async function loadFile(file) {
     T2.map = autoMap(rows[T2.headRow] || [], rows.slice(T2.headRow + 1));
     t2AutoBind();          // 认出账户就当场把余额写进 T1，上传完 T1 里立刻能看到
     T2.step = 2;
-    go('t2');
+    go('t2', { resetScroll: true });
     const got = Object.keys(T2.map).length;
     const ab = T2.autoBind;
     toast(ab && ab.accId
@@ -1559,11 +1641,11 @@ function bindDynamic() {
 
 document.addEventListener('click', e => {
   const d = e.target.closest('[data-d]');
-  if (d) { const dom = DOMS.find(x => x.id === d.dataset.d); const f = dom.items.find(i => i.length > 1); go(f ? f[0] : dom.id); return; }
+  if (d) { const dom = DOMS.find(x => x.id === d.dataset.d); const f = dom.items.find(i => i.length > 1); go(f ? f[0] : dom.id, { resetScroll: true }); return; }
   const s = e.target.closest('[data-s]');
-  if (s) { go(s.dataset.s); return; }
+  if (s) { go(s.dataset.s, { resetScroll: true }); return; }
   const g = e.target.closest('[data-go]');
-  if (g) { go(g.dataset.go); return; }
+  if (g) { go(g.dataset.go, { resetScroll: true }); return; }
   const tb = e.target.closest('[data-tab]');
   if (tb) { T2.tab = tb.dataset.tab; go('t2'); return; }
   const da = e.target.closest('[data-delacct]');
@@ -1599,7 +1681,7 @@ document.addEventListener('click', e => {
   if (!a) return;
   const act = a.dataset.act;
 
-  if (act === 't2reset') { Object.assign(T2, { step: 1, rows: null, result: null, file: null, map: {}, balPush: null, txnPush: null, sniffNo: null, autoBind: null, logId: null }); go('t2'); }
+  if (act === 't2reset') { Object.assign(T2, { step: 1, rows: null, result: null, file: null, map: {}, balPush: null, txnPush: null, sniffNo: null, autoBind: null, logId: null }); go('t2', { resetScroll: true }); }
   else if (act === 't2run') {
     T2.entId = ($('entSel2') || {}).value || T2.entId;
     const ei = ENTITIES.find(x => x.id === T2.entId);
@@ -1615,10 +1697,10 @@ document.addEventListener('click', e => {
     }
     runRules(); t2PushBalance(); t2PushTxns();
     T2.logId = null; t2Log(0);   // 每跑一次转换新起一条记录，导入即留痕
-    T2.step = 3; T2.tab = T2.result.ex.length ? 'ex' : 'ok'; go('t2');
+    T2.step = 3; T2.tab = T2.result.ex.length ? 'ex' : 'ok'; go('t2', { resetScroll: true });
   }
-  else if (act === 't2ex') { T2.step = 4; go('t2'); }
-  else if (act === 't2back3') { T2.step = 3; go('t2'); }
+  else if (act === 't2ex') { T2.step = 4; go('t2', { resetScroll: true }); }
+  else if (act === 't2back3') { T2.step = 3; go('t2', { resetScroll: true }); }
   else if (act === 't2applyfix') {
     const still = [];
     let fixed = 0, added = 0;
@@ -1662,7 +1744,7 @@ document.addEventListener('click', e => {
     if (added) saveRules(T2.entId, RULES);
     t2Log(0);   // 例外处理完，记录里的匹配数要跟着变
     toast(`已处理 ${fixed} 笔${added ? `，新增 ${added} 条规则` : ''}`);
-    T2.step = 5; go('t2');
+    T2.step = 5; go('t2', { resetScroll: true });
   }
   else if (act === 't2bindNo') {
     if (!T2.acctId || !T2.sniffNo) { toast('先选一个账户'); return; }
@@ -1673,7 +1755,7 @@ document.addEventListener('click', e => {
       toast('卡号已记进 T1 台账，下次上传自动认出来', 4200); go('t2');
     } else toast('没能写进台账');
   }
-  else if (act === 't2export') { T2.step = 5; go('t2'); }
+  else if (act === 't2export') { T2.step = 5; go('t2', { resetScroll: true }); }
   else if (act === 'dlKingdee') {
     // 金蝶模版必须是 xlsx：日期要真日期、科目代码要文本，CSV 传上去金蝶不认
     const rows = [KD_HEADER].concat(kingdeeRows());

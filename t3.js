@@ -298,7 +298,7 @@ async function t3Pick(side) {
       const rows = await XLSXLite.readTable(f);
       const hr = XLSXLite.findHeaderRow(rows, T3_ALIAS);
       T3[side] = { name: f.name, rows, headRow: hr, map: t3AutoMap(rows[hr] || []) };
-      go('t3');
+      go('t3', { resetScroll: true });
       toast(`${side === 'ours' ? '我方台账' : '对方对账单'}：${rows.length} 行`);
     } catch (e) { toast('读取失败：' + e.message, 4200); }
   };
@@ -327,15 +327,15 @@ document.addEventListener('click', e => {
   const tp = e.target.closest('[data-t3tpl]');
   if (tp) {
     if (!T3.ours || !T3.theirs) { toast('先选好两个文件再套模板'); return; }
-    t3ApplyTpl(tp.dataset.t3tpl); T3.tplName = tp.dataset.t3tpl; T3.step = 2; go('t3'); return;
+    t3ApplyTpl(tp.dataset.t3tpl); T3.tplName = tp.dataset.t3tpl; T3.step = 2; go('t3', { resetScroll: true }); return;
   }
   const a = e.target.closest('[data-t3act]');
   if (!a) return;
   const act = a.dataset.t3act;
-  if (act === 'reset') { Object.assign(T3, { step: 1, ours: null, theirs: null, result: null }); go('t3'); }
-  else if (act === 'run') { t3Run(); T3.step = 3; T3.tab = T3.result.amtDiff.length ? 'diff' : (T3.result.onlyA.length ? 'a' : 'b'); go('t3'); }
-  else if (act === 'back2') { T3.step = 2; go('t3'); }
-  else if (act === 'toExport') { T3.step = 4; go('t3'); }
+  if (act === 'reset') { Object.assign(T3, { step: 1, ours: null, theirs: null, result: null }); go('t3', { resetScroll: true }); }
+  else if (act === 'run') { t3Run(); T3.step = 3; T3.tab = T3.result.amtDiff.length ? 'diff' : (T3.result.onlyA.length ? 'a' : 'b'); go('t3', { resetScroll: true }); }
+  else if (act === 'back2') { T3.step = 2; go('t3', { resetScroll: true }); }
+  else if (act === 'toExport') { T3.step = 4; go('t3', { resetScroll: true }); }
   else if (act === 'dl') t3Export();
   else if (act === 'saveTpl') {
     const n = (document.getElementById('t3tplName') || {}).value || '';
