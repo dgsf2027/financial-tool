@@ -23,7 +23,7 @@ before(async () => {
     } catch (_) { res.writeHead(404).end(); }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  baseURL = `http://127.0.0.1:${server.address().port}`;
+  baseURL = process.env.FINANCE_BROWSER_BASE_URL || `http://127.0.0.1:${server.address().port}`;
 });
 after(async () => {
   if (browser) await browser.close();
@@ -166,3 +166,60 @@ test('opening an existing entity still brings its edit form into view', { skip: 
   assert.equal(await page.locator('#enId').inputValue(), 'youqi');
   assert.equal(await page.evaluate(() => window.scrollY), 0, 'opening an edit form is navigation, not an in-place refresh');
 });
+
+
+for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+  test(`channel workbook uploads create persistent field tabs and channel pages (${viewport.width}px)`, { skip: !chromium }, async t => {
+    const page = await openPage(t, viewport);
+    await page.evaluate(() => go('t4-channels'));
+    const workbook = await page.evaluate(async () => Array.from(new Uint8Array(await XLSXWrite.build([
+      { name: '说明', rows: [['请维护渠道列表']] },
+      { name: '新渠道', rows: [['渠道列表'], ['负责人', '渠道汇总', '销售渠道', '归属事业部', '预算', '备注'],
+        ['张三', '测试新增渠道', '测试新店', '大电商', 0, '<img src=x onerror="window.importInjected=1">']] },
+      { name: '第二张渠道表', rows: [['销售渠道', '归属事业部', '所在地区'], ['测试第二店', '经销', '杭州']] },
+    ]).arrayBuffer())));
+    const upload = async () => {
+      const chooser = page.waitForEvent('filechooser');
+      await page.getByRole('button', { name: '导入渠道列表', exact: true }).click();
+      await (await chooser).setFiles({ name: '灵活渠道.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: Buffer.from(workbook) });
+      await page.waitForFunction(() => document.getElementById('toast').textContent.includes('已识别 2 张渠道表'));
+    };
+    await upload();
+    assert.equal(await page.evaluate(() => T4_CH.filter(c => c.custom).length), 2);
+    await page.getByRole('button', { name: '负责人', exact: true }).click();
+    assert.equal(await page.locator('#view tbody tr').count(), 1);
+    assert.match(await page.locator('#view tbody').innerText(), /张三/);
+    await page.getByRole('button', { name: '备注', exact: true }).click();
+    assert.match(await page.locator('#view tbody').innerText(), /<img src=x/);
+    assert.equal(await page.locator('#view tbody img').count(), 0);
+    assert.equal(await page.evaluate(() => window.importInjected), undefined);
+    await page.getByRole('button', { name: '预算', exact: true }).click();
+    assert.equal(await page.locator('#view tbody td').nth(3).innerText(), '0');
+    await page.getByRole('button', { name: '明细', exact: true }).click();
+    assert.equal(await page.locator('#t4DayCh option:checked').textContent(), '测试新增渠道');
+    await page.evaluate(() => go('t4-channels'));
+    await page.getByRole('button', { name: '负责人', exact: true }).click();
+    await page.getByRole('button', { name: '录入', exact: true }).click();
+    assert.equal(await page.locator('#t4chSel option:checked').textContent(), '测试新增渠道');
+    await page.reload();
+    await page.evaluate(() => go('t4-channels'));
+    await page.waitForFunction(() => T4_SERVER_READY && !T4_SERVER_LOADING);
+    await page.getByRole('button', { name: '负责人', exact: true }).click();
+    assert.match(await page.locator('#view tbody').innerText(), /张三/);
+    await upload();
+    assert.equal(await page.evaluate(() => T4_CH.filter(c => c.custom).length), 2, 'reimport retains identity');
+    await page.getByRole('button', { name: '所在地区', exact: true }).click();
+    assert.match(await page.locator('#view tbody').innerText(), /杭州/);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'tabs and tables scroll inside the page');
+    await page.screenshot({ path: `/tmp/finance-t4-channel-${viewport.width}.png`, fullPage: true });
+    const downloaded = await page.evaluate(async () => {
+      let blob;
+      const original = downloadBlob;
+      downloadBlob = (_, value) => { blob = value; };
+      try { await t4ChTemplate(); } finally { downloadBlob = original; }
+      return XLSXLite.readTable(new File([blob], '渠道列表.xlsx'));
+    });
+    assert.ok(downloaded[0].includes('负责人'));
+    assert.ok(downloaded.some(row => row.includes('测试新店') && row.includes('张三')));
+  });
+}

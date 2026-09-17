@@ -292,3 +292,7 @@ tr.lv1 td{color:var(--text-2);font-weight:600;background:var(--surface)}
 .bi-period{display:inline-block;margin-left:12px;vertical-align:3px;font-size:12px;font-weight:700;color:#22d3ee;
   border:1px solid rgba(34,211,238,.45);border-radius:8px;padding:4px 11px;background:rgba(34,211,238,.08);
   box-shadow:0 0 12px rgba(34,211,238,.15);letter-spacing:.5px}
+
+/* Uploaded channel fields share the existing tabs and scroll on narrow screens. */
+.t4-channel-tabs{overflow-x:auto;max-width:100%;gap:4px}
+.t4-channel-tabs button{flex-shrink:0;white-space:nowrap;min-height:44px}

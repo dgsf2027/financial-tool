@@ -281,3 +281,19 @@ test('edits made while a save response is pending remain drafts against only ack
   assert.deepEqual(saved.periods[PERIOD].tmall[DAY], { retailIncome: 150, retailCost: 40, promotion: 12 });
   assert.equal(saved.cfgByPeriod[PERIOD].tmall.directLaborMonth, 250);
 });
+
+test('flexible channel uploads persist new field pages for another client without changing financial data', async t => {
+  const initial = workspace();
+  const server = await service(t, initial);
+  const a = client(server, true);
+  await a.run('t4LoadServer()');
+  a.run("t4ChApplyRows([['销售渠道','归属事业部','负责人'],['同步新增店','大电商','张三']])");
+  await a.run('t4SaveServer(true)');
+  const saved = (await server.request()).document;
+  assert.deepEqual(saved.periods, initial.periods);
+  assert.deepEqual(saved.cfg, initial.cfg);
+  const b = client(server, true);
+  await b.run('t4LoadServer()');
+  assert.equal(b.run("T4_CHM[t4ResolveChannel('同步新增店')].bu"), 'ecom');
+  assert.deepEqual(copy(b.run("t4ChFieldRows('负责人').map(r=>[r.source,r.value])")), [['同步新增店', '张三']]);
+});

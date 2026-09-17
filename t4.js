@@ -155,19 +155,23 @@ const T4_CHLIST_KEY = 'fsc_t4_channels_v2';
 let T4_CH = [], T4_CHM = {}, T4_TMAI = [], T4_BIG_ECOM = [], T4_PDD = [], T4_RUIMIAN = [], T4_ORANGE = [], T4_DEALER = [], T4_ALL = [];
 function t4ChOverrides() { try { const v = JSON.parse(localStorage.getItem(T4_CHLIST_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; } }
 function t4SaveChOverrides(list) { localStorage.setItem(T4_CHLIST_KEY, JSON.stringify(list)); }
-function t4RebuildChannels() {
+function t4ChannelList(overrides) {
   const base = T4_CH_BASE.map(c => ({ ...c }));
-  t4ChOverrides().forEach(o => {
+  overrides.forEach(o => {
     const hit = base.find(c => c.id === o.id);
     if (hit) {
       if (o.n && o.n !== hit.n) { hit.aliases = (hit.aliases || []).concat(hit.n); hit.n = o.n; }
       if (o.bu) hit.bu = o.bu;
       if (o.aliases) hit.aliases = (hit.aliases || []).concat(o.aliases);
+      if (o.details) hit.details = o.details;
     } else if (o.n) {
-      base.push({ id: o.id, n: o.n, bu: o.bu || 'dealer', tier: '直属', files: [T4_DAILY_FILE], aliases: o.aliases || [], custom: true });
+      base.push({ id: o.id, n: o.n, bu: o.bu || 'dealer', tier: '直属', files: [T4_DAILY_FILE], aliases: o.aliases || [], details: o.details || [], custom: true });
     }
   });
-  T4_CH = base;
+  return base;
+}
+function t4RebuildChannels() {
+  T4_CH = t4ChannelList(t4ChOverrides());
   T4_CHM = Object.fromEntries(T4_CH.map(c => [c.id, c]));
   T4_TMAI = T4_CH.filter(c => c.tier === '特卖').map(c => c.id);
   T4_BIG_ECOM = T4_CH.filter(c => c.bu === 'ecom').map(c => c.id);
@@ -1088,99 +1092,147 @@ async function t4SummaryTemplate() {
 const T4_BU_ALIAS = { 大电商: 'ecom', 大电商事业部: 'ecom', 拼多多: 'pdd', 拼多多事业部: 'pdd',
   瑞眠: 'ruimian', 瑞眠事业部: 'ruimian', 橘农: 'orange', 橘农事业部: 'orange', 经销: 'dealer', 经销事业部: 'dealer' };
 
+const t4ChClean = v => String(v == null ? '' : v).replace(/[\uFEFF\u200B\s]+/g, '').toLowerCase();
+const t4ChNorm = v => t4ChClean(v).replace(/[-_—（）()]/g, '');
+const T4_CH_HEADERS = {
+  id: ['渠道id', 'id'], bu: ['归属事业部', '事业部', '所属事业部'],
+  source: ['销售渠道', '店铺', '店铺名称', '渠道名称', '渠道'],
+  target: ['渠道汇总', '汇总渠道'],
+};
+function t4ChSchema(input) {
+  let rows = input;
+  const has = (v, key) => T4_CH_HEADERS[key].includes(t4ChClean(v));
+  const findHeader = table => table.reduce((best, row, index) => {
+    const roles = Object.keys(T4_CH_HEADERS).filter(key => row.some(v => has(v, key)));
+    if (!roles.includes('source') && !roles.includes('target')) return best;
+    const score = roles.length * 100 + Math.min(50, row.filter(v => t4ChClean(v)).length);
+    return score > best.score ? { index, score, roles: roles.length } : best;
+  }, { index: -1, score: -1, roles: 0 });
+  let headerMatch = findHeader(rows);
+  // 完整的横向表头优先，避免标题中的“销售渠道”把普通清单误判为转置表。
+  if (headerMatch.roles < 2 && rows.some(r => has(r[0], 'bu')) && rows.some(r => has(r[0], 'source') || has(r[0], 'target'))) {
+    const width = rows.reduce((max, row) => Math.max(max, row.length), 0);
+    rows = Array.from({ length: width }, (_, col) => rows.map(r => r[col] ?? ''));
+    headerMatch = findHeader(rows);
+  }
+  const headRow = headerMatch.index;
+  if (headRow < 0) return null;
+  const header = rows[headRow], body = rows.slice(headRow + 1);
+  const map = Object.fromEntries(Object.keys(T4_CH_HEADERS).map(key => [key, header.findIndex(v => has(v, key))]));
+  const used = new Set(Object.values(map).filter(i => i >= 0)), names = new Set(), extra = [];
+  const width = body.reduce((max, row) => Math.max(max, row.length), header.length);
+  for (let col = 0; col < width; col++) {
+    if (used.has(col)) continue;
+    const name = String(header[col] ?? '').trim() || (body.some(r => String(r[col] ?? '').trim()) ? `第${col + 1}列` : '');
+    if (!name) continue;
+    if (names.has(t4ChClean(name))) throw new Error(`附加列「${name}」重名，请使用不同的表头名称`);
+    names.add(t4ChClean(name)); extra.push({ col, name });
+  }
+  return { body, map, extra, renameByName: ['渠道名称', '渠道'].includes(t4ChClean(header[map.source])) };
+}
+function t4ChExtraFields() {
+  const fields = new Map();
+  T4_CH.forEach(c => (c.details || []).forEach(r => r.fields.forEach(f => {
+    const key = t4ChClean(f.name); if (!fields.has(key)) fields.set(key, f.name);
+  })));
+  return [...fields.values()];
+}
+function t4ChFieldRows(name) {
+  return T4_CH.flatMap(c => (c.details || []).flatMap(r => {
+    const field = r.fields.find(f => t4ChClean(f.name) === t4ChClean(name));
+    return field ? [{ channel: c.id, source: r.source, value: field.value }] : [];
+  }));
+}
+function t4ChTemplateRows() {
+  const extra = t4ChExtraFields();
+  const sources = new Set([...Object.keys(T4_SOURCE_CHANNEL_MAP), ...T4_CH.flatMap(c =>
+    [c.n, ...(c.aliases || []), ...(c.details || []).map(r => r.source)])]);
+  const rows = [['渠道ID', '销售渠道', '归属事业部', '渠道汇总', ...extra]];
+  sources.forEach(source => {
+    const id = t4ResolveChannel(source), c = T4_CHM[id]; if (!c) return;
+    const fields = (c.details || []).find(r => t4ChNorm(r.source) === t4ChNorm(source))?.fields || [];
+    rows.push([id, source, t4BuName(c.bu), c.n, ...extra.map(name => fields.find(f => t4ChClean(f.name) === t4ChClean(name))?.value ?? '')]);
+  });
+  return rows;
+}
 async function t4ChTemplate() {
-  // 读取底稿以保留原编号与销售渠道，用当前配置更新归属和汇总渠道。
   try {
-    const r = await fetch('示例文件/渠道列表.xlsx');
-    const u8 = new Uint8Array(await r.arrayBuffer());
-    if (!r.ok || u8[0] !== 0x50 || u8[1] !== 0x4b) throw new Error('模板文件缺失或损坏，请联系开发');
-    const rows = await XLSXLite.readTable(new File([u8], '渠道列表.xlsx'));
-    const h = rows.findIndex(row => row.includes('销售渠道') && row.includes('归属事业部'));
-    if (h < 0) throw new Error('模板表头缺失');
-    const header = rows[h], source = header.indexOf('销售渠道'), bu = header.indexOf('归属事业部'), target = header.indexOf('渠道汇总');
-    rows.slice(h + 1).forEach(row => { const id = t4ResolveChannel(row[source]); if (id && target >= 0) { row[bu] = t4BuName(T4_CHM[id].bu); row[target] = T4_CHM[id].n; } });
-    downloadBlob('渠道列表.xlsx', XLSXWrite.build([{ name: '渠道列表', rows }]));
-    toast('已下载当前渠道映射，含橘农项目与独立分摊渠道');
+    downloadBlob('渠道列表.xlsx', XLSXWrite.build([{ name: '渠道列表', rows: t4ChTemplateRows() }]));
+    toast('已下载当前渠道列表，包含新增渠道和附加字段');
   } catch (e) { toast(`模板下载失败：${e.message || e}`, 5000); }
 }
-
-function t4ChApplyRows(rows) {
-  const clean = c => String(c == null ? '' : c).replace(/[﻿​\s]+/g, '');
-  const headRow = rows.findIndex(r => r.some(c => ['渠道名称', '渠道', '销售渠道'].includes(clean(c)))
-    && r.some(c => ['归属事业部', '事业部'].includes(clean(c))));
-  if (headRow < 0) throw new Error('未找到表头行（需包含「销售渠道/渠道名称」和「归属事业部」列）');
-  const hdr = rows[headRow].map(clean);
-  const buCol = hdr.findIndex(c => c === '归属事业部' || c === '事业部');
-  const sumCol = hdr.findIndex(c => c === '渠道汇总' || c === '汇总渠道');
-  const trim = v => String(v == null ? '' : v).trim();
-  const buOf = raw => raw ? T4_BU_ALIAS[raw.replace(/\s/g, '')] || '' : '';
+function t4ChApplyRows(rows) { return t4ChApplySheets([rows]); }
+function t4ChApplySheets(sheets) {
+  const schemas = sheets.map(t4ChSchema).filter(Boolean);
+  if (!schemas.length) throw new Error('未找到渠道表头，请包含「销售渠道 / 渠道名称 / 渠道汇总」列');
+  // 整份工作簿先在内存中合并，通过校验后一次写入，避免导入一半就改变当前渠道。
   const ov = t4ChOverrides();
-  const put = entry => { const i = ov.findIndex(x => x.id === entry.id); if (i >= 0) ov[i] = { ...ov[i], ...entry }; else ov.push(entry); };
-  let cusMax = 0; T4_CH.concat(ov).forEach(c => { const m = /^cus(\d+)$/.exec(c.id || ''); if (m) cusMax = Math.max(cusMax, +m[1]); });
-  let renamed = 0, moved = 0, added = 0, mapped = 0; const bad = [];
-  const body = rows.slice(headRow + 1);
-
-  if (sumCol >= 0) {
-    // 映射模式（渠道列表底稿）：销售渠道（吉客云原始店铺）归集到渠道汇总（T4 渠道）
-    const rawCol = hdr.findIndex(c => ['销售渠道', '店铺', '渠道名称', '渠道'].includes(c));
-    // 第一遍：保证每个「渠道汇总」目标渠道存在，并按表调整事业部
-    body.forEach(row => {
-      const tgt = trim(row[sumCol]) || (rawCol >= 0 ? trim(row[rawCol]) : ''); if (!tgt) return;
-      const buRaw = buCol >= 0 ? trim(row[buCol]) : '', bu = buOf(buRaw);
-      if (buRaw && !bu) { bad.push(`${tgt}（事业部「${buRaw}」不识别）`); return; }
-      const rid = t4ResolveChannel(tgt);
-      if (rid) {
-        if (bu && T4_CHM[rid].bu !== bu) { put({ id: rid, bu }); T4_CHM[rid].bu = bu; moved++; }
-      } else {
-        put({ id: `cus${++cusMax}`, n: tgt, bu: bu || 'dealer' }); added++;
-        if (!bu) bad.push(`${tgt}（未填事业部，暂归经销）`);
-        t4SaveChOverrides(ov); t4RebuildChannels(); // 让同表后续行立即能解析到新渠道
-      }
-    });
-    t4SaveChOverrides(ov); t4RebuildChannels();
-    // 第二遍：销售渠道 → 渠道汇总 的对应关系挂为目标渠道的别名
-    body.forEach(row => {
-      const raw = rawCol >= 0 ? trim(row[rawCol]) : '';
-      const tgt = trim(row[sumCol]) || raw;
-      if (!raw || !tgt) return;
-      const tid = t4ResolveChannel(tgt); if (!tid) return;
-      if (t4ResolveChannel(raw) === tid) return; // 本名或已有映射
-      ov.forEach(o => { if (o.id !== tid && o.aliases) o.aliases = o.aliases.filter(name => clean(name) !== clean(raw)); });
-      const i = ov.findIndex(x => x.id === tid);
-      const prev = i >= 0 ? (ov[i].aliases || []) : [];
-      if (i >= 0) ov[i] = { ...ov[i], aliases: [...new Set(prev.concat(raw))] };
-      else ov.push({ id: tid, aliases: [raw] });
-      mapped++;
-    });
-    t4SaveChOverrides(ov); t4RebuildChannels();
-    return { renamed, moved, added, mapped, bad };
-  }
-
-  // 渠道ID 模式：改名 / 调事业部 / 新增
-  const idCol = hdr.findIndex(c => ['渠道ID', '渠道Id', '渠道id', 'ID', 'id'].includes(c));
-  const nameCol = hdr.findIndex(c => c === '渠道名称' || c === '渠道');
-  body.forEach(row => {
-    const name = trim(row[nameCol]);
+  let channels = t4ChannelList(ov), cusMax = 0;
+  channels.forEach(c => { const m = /^cus(\d+)$/.exec(c.id); if (m) cusMax = Math.max(cusMax, +m[1]); });
+  const put = entry => {
+    const i = ov.findIndex(o => o.id === entry.id);
+    if (i < 0) ov.push(entry); else ov[i] = { ...ov[i], ...entry };
+  };
+  const resolve = name => {
+    const n = t4ChNorm(name); if (!n) return null;
+    return channels.find(c => t4ChNorm(c.n) === n || t4ChNorm(c.id) === n)
+      || channels.find(c => (c.aliases || []).some(a => t4ChNorm(a) === n))
+      || channels.find(c => c.id === t4ResolveChannel(name));
+  };
+  let renamed = 0, moved = 0, added = 0, mapped = 0, imported = 0;
+  const bad = [];
+  schemas.forEach(({ body, map, extra, renameByName }) => body.forEach(row => {
+    const get = key => map[key] < 0 ? '' : String(row[map[key]] ?? '').trim();
+    const source = get('source') || get('target'), name = get('target') || source;
     if (!name) return;
-    const idRaw = idCol >= 0 ? trim(row[idCol]) : '';
-    const buRaw = buCol >= 0 ? trim(row[buCol]) : '', bu = buOf(buRaw);
+    if (T4_CH_HEADERS.source.includes(t4ChClean(source)) || T4_CH_HEADERS.target.includes(t4ChClean(name))) return;
+    const buRaw = get('bu'), buKey = buRaw.replace(/\s/g, '');
+    const bu = Object.prototype.hasOwnProperty.call(T4_BU_ALIAS, buKey) ? T4_BU_ALIAS[buKey] : '';
     if (buRaw && !bu) { bad.push(`${name}（事业部「${buRaw}」不识别）`); return; }
-    const rid = t4ResolveChannel(name);
-    const target = (idRaw && T4_CHM[idRaw]) || (rid && T4_CHM[rid]) || null;
+    const idRaw = get('id');
+    let target = (map.target < 0 && idRaw && channels.find(c => c.id === idRaw)) || resolve(name);
     if (target) {
       const entry = { id: target.id };
-      if (name !== target.n) { entry.n = name; renamed++; }
+      // 映射表以渠道汇总为准，旧 ID 不能把调整归集误当成改名。
+      if (name !== target.n && map.target < 0 && (idRaw || renameByName)) {
+        entry.n = name; entry.aliases = [...new Set([...(ov.find(o => o.id === target.id)?.aliases || []), target.n])]; renamed++;
+      }
       if (bu && bu !== target.bu) { entry.bu = bu; moved++; }
-      if (entry.n || entry.bu) put(entry);
+      put(entry);
     } else {
-      const id = /^[a-z][a-z0-9_]*$/i.test(idRaw) && !T4_CHM[idRaw] ? idRaw : `cus${++cusMax}`;
+      const id = /^[a-z][a-z0-9_]*$/i.test(idRaw) && !['__proto__','constructor','prototype'].includes(idRaw) && !channels.some(c => c.id === idRaw)
+        ? idRaw : `cus${++cusMax}`;
+      const customNumber = /^cus(\d+)$/.exec(id);
+      if (customNumber) cusMax = Math.max(cusMax, +customNumber[1]);
       put({ id, n: name, bu: bu || 'dealer' }); added++;
       if (!bu) bad.push(`${name}（未填事业部，暂归经销）`);
+      target = { id, n: name };
     }
-  });
-  t4SaveChOverrides(ov);
-  t4RebuildChannels();
-  return { renamed, moved, added, mapped, bad };
+    // 别名迁移时连同这个销售渠道的附加字段一起移动，防止字段挂在旧归集渠道上。
+    const norm = t4ChNorm(source), fields = [];
+    ov.forEach(o => {
+      const detail = (o.details || []).find(r => t4ChNorm(r.source) === norm);
+      if (detail) fields.push(...detail.fields);
+      if (o.id !== target.id) {
+        if (o.aliases) o.aliases = o.aliases.filter(a => t4ChNorm(a) !== norm);
+        if (o.details) o.details = o.details.filter(r => t4ChNorm(r.source) !== norm);
+      }
+    });
+    const entry = ov.find(o => o.id === target.id);
+    if (t4ChNorm(source) !== t4ChNorm(target.n) && !(entry.aliases || []).some(a => t4ChNorm(a) === norm)) {
+      entry.aliases = [...(entry.aliases || []), source]; mapped++;
+    }
+    extra.forEach(({ col, name: fieldName }) => {
+      const f = { name: fieldName, value: String(row[col] ?? '').trim() };
+      const i = fields.findIndex(v => t4ChClean(v.name) === t4ChClean(fieldName));
+      if (i < 0) fields.push(f); else fields[i] = { ...f, name: fields[i].name };
+    });
+    if (fields.length) entry.details = [...(entry.details || []).filter(r => t4ChNorm(r.source) !== norm), { source, fields }];
+    channels = t4ChannelList(ov); imported++;
+  }));
+  if (!imported) throw new Error(`没有可导入的渠道${bad.length ? '：' + bad.slice(0, 3).join('、') : '，请在表头下填写渠道名称'}`);
+  t4SaveChOverrides(ov); t4RebuildChannels();
+  return { renamed, moved, added, mapped, bad, imported, sheets: schemas.length };
 }
 
 function t4ChPickFile() {
@@ -1188,12 +1240,13 @@ function t4ChPickFile() {
   input.onchange = async () => {
     const file = input.files && input.files[0]; if (!file) return;
     try {
-      const r = t4ChApplyRows(await XLSXLite.readTable(file));
+      if (T4_SERVER_SAVING || T4_SERVER_LOADING) throw new Error('正在同步，请稍后再导入');
+      const r = t4ChApplySheets(await XLSXLite.readSheets(file));
       if (T4_SERVER_READY) await t4SaveServer(true);
       t4Load(); t4Go('channels');
       const warn = r.bad.length ? `；注意：${r.bad.slice(0, 3).join('、')}` : '';
-      toast(`渠道列表导入完成：新增渠道 ${r.added}、映射销售渠道 ${r.mapped}、改名 ${r.renamed}、调事业部 ${r.moved}${warn}`, 5600);
-    } catch (e) { toast(`读取失败：${e.message || e}`, 5000); }
+      toast(`已识别 ${r.sheets} 张渠道表：新增渠道 ${r.added}、映射销售渠道 ${r.mapped}、改名 ${r.renamed}、调事业部 ${r.moved}${warn}`, 5600);
+    } catch (e) { toast(`渠道导入未完成：${e.message || e}`, 5000); }
   };
   input.click();
 }
@@ -1674,15 +1727,24 @@ S['t4-mgmt'] = () => {
 
 S['t4-channels'] = () => {
   t4Load();
+  const fields = t4ChExtraFields();
+  if (!fields.includes(T4.chField)) T4.chField = '';
+  const tabs = fields.length ? `<div class="tabs t4-channel-tabs" aria-label="渠道列表页面">${['', ...fields].map(name =>
+    `<button type="button" class="${T4.chField === name ? 'on' : ''}" data-t4chfield="${H(name)}" aria-pressed="${T4.chField === name}">${H(name || '渠道清单')}</button>`).join('')}</div>` : '';
+  const actions = c => `<button class="btn sm" data-t4go="man:${H(c.id)}">录入</button> <button class="btn sm" data-t4go="chday:${H(c.id)}">明细</button>`;
   const rows = T4_CH.map(c => [
     `<span class="mono">${H(c.id)}</span>`, t4BuPill(c.bu), `<b>${H(c.n)}</b>`,
     (c.aliases || []).map(H).join('、') || '<span class="mut">—</span>',
     c.custom ? pill('自定义', 'in') : pill('内置', 'mu'),
-    c.custom ? `<button class="btn sm" data-t4chdel="${H(c.id)}">移除</button>` : '']);
-  return head('T4 渠道列表', `当前 ${T4_CH.length} 个渠道。下载模板修改后导入：按渠道ID（留空则按名称）匹配已有渠道，改名或调整归属事业部；匹配不上的行作为新渠道加入。改名后旧名在数据导入时仍会被识别。`, '工具箱 · T4',
-    '<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="chTemplate">下载模板</button><button class="btn pri" data-t4act="chPick">导入渠道列表</button>')
-    + card(`渠道清单（${T4_CH.length} 个）`, table([{t:'渠道ID'},{t:'归属事业部'},{t:'渠道汇总'},{t:'关联销售渠道'},{t:'来源'},{t:''}], rows))
-    + '<div class="note"><b>与吉客云的关系：</b>渠道列表底稿的「销售渠道」列是吉客云明细里的原始店铺名，导入后挂为对应「渠道汇总」渠道的关联名；此后收入/成本导入吉客云明细时，各店铺数据自动归集到渠道汇总。事业部填大电商、拼多多、瑞眠、橘农或经销；新增渠道自动获得录入/导入/分摊全部能力；移除仅限自定义渠道，历史数据保留。</div>';
+    actions(c) + (c.custom ? ` <button class="btn sm" data-t4chdel="${H(c.id)}">移除</button>` : '')]);
+  const content = T4.chField
+    ? card(T4.chField, table([{t:'销售渠道'},{t:'归属事业部'},{t:'渠道汇总'},{t:T4.chField},{t:'操作'}],
+      t4ChFieldRows(T4.chField).map(r => { const c = T4_CHM[r.channel]; return [H(r.source), t4BuPill(c.bu), H(c.n), H(r.value), actions(c)]; })))
+    : card(`渠道清单（${T4_CH.length} 个）`, table([{t:'渠道ID'},{t:'归属事业部'},{t:'渠道汇总'},{t:'关联销售渠道'},{t:'来源'},{t:'操作'}], rows));
+  return head('T4 渠道列表', `当前 ${T4_CH.length} 个渠道。自动识别表头、列顺序和 xlsx 内的渠道工作表；新增渠道自动接入录入、明细与汇总。每个附加字段生成同名页签。`, '工具箱 · T4',
+    '<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="chTemplate">下载当前列表</button><button class="btn pri" data-t4act="chPick">导入渠道列表</button>')
+    + tabs + content
+    + '<div class="note"><b>导入规则：</b>至少包含「销售渠道」「渠道名称」或「渠道汇总」之一；支持每行一个渠道，也支持每列一个渠道。销售渠道按「渠道汇总」归集；未填汇总时按渠道名称匹配或新增。已有渠道未填事业部时保留原归属，新渠道未填时归经销并提示。附加字段按销售渠道保存，仅供查看；再次导入只更新文件中提供的渠道和字段，未提供的内容及历史损益保留。事业部支持大电商、拼多多、瑞眠、橘农、经销。</div>';
 };
 
 S['t4-rules'] = () => head('T4 取数口径', '以下规则来自用户提供的销售明细、平台推广明细和 2026-08 日损益底稿。', '工具箱 · T4', '<button class="btn" data-t4go="overview">← 返回</button>')
@@ -1941,9 +2003,12 @@ document.addEventListener('click', async e => {
   if (nav) {
     const [v,ch] = nav.dataset.t4go.split(':');
     if (ch && (v === 'sumimp' || v === 'summan')) T4.sumScope = ch;
+    else if (ch && v === 'chday') T4.dayCh = ch;
     else if (ch) T4.editCh = ch;
     if (v === 'imp' || v === 'sumimp') T4.imp = null; t4Go(v, { resetScroll: true }); return;
   }
+  const field = e.target.closest('[data-t4chfield]');
+  if (field) { T4.chField = field.dataset.t4chfield; t4Go('channels', { resetScroll: true }); return; }
   const file = e.target.closest('[data-t4file]'); if (file) { t4PickFile(file.dataset.t4file); return; }
   const mdel = e.target.closest('[data-t4maildel]');
   if (mdel) { t4MailReadForm(); T4.mail.list.splice(+mdel.dataset.t4maildel, 1); t4Go('mail'); return; }
