@@ -205,3 +205,66 @@ test('saving current-month allocation preserves legacy history, configuration an
   assert.equal(saved.cfgByPeriod['2026-09'].tmall.directLaborMonth, 600);
   assert.equal(a.run("T4.period='2026-08'; t4Load(); t4MgmtDaily('tmall').directLabor"), 10);
 });
+
+test('shared saves retain the loaded view baseline and adopt the canonical merged document', async () => {
+  const a = app();
+  a.run(`t4CurrentMonth=()=> '2026-09';
+    window.T4Shared.load=async()=>({found:true,version:1,document:{periods:{},cfg:{},channels:[]}});
+    window.T4Shared.save=async(doc,user,baseline)=>{
+      sentBaseline=baseline;
+      const merged=JSON.parse(JSON.stringify(doc));
+      merged.cfgByPeriod['2026-09'].jdpop.directLaborMonth=200;
+      merged.periods['2026-09'].jdpop={'2026-09-01':{retailIncome:300}};
+      return {version:3,document:merged};
+    };`);
+  await a.run('originalLoadServer()');
+  const oldValue = a.run('T4.cfg.tmall.directLaborMonth');
+  await a.run('T4.cfg.tmall.directLaborMonth=100; t4SaveCfg()');
+  assert.equal(a.run('T4.cfg.jdpop.directLaborMonth'), 200);
+  assert.equal(a.run("T4_SERVER_DOCUMENT.periods['2026-09'].jdpop['2026-09-01'].retailIncome"), 300);
+  assert.equal(a.run("sentBaseline.cfgByPeriod['2026-09'].tmall.directLaborMonth"), oldValue);
+  assert.equal(a.run("T4_SERVER_BASELINE.cfgByPeriod['2026-09'].jdpop.directLaborMonth"), 200);
+});
+
+test('parameter save refreshes the displayed form after a successful merge', async () => {
+  const a = app();
+  a.run("views=[]; t4Go=view=>views.push(view); t4SaveCfg=async()=>{}; T4.periodLocks={'2026-09':false}");
+  const button = { dataset: { t4act: 'cfgSave' } };
+  await a.handlers.click({ target: { closest: selector => selector.includes('[data-t4act]') ? button : null } });
+  assert.equal(a.run("views.join(',')"), 'cfg');
+});
+
+test('adding a parameter rule never announces success when shared saving fails', async () => {
+  const a = app();
+  a.run("messages=[]; views=[]; toast=msg=>messages.push(msg); t4Go=view=>views.push(view); t4SaveCfg=async()=>{throw new Error('同一字段冲突')}; document.querySelector=()=>({value:'platformFeeRate'}); T4.periodLocks={'2026-09':false}");
+  const button = { dataset: { t4cfgadd: 'tmall' } };
+  await a.handlers.click({ target: { closest: selector => selector.includes('[data-t4cfgadd]') ? button : null } });
+  assert.equal(a.run("messages.some(msg=>msg.includes('同一字段冲突'))"), true);
+  assert.equal(a.run('views.length'), 0);
+});
+
+test('deleting a built-in parameter stays deleted after adopting the saved document', async () => {
+  const a = app();
+  a.run("t4CurrentMonth=()=> '2026-09'; t4Go=()=>{}; window.T4Shared.load=async()=>({found:true,version:1,document:{periods:{},cfg:{},channels:[]}}); window.T4Shared.save=async doc=>({version:2,document:doc})");
+  await a.run('originalLoadServer()');
+  assert.equal(a.run('T4.cfg.tmall.platformFeeRate != null'), true);
+  const button = { dataset: { t4cfgdel: 'tmall:platformFeeRate' } };
+  await a.handlers.click({ target: { closest: selector => selector.includes('[data-t4cfgdel]') ? button : null } });
+  assert.equal(a.run('T4.cfg.tmall.platformFeeRate == null'), true);
+  a.run('t4ApplyPeriod(T4_SERVER_DOCUMENT)');
+  assert.equal(a.run('T4.cfg.tmall.platformFeeRate == null'), true);
+});
+
+test('editable form controls are disabled during a shared save and restored on failure', async () => {
+  const a = app();
+  a.run("t4CurrentMonth=()=> '2026-09'; window.T4Shared.load=async()=>({found:true,version:1,document:{periods:{},cfg:{},channels:[]}})");
+  await a.run('originalLoadServer()');
+  a.run("field={disabled:false}; disabledField={disabled:true}; document.querySelectorAll=()=>[field,disabledField]; window.T4Shared.save=()=>new Promise((resolve,reject)=>{rejectSave=reject})");
+  const saving = a.run('t4SaveCfg()');
+  const rejected = assert.rejects(saving, /offline/);
+  assert.equal(a.run('field.disabled'), true);
+  a.run("rejectSave(new Error('offline'))");
+  await rejected;
+  assert.equal(a.run('field.disabled'), false);
+  assert.equal(a.run('disabledField.disabled'), true);
+});
