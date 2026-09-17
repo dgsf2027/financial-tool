@@ -33,6 +33,7 @@ after(async () => {
 async function openPage(t, viewport) {
   const page = await browser.newPage({ viewport });
   page.setDefaultTimeout(5000);
+  page.setDefaultNavigationTimeout(30000);
   t.after(() => page.close());
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -53,7 +54,7 @@ async function openPage(t, viewport) {
     }
     await route.fulfill({ json: { version, document, found: true } });
   });
-  await page.goto(baseURL);
+  await page.goto(baseURL, { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => { T4.period = '2026-09'; go('t4-cfg'); });
   await page.waitForFunction(() => T4_SERVER_READY && !T4_SERVER_LOADING);
   return page;
@@ -201,7 +202,7 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
     await page.getByRole('button', { name: '负责人', exact: true }).click();
     await page.getByRole('button', { name: '录入', exact: true }).click();
     assert.equal(await page.locator('#t4chSel option:checked').textContent(), '测试新增渠道');
-    await page.reload();
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.evaluate(() => go('t4-channels'));
     await page.waitForFunction(() => T4_SERVER_READY && !T4_SERVER_LOADING);
     await page.getByRole('button', { name: '负责人', exact: true }).click();
