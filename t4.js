@@ -358,6 +358,7 @@ let T4_SERVER_LOADING = false;
 let T4_SERVER_LAST_KEY = '';
 let T4_SERVER_READY = false;
 let T4_SERVER_DOCUMENT = null;
+let T4_SERVER_BASELINE = null;
 let T4_LOADED_PERIOD = '';
 let T4_SERVER_SAVING = false;
 let T4_PENDING_DRAFT = null;
@@ -386,6 +387,15 @@ function t4ApplyPeriod(doc) {
   T4_CH.forEach(c => { if (!T4.data[c.id]) T4.data[c.id] = {}; });
   t4MigrateFileParts();
   T4_LOADED_PERIOD = T4.period;
+  T4_SERVER_BASELINE = t4ViewDocument(doc);
+}
+function t4ViewDocument(source = T4_SERVER_DOCUMENT) {
+  const doc = window.T4Shared.clone(source || window.T4Shared.empty());
+  doc.periods = doc.periods || {}; doc.periods[T4.period] = t4Clone(T4.data);
+  doc.cfgByPeriod = doc.cfgByPeriod || {}; doc.cfgByPeriod[T4.period] = t4Clone(T4.cfg);
+  doc.periodLocks = t4Clone(T4.periodLocks || {});
+  doc.channels = t4ChOverrides();
+  return doc;
 }
 function t4EntityKey() {
   try { return localStorage.getItem('fsc_cur_ent') || 'global'; } catch (e) { return 'global'; }
@@ -420,11 +430,11 @@ async function t4LoadServer() {
         toast('本机往期草稿已保留。请先解锁，再点“导入本机草稿”写入共享工作区。', 6000);
       } else {
         const saved = await window.T4Shared.save(migrated, (typeof CUR_USER === 'string' && CUR_USER) || 'portal-user');
-        T4_SERVER_VERSION = saved.version; T4_SERVER_DOCUMENT = migrated;
+        T4_SERVER_VERSION = saved.version; T4_SERVER_DOCUMENT = saved.document || migrated;
         toast('已将本机 T4 草稿迁移到共享服务器', 4200);
       }
     }
-    if (Array.isArray(T4_SERVER_DOCUMENT.channels) && T4_SERVER_DOCUMENT.channels.length) {
+    if (Array.isArray(T4_SERVER_DOCUMENT.channels)) {
       t4SaveChOverrides(window.T4Shared.clone(T4_SERVER_DOCUMENT.channels)); t4RebuildChannels();
     }
     T4_CH.forEach(c => { if (!T4.data[c.id]) T4.data[c.id] = {}; if (!T4.cfg[c.id]) T4.cfg[c.id] = {}; });
@@ -444,19 +454,55 @@ async function t4LoadServer() {
 async function t4SaveServer(lockOnly = false) {
   if (!window.T4Shared || !T4_SERVER_READY) throw new Error('共享数据尚未完成加载');
   if (T4_SERVER_SAVING) throw new Error('正在同步，请稍后再操作');
-  const doc = window.T4Shared.clone(T4_SERVER_DOCUMENT || window.T4Shared.empty());
-  if (!lockOnly) {
-    doc.periods = doc.periods || {}; doc.periods[T4.period] = window.T4Shared.clone(T4.data);
-    doc.cfgByPeriod = doc.cfgByPeriod || {};
-    doc.cfgByPeriod[T4.period] = window.T4Shared.clone(T4.cfg || {});
-  }
+  const doc = lockOnly ? window.T4Shared.clone(T4_SERVER_DOCUMENT) : t4ViewDocument();
+  const baseline = lockOnly ? window.T4Shared.clone(T4_SERVER_DOCUMENT) : T4_SERVER_BASELINE;
   doc.periodLocks = t4Clone(T4.periodLocks || {});
   doc.channels = t4ChOverrides();
+  const pendingBase = lockOnly ? t4Clone(T4_SERVER_BASELINE) : t4Clone(doc);
+  pendingBase.periodLocks = t4Clone(doc.periodLocks); pendingBase.channels = t4Clone(doc.channels);
+  const controls = [...document.querySelectorAll('[data-t4cfg], [data-t4mgmt], [data-t4cell], [data-t4sumcell], #t4Period')]
+    .map(input => ({ input, disabled: input.disabled }));
+  controls.forEach(({ input }) => { input.disabled = true; });
   T4_SERVER_SAVING = true;
   try {
-    const x = await window.T4Shared.save(doc, (typeof CUR_USER === 'string' && CUR_USER) || 'portal-user');
-    T4_SERVER_VERSION = x.version; T4_SERVER_DOCUMENT = doc; return x;
-  } finally { T4_SERVER_SAVING = false; }
+    const x = await window.T4Shared.save(doc, (typeof CUR_USER === 'string' && CUR_USER) || 'portal-user', baseline);
+    const pendingView = t4ViewDocument();
+    T4_SERVER_VERSION = x.version; T4_SERVER_DOCUMENT = x.document || doc;
+    if (Array.isArray(T4_SERVER_DOCUMENT.channels)) {
+      t4SaveChOverrides(t4Clone(T4_SERVER_DOCUMENT.channels)); t4RebuildChannels();
+    }
+    t4ApplyPeriod(T4_SERVER_DOCUMENT);
+    // Edits made while saving, and drafts during a lock/channel-only save,
+    // remain local changes against the newly acknowledged server snapshot.
+    if (window.T4Shared.reapply) {
+      const pending = window.T4Shared.reapply(pendingBase, pendingView, T4_SERVER_BASELINE);
+      T4.data = pending.periods[T4.period]; T4.cfg = pending.cfgByPeriod[T4.period];
+      T4.periodLocks = pending.periodLocks;
+      t4SaveChOverrides(pending.channels); t4RebuildChannels();
+    }
+    const all = t4Stored(T4_KEY, {}); all[T4.period] = T4.data;
+    localStorage.setItem(T4_KEY, JSON.stringify(all));
+    const cfgs = t4Stored(T4_PERIOD_CFG_KEY, {}); cfgs[T4.period] = T4.cfg;
+    localStorage.setItem(T4_PERIOD_CFG_KEY, JSON.stringify(cfgs));
+    localStorage.setItem(T4_LOCK_KEY, JSON.stringify(T4.periodLocks));
+    return x;
+  } catch (err) {
+    if (err.code === 'field_conflict' && err.response && err.response.conflicts) {
+      const labels = Object.fromEntries([...T4_CFG_FIELDS, ...T4_MGMT_FIELDS,
+        ...T4_INPUTS.map(f => [f.k, f.n]), ['cfgByPeriod', '月度参数'], ['periods', '日数据'],
+        ['channels', '渠道列表'], ['periodLocks', '月份锁定']]);
+      const details = err.response.conflicts.slice(0, 3).map(c => {
+        const label = c.path.map(k => labels[k] || (T4_CHM[k] && T4_CHM[k].n) || k).join(' / ');
+        const value = !c.currentExists ? '已删除' : typeof c.current === 'object' ? '已更新' : String(c.current);
+        return `${label}（共享值：${value}）`;
+      }).join('；');
+      err.message = `${details} 与本次修改冲突。本次输入已保留；请先记下输入，刷新核对后再保存`;
+    }
+    throw err;
+  } finally {
+    T4_SERVER_SAVING = false;
+    controls.forEach(({ input, disabled }) => { input.disabled = disabled; });
+  }
 }
 function t4Load() {
   if (T4_SERVER_READY) {
@@ -1888,15 +1934,23 @@ document.addEventListener('click', async e => {
   if (cfgadd) {
     const ch = cfgadd.dataset.t4cfgadd, sel = document.querySelector(`.t4addsel[data-ch="${ch}"]`), key = sel && sel.value;
     if (!key) { toast('请先选择要添加的费用规则'); return; }
-    t4CfgReadInputs(); (T4.cfg[ch] = T4.cfg[ch] || {})[key] = 0; t4SaveCfg();
-    const meta = T4_CFG_FIELDS.find(x => x[0] === key);
-    toast(`已为「${T4_CHM[ch].n}」添加「${meta[1]}」，请填入数值后保存`); t4Go('cfg'); return;
+    t4CfgReadInputs(); (T4.cfg[ch] = T4.cfg[ch] || {})[key] = 0;
+    try {
+      await t4SaveCfg();
+      const meta = T4_CFG_FIELDS.find(x => x[0] === key);
+      toast(`已为「${T4_CHM[ch].n}」添加「${meta[1]}」，请填入数值后保存`); t4Go('cfg');
+    } catch (err) { toast(`共享保存失败：${err.message || err}`, 5200); }
+    return;
   }
   const cfgdel = e.target.closest('[data-t4cfgdel]');
   if (cfgdel) {
     const [ch, key] = cfgdel.dataset.t4cfgdel.split(':');
-    t4CfgReadInputs(); if (T4.cfg[ch]) delete T4.cfg[ch][key]; t4SaveCfg();
-    toast('已删除该费用规则'); t4Go('cfg'); return;
+    // An explicit null masks the built-in default when the merged document
+    // is loaded again; deleting the key would immediately restore that rule.
+    t4CfgReadInputs(); if (T4.cfg[ch]) T4.cfg[ch][key] = null;
+    try { await t4SaveCfg(); toast('已删除该费用规则'); t4Go('cfg'); }
+    catch (err) { toast(`共享保存失败：${err.message || err}`, 5200); }
+    return;
   }
   const a = e.target.closest('[data-t4act]'); if (!a) return;
   if (a.dataset.t4act === 'retrySync') { T4_SERVER_LAST_KEY = ''; await t4LoadServer(); t4Go('overview'); }
@@ -1960,7 +2014,7 @@ document.addEventListener('click', async e => {
   else if (a.dataset.t4act === 'smtpTest') t4SmtpTest();
   else if (a.dataset.t4act === 'cfgSave') {
     t4CfgReadInputs();
-    try { await t4SaveCfg(); toast('✓ 参数已保存，损益表已按新规则重算', 3500); }
+    try { await t4SaveCfg(); toast('✓ 参数已保存，损益表已按新规则重算', 3500); t4Go('cfg'); }
     catch (err) { toast(`共享保存失败：${err.message || err}`, 5200); }
   } else if (a.dataset.t4act === 'cfgReset') {
     // 只重置比例类底稿参数；管理费分摊是用户数据，原样保留
