@@ -336,6 +336,25 @@ T4_FILE_DEFS.summaryDaily = {
   required: ['channel', 'date'],
 };
 
+// 共享存储把期间当路径段用，服务端只认 20xx-01..12（sync_api.py 的 PERIOD_RE）。
+// 不合规的期间或陈旧的锁定键会让整批变更被拒成 invalid change path，因此在
+// 组装文档前就地拦下来，并且明确告诉用户是哪一类问题。
+const T4_PERIOD_RE = /^20\d{2}-(0[1-9]|1[0-2])$/;
+function t4ValidPeriod(period) { return typeof period === 'string' && T4_PERIOD_RE.test(period); }
+function t4AssertPeriod(period) {
+  if (!t4ValidPeriod(period)) {
+    throw new Error(`期间「${period || '空'}」不是有效月份（需 2000-01 至 2099-12）。请重新选择月份后再操作`);
+  }
+  return period;
+}
+// 只保留键合规的锁定项；坏键一旦进过 localStorage 会永久堵死本浏览器的保存。
+function t4SanePeriodLocks(locks) {
+  const clean = {}; const dropped = [];
+  Object.keys(locks || {}).forEach(k => {
+    if (t4ValidPeriod(k)) clean[k] = !!locks[k]; else dropped.push(k);
+  });
+  return { clean, dropped };
+}
 const T4 = { period: new Date().toISOString().slice(0, 7), data: {}, cfg: {}, editCh: 'tmall', imp: null, sumDate: '', sumScope: 'income', viewFrom: '', viewTo: '', mgmtFrom: '', mgmtTo: '', sheetMode: 'tree', treeCollapsed: {}, projFilter: 'all', dayCh: 'tmall',
   mail: { list: [], status: null, loaded: false, loading: false, result: null, subject: '', body: '' } };
 
@@ -391,9 +410,17 @@ function t4ApplyPeriod(doc) {
 }
 function t4ViewDocument(source = T4_SERVER_DOCUMENT) {
   const doc = window.T4Shared.clone(source || window.T4Shared.empty());
+  t4AssertPeriod(T4.period);
   doc.periods = doc.periods || {}; doc.periods[T4.period] = t4Clone(T4.data);
   doc.cfgByPeriod = doc.cfgByPeriod || {}; doc.cfgByPeriod[T4.period] = t4Clone(T4.cfg);
-  doc.periodLocks = t4Clone(T4.periodLocks || {});
+  const locks = t4SanePeriodLocks(T4.periodLocks);
+  if (locks.dropped.length) {
+    // 坏键只丢弃、不上传；同时修正内存与本地存储，避免下次保存又被拒。
+    T4.periodLocks = locks.clean;
+    try { localStorage.setItem(T4_LOCK_KEY, JSON.stringify(locks.clean)); } catch (e) {}
+    toast(`已清理无效的月份锁定记录：${locks.dropped.slice(0, 3).join('、')}`, 4200);
+  }
+  doc.periodLocks = t4Clone(locks.clean);
   doc.channels = t4ChOverrides();
   return doc;
 }
@@ -2061,7 +2088,9 @@ document.addEventListener('click', async e => {
 document.addEventListener('change', e => {
   if (e.target.id === 't4Period') {
     if (T4_SERVER_LOADING || T4_SERVER_SAVING) { e.target.value = T4.period; toast('正在同步，请稍后切换月份'); return; }
-    T4.period = e.target.value || T4.period; T4.imp = null; T4.allocImport = null; T4.viewFrom = ''; T4.viewTo = ''; T4.mgmtFrom = ''; T4.mgmtTo = ''; t4Go('overview');
+    const picked = e.target.value || T4.period;
+    if (!t4ValidPeriod(picked)) { e.target.value = T4.period; toast('期间需在 2000-01 至 2099-12 之间，请重新选择月份', 4200); return; }
+    T4.period = picked; T4.imp = null; T4.allocImport = null; T4.viewFrom = ''; T4.viewTo = ''; T4.mgmtFrom = ''; T4.mgmtTo = ''; t4Go('overview');
   }
   else if (e.target.dataset && e.target.dataset.t4rowchannel) {
     if (T4.imp) { T4.imp.channelOverrides ||= {}; T4.imp.channelOverrides[e.target.dataset.t4rowchannel] = e.target.value; }
