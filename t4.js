@@ -397,6 +397,21 @@ function t4AssertEditable() {
   if (T4_SERVER_LOADING || T4_SERVER_SAVING) throw new Error('正在同步，请稍后再操作');
   if (t4IsPeriodLocked()) throw new Error(`${T4.period} 已锁定，请先解锁该月再修改`);
 }
+function t4RequireServerReady() {
+  if (T4_SERVER_READY) return;
+  if (T4_SERVER_LOADING) throw new Error('共享数据正在加载，请稍后再试');
+  if (T4_SERVER_LAST_KEY.startsWith('error:')) {
+    throw new Error('共享数据未连接：请从星逸门户的财务中心入口进入并完成单点登录，本次修改未写入服务器');
+  }
+  throw new Error('共享数据未连接，本次修改未写入服务器');
+}
+function t4SyncStatus() {
+  if (T4_SERVER_READY) return '<span class="pill ok">共享服务器已连接</span>';
+  if (T4_SERVER_LOADING) return '<span class="pill mu">共享服务器连接中…</span>';
+  const retry = T4_SERVER_LAST_KEY.startsWith('error:')
+    ? '<button class="btn sm" data-t4act="retrySync">重新连接</button>' : '';
+  return `<span class="pill c">共享服务器未连接</span>${retry}`;
+}
 function t4ConfigForPeriod(doc, period) {
   const saved = (doc.cfgByPeriod || {})[period] || doc.cfg || {};
   const cfg = t4Clone(T4_CFG_DEFAULT);
@@ -476,6 +491,7 @@ async function t4LoadServer() {
   } catch (e) {
     T4_SERVER_LAST_KEY = `error:${Date.now()}`;
     toast(`共享数据未加载：${e.message || e}。当前仍是本机草稿，未标记为已同步`, 5200);
+    if (typeof CURS === 'string' && CURS === 't4-channels') go(CURS);
   } finally {
     T4_SERVER_LOADING = false;
     const picker = document.getElementById('t4Period');
@@ -1241,8 +1257,9 @@ function t4ChPickFile() {
     const file = input.files && input.files[0]; if (!file) return;
     try {
       if (T4_SERVER_SAVING || T4_SERVER_LOADING) throw new Error('正在同步，请稍后再导入');
+      t4RequireServerReady();
       const r = t4ChApplySheets(await XLSXLite.readSheets(file));
-      if (T4_SERVER_READY) await t4SaveServer(true);
+      await t4SaveServer(true);
       t4Load(); t4Go('channels');
       const warn = r.bad.length ? `；注意：${r.bad.slice(0, 3).join('、')}` : '';
       toast(`已识别 ${r.sheets} 张渠道表：新增渠道 ${r.added}、映射销售渠道 ${r.mapped}、改名 ${r.renamed}、调事业部 ${r.moved}${warn}`, 5600);
@@ -1741,7 +1758,7 @@ S['t4-channels'] = () => {
     ? card(T4.chField, table([{t:'销售渠道'},{t:'归属事业部'},{t:'渠道汇总'},{t:T4.chField},{t:'操作'}],
       t4ChFieldRows(T4.chField).map(r => { const c = T4_CHM[r.channel]; return [H(r.source), t4BuPill(c.bu), H(c.n), H(r.value), actions(c)]; })))
     : card(`渠道清单（${T4_CH.length} 个）`, table([{t:'渠道ID'},{t:'归属事业部'},{t:'渠道汇总'},{t:'关联销售渠道'},{t:'来源'},{t:'操作'}], rows));
-  return head('T4 渠道列表', `当前 ${T4_CH.length} 个渠道。自动识别表头、列顺序和 xlsx 内的渠道工作表；新增渠道自动接入录入、明细与汇总。每个附加字段生成同名页签。`, '工具箱 · T4',
+  return head('T4 渠道列表', `当前 ${T4_CH.length} 个渠道。自动识别表头、列顺序和 xlsx 内的渠道工作表；新增渠道自动接入录入、明细与汇总。每个附加字段生成同名页签。`, `工具箱 · T4　${t4SyncStatus()}`,
     '<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="chTemplate">下载当前列表</button><button class="btn pri" data-t4act="chPick">导入渠道列表</button>')
     + tabs + content
     + '<div class="note"><b>导入规则：</b>至少包含「销售渠道」「渠道名称」或「渠道汇总」之一；支持每行一个渠道，也支持每列一个渠道。销售渠道按「渠道汇总」归集；未填汇总时按渠道名称匹配或新增。已有渠道未填事业部时保留原归属，新渠道未填时归经销并提示。附加字段按销售渠道保存，仅供查看；再次导入只更新文件中提供的渠道和字段，未提供的内容及历史损益保留。事业部支持大电商、拼多多、瑞眠、橘农、经销。</div>';
@@ -2016,9 +2033,10 @@ document.addEventListener('click', async e => {
   if (tree) { const id = tree.dataset.t4tree; T4.treeCollapsed[id] = !T4.treeCollapsed[id]; t4Go('sheet'); return; }
   const chdel = e.target.closest('[data-t4chdel]');
   if (chdel) {
+    try { t4RequireServerReady(); } catch (err) { toast(err.message, 5200); return; }
     t4SaveChOverrides(t4ChOverrides().filter(x => x.id !== chdel.dataset.t4chdel));
     t4RebuildChannels();
-    try { if (T4_SERVER_READY) await t4SaveServer(true); t4Load(); toast('已移除自定义渠道（历史数据保留）'); t4Go('channels'); }
+    try { await t4SaveServer(true); t4Load(); toast('已移除自定义渠道（历史数据保留）'); t4Go('channels'); }
     catch (err) { toast(`渠道未同步：${err.message}`, 5200); }
     return;
   }

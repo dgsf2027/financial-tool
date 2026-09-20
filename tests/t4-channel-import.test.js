@@ -23,6 +23,16 @@ test('sales-channel-only headers create a working channel without a summary colu
   assert.equal(a.run("T4_CHM[t4ResolveChannel('新店')].files[0].k"), 'daily');
 });
 
+test('channel mutations require a connected shared workspace', () => {
+  const a = app();
+  assert.throws(() => a.run('t4RequireServerReady()'), /共享数据未连接/);
+  a.run("T4_SERVER_LAST_KEY = 'error:401'");
+  assert.throws(() => a.run('t4RequireServerReady()'), /星逸门户/);
+  assert.match(a.run('t4SyncStatus()'), /共享服务器未连接/);
+  a.run('T4_SERVER_READY = true');
+  assert.match(a.run('t4SyncStatus()'), /共享服务器已连接/);
+});
+
 test('new channels repeated within a file or across imports keep one stable identity', () => {
   const a = app();
   const rows = [['渠道名称', '事业部'], ['新店', '大电商'], ['新店', '大电商']];
