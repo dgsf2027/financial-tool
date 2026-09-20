@@ -26,6 +26,23 @@ test('sales-channel-only headers create a working channel without a summary colu
   assert.equal(a.run("T4_CHM[t4ResolveChannel('新店')].files[0].k"), 'daily');
 });
 
+test('a roster with repeated summary IDs keeps every source shop visible after import', () => {
+  const a = app();
+  const result = a.apply([
+    ['渠道ID', '销售渠道', '归属事业部', '渠道汇总', '编号'],
+    ['gift', '分销-礼品甲', '经销事业部', '分销-澳乐礼品单', '0001'],
+    ['gift', '分销-礼品乙', '经销事业部', '分销-澳乐礼品单', '0002'],
+    ['cus1', '拼多多-橘农官方旗舰店', '橘农事业部', '拼多多-橘农官方旗舰店', '0003'],
+  ]);
+  assert.equal(result.imported, 3);
+  assert.equal(a.run('t4ChSourceRows().length'), 3);
+  assert.deepEqual(a.json("t4ChSourceRows().filter(r => r.source.startsWith('分销-礼品')).map(r => [r.source, r.target, r.fields[0].value])"), [
+    ['分销-礼品甲', '分销-澳乐礼品单', '0001'],
+    ['分销-礼品乙', '分销-澳乐礼品单', '0002'],
+  ]);
+  assert.match(a.run("S['t4-channels']()"), /销售渠道/);
+});
+
 test('channel mutations require a connected shared workspace', () => {
   const a = app();
   assert.throws(() => a.run('t4RequireServerReady()'), /共享数据未连接/);

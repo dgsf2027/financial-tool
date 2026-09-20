@@ -1176,6 +1176,15 @@ function t4ChFieldRows(name) {
     return field ? [{ channel: c.id, source: r.source, value: field.value }] : [];
   }));
 }
+function t4ChSourceRows() {
+  const imported = T4_CH.some(c => (c.details || []).length);
+  return T4_CH.flatMap(c => {
+    const details = c.details || [];
+    if (details.length) return details.map(r => ({ channel: c.id, source: r.source, target: c.n, fields: r.fields || [] }));
+    if (imported) return [];
+    return [{ channel: c.id, source: c.n, target: c.n, fields: [] }];
+  });
+}
 function t4ChTemplateRows() {
   const extra = t4ChExtraFields();
   const sources = new Set([...Object.keys(T4_SOURCE_CHANNEL_MAP), ...T4_CH.flatMap(c =>
@@ -1278,9 +1287,9 @@ function t4ChPickFile() {
       t4RequireServerReady();
       const r = t4ChApplySheets(await XLSXLite.readSheets(file));
       await t4SaveServer(true);
-      t4Load(); t4Go('channels');
+      t4Load(); T4.chField = '__sources'; t4Go('channels');
       const warn = r.bad.length ? `；注意：${r.bad.slice(0, 3).join('、')}` : '';
-      toast(`已识别 ${r.sheets} 张渠道表：新增渠道 ${r.added}、映射销售渠道 ${r.mapped}、改名 ${r.renamed}、调事业部 ${r.moved}${warn}`, 5600);
+      toast(`已识别 ${r.sheets} 张渠道表：读取销售渠道 ${r.imported} 条，新增归集渠道 ${r.added}、映射销售渠道 ${r.mapped}、改名 ${r.renamed}、调事业部 ${r.moved}${warn}`, 5600);
     } catch (e) { toast(`渠道导入未完成：${e.message || e}`, 5000); }
   };
   input.click();
@@ -1763,20 +1772,25 @@ S['t4-mgmt'] = () => {
 S['t4-channels'] = () => {
   t4Load();
   const fields = t4ChExtraFields();
-  if (!fields.includes(T4.chField)) T4.chField = '';
-  const tabs = fields.length ? `<div class="tabs t4-channel-tabs" aria-label="渠道列表页面">${['', ...fields].map(name =>
-    `<button type="button" class="${T4.chField === name ? 'on' : ''}" data-t4chfield="${H(name)}" aria-pressed="${T4.chField === name}">${H(name || '渠道清单')}</button>`).join('')}</div>` : '';
+  const sourceRows = t4ChSourceRows();
+  if (T4.chField !== '__sources' && !fields.includes(T4.chField)) T4.chField = '';
+  const tabs = (sourceRows.length || fields.length) ? `<div class="tabs t4-channel-tabs" aria-label="渠道列表页面">${['', ...(sourceRows.length ? ['__sources'] : []), ...fields].map(name =>
+    `<button type="button" class="${T4.chField === name ? 'on' : ''}" data-t4chfield="${H(name)}" aria-pressed="${T4.chField === name}">${H(name === '__sources' ? '销售渠道' : name || '渠道清单')}</button>`).join('')}</div>` : '';
   const actions = c => `<button class="btn sm" data-t4go="man:${H(c.id)}">录入</button> <button class="btn sm" data-t4go="chday:${H(c.id)}">明细</button>`;
   const rows = T4_CH.map(c => [
     `<span class="mono">${H(c.id)}</span>`, t4BuPill(c.bu), `<b>${H(c.n)}</b>`,
     (c.aliases || []).map(H).join('、') || '<span class="mut">—</span>',
     c.custom ? pill('自定义', 'in') : pill('内置', 'mu'),
     actions(c) + (c.custom ? ` <button class="btn sm" data-t4chdel="${H(c.id)}">移除</button>` : '')]);
-  const content = T4.chField
+  const content = T4.chField === '__sources'
+    ? card(`销售渠道明细（${sourceRows.length} 条）`, table([{t:'销售渠道'},{t:'归属事业部'},{t:'渠道汇总'},{t:'编号'},{t:'操作'}],
+      sourceRows.map(r => { const c = T4_CHM[r.channel]; const no = (r.fields || []).find(f => t4ChClean(f.name) === '编号'); return [H(r.source), t4BuPill(c.bu), H(r.target), H(no ? no.value : ''), actions(c)]; })))
+    : T4.chField
     ? card(T4.chField, table([{t:'销售渠道'},{t:'归属事业部'},{t:'渠道汇总'},{t:T4.chField},{t:'操作'}],
       t4ChFieldRows(T4.chField).map(r => { const c = T4_CHM[r.channel]; return [H(r.source), t4BuPill(c.bu), H(c.n), H(r.value), actions(c)]; })))
     : card(`渠道清单（${T4_CH.length} 个）`, table([{t:'渠道ID'},{t:'归属事业部'},{t:'渠道汇总'},{t:'关联销售渠道'},{t:'来源'},{t:'操作'}], rows));
-  return head('T4 渠道列表', `当前 ${T4_CH.length} 个渠道。自动识别表头、列顺序和 xlsx 内的渠道工作表；新增渠道自动接入录入、明细与汇总。每个附加字段生成同名页签。`, '工具箱 · T4',
+  const sourceCount = sourceRows.length;
+  return head('T4 渠道列表', `当前 ${T4_CH.length} 个归集渠道${sourceCount ? `，已关联 ${sourceCount} 个销售渠道` : ''}。自动识别表头、列顺序和 xlsx 内的渠道工作表；新增渠道自动接入录入、明细与汇总。每个附加字段生成同名页签。`, '工具箱 · T4',
     t4SyncStatus() + '<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="chTemplate">下载当前列表</button><button class="btn pri" data-t4act="chPick">导入渠道列表</button>')
     + (T4_SERVER_ERROR && T4_SERVER_ERROR.status === 401 ? '<div class="note w">点击“登录财务中心”，进入门户登录后点“财务中心”，即可回到当前网址继续保存。</div>' : '')
     + tabs + content
