@@ -36,6 +36,7 @@ const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.s
 const T4_SYNC_PORT = Number(process.env.T4_SYNC_PORT || 8099);
 const T4_SYNC_HOST = String(process.env.T4_SYNC_HOST || '127.0.0.1');
 const PORTAL_SSO_BASE = String(process.env.T4_PORTAL_SSO_BASE || '').replace(/\/+$/, '');
+const PORTAL_PUBLIC_URL = String(process.env.T4_PORTAL_PUBLIC_URL || 'https://portal.vvaix.com/apps');
 const SESSION_SECRET = String(process.env.T4_SESSION_SECRET || '');
 const PROXY_SECRET = String(process.env.T4_PROXY_SECRET || '');
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
@@ -58,7 +59,7 @@ function signSession(payload) {
   const sig = crypto.createHmac('sha256', SESSION_SECRET).update(body).digest('base64url');
   return `${body}.${sig}`;
 }
-function sessionUser(req) {
+function sessionPayload(req) {
   if (!SESSION_SECRET) return null;
   const raw = String(req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith('t4_session='));
   if (!raw) return null;
@@ -71,8 +72,12 @@ function sessionUser(req) {
   try {
     const p = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
     if (!p.portalUid || !p.tenantId || !p.exp || p.exp < Date.now()) return null;
-    return `${p.tenantId}:${p.portalUid}`;
+    return p;
   } catch (_) { return null; }
+}
+function sessionUser(req) {
+  const p = sessionPayload(req);
+  return p ? `${p.tenantId}:${p.portalUid}` : null;
 }
 
 async function portalVerifyAuthCode(authCode, appId, tenantId) {
@@ -249,6 +254,17 @@ const server = http.createServer((req, res) => {
   }
 
   // 门户 ssoProtocol=1 的回调；未配置密钥/门户地址时会明确失败，不降级成匿名访问。
+  if (urlPath === '/api/session' && req.method === 'GET') {
+    const user = sessionPayload(req);
+    res.setHeader('Cache-Control', 'no-store');
+    return sendJson(res, 200, { authenticated: !!user, ...(user ? { name: String(user.name || '已登录用户') } : {}), loginUrl: '/sso/login' });
+  }
+  if (urlPath === '/sso/login' && req.method === 'GET') {
+    // The portal signs an auth_code when the user chooses its finance card.
+    // Its existing account and system permissions remain the source of access.
+    res.writeHead(302, { Location: PORTAL_PUBLIC_URL, 'Cache-Control': 'no-store' });
+    return res.end();
+  }
   if (urlPath === '/sso/callback' && req.method === 'GET') {
     handleSsoCallback(req, res).catch(e => sendText(res, 500, 'SSO 回调失败：' + e.message));
     return;

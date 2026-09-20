@@ -379,6 +379,7 @@ function t4Clone(x) { return JSON.parse(JSON.stringify(x)); }
 let T4_SERVER_VERSION = null;
 let T4_SERVER_LOADING = false;
 let T4_SERVER_LAST_KEY = '';
+let T4_SERVER_ERROR = null;
 let T4_SERVER_READY = false;
 let T4_SERVER_DOCUMENT = null;
 let T4_SERVER_BASELINE = null;
@@ -398,19 +399,25 @@ function t4AssertEditable() {
   if (t4IsPeriodLocked()) throw new Error(`${T4.period} 已锁定，请先解锁该月再修改`);
 }
 function t4RequireServerReady() {
+  if (T4_SERVER_LOADING || T4_SERVER_SAVING) throw new Error('正在同步，请稍后再操作');
+  if (T4_SERVER_ERROR && T4_SERVER_ERROR.status === 401) {
+    throw new Error('请先登录财务中心，本次修改未写入服务器');
+  }
   if (T4_SERVER_READY) return;
-  if (T4_SERVER_LOADING) throw new Error('共享数据正在加载，请稍后再试');
   if (T4_SERVER_LAST_KEY.startsWith('error:')) {
-    throw new Error('共享数据未连接：请从星逸门户的财务中心入口进入并完成单点登录，本次修改未写入服务器');
+    throw new Error('未能连接财务中心，请重新连接后再试，本次修改未写入服务器');
   }
   throw new Error('共享数据未连接，本次修改未写入服务器');
 }
 function t4SyncStatus() {
-  if (T4_SERVER_READY) return '<span class="pill ok">共享服务器已连接</span>';
-  if (T4_SERVER_LOADING) return '<span class="pill mu">共享服务器连接中…</span>';
+  if (T4_SERVER_LOADING) return pill('正在连接财务中心…', 'mu');
+  if (T4_SERVER_ERROR && T4_SERVER_ERROR.status === 401) {
+    return pill('请先登录财务中心', 'wa') + '<a href="/sso/login" class="btn sm pri">登录财务中心</a>';
+  }
+  if (T4_SERVER_READY) return pill('已连接财务中心，可保存', 'ok');
   const retry = T4_SERVER_LAST_KEY.startsWith('error:')
     ? '<button class="btn sm" data-t4act="retrySync">重新连接</button>' : '';
-  return `<span class="pill c">共享服务器未连接</span>${retry}`;
+  return pill('未能连接财务中心', 'wa') + retry;
 }
 function t4ConfigForPeriod(doc, period) {
   const saved = (doc.cfgByPeriod || {})[period] || doc.cfg || {};
@@ -449,6 +456,7 @@ function t4EntityKey() {
 async function t4LoadServer() {
   if (T4_SERVER_LOADING || T4_SERVER_READY || T4_SERVER_LAST_KEY.startsWith('error:')) return;
   T4_SERVER_LOADING = true;
+  T4_SERVER_ERROR = null;
   try {
     const x = await window.T4Shared.load();
     T4_SERVER_VERSION = x.version; T4_SERVER_DOCUMENT = x.document || window.T4Shared.empty();
@@ -487,13 +495,14 @@ async function t4LoadServer() {
     t4ApplyPeriod(T4_SERVER_DOCUMENT);
     T4_SERVER_READY = true;
     T4_SERVER_LAST_KEY = '';
-    if (typeof CURS === 'string' && CURS.startsWith('t4')) go(CURS);
   } catch (e) {
+    T4_SERVER_ERROR = e;
     T4_SERVER_LAST_KEY = `error:${Date.now()}`;
+    if (e.status === 401 && typeof window.financeSessionExpired === 'function') window.financeSessionExpired();
     toast(`共享数据未加载：${e.message || e}。当前仍是本机草稿，未标记为已同步`, 5200);
-    if (typeof CURS === 'string' && CURS === 't4-channels') go(CURS);
   } finally {
     T4_SERVER_LOADING = false;
+    if (typeof CURS === 'string' && CURS.startsWith('t4') && (T4_SERVER_READY || CURS === 't4-channels')) go(CURS);
     const picker = document.getElementById('t4Period');
     if (picker) picker.disabled = T4_SERVER_SAVING;
   }
@@ -532,8 +541,15 @@ async function t4SaveServer(lockOnly = false) {
     const cfgs = t4Stored(T4_PERIOD_CFG_KEY, {}); cfgs[T4.period] = T4.cfg;
     localStorage.setItem(T4_PERIOD_CFG_KEY, JSON.stringify(cfgs));
     localStorage.setItem(T4_LOCK_KEY, JSON.stringify(T4.periodLocks));
+    T4_SERVER_ERROR = null;
     return x;
   } catch (err) {
+    if (err.status === 401) {
+      // Keep the loaded document and in-memory edits when the session expires.
+      // Reloading local storage here would discard drafts that have not been saved yet.
+      T4_SERVER_ERROR = err;
+      if (typeof window.financeSessionExpired === 'function') window.financeSessionExpired();
+    }
     if (err.code === 'field_conflict' && err.response && err.response.conflicts) {
       const labels = Object.fromEntries([...T4_CFG_FIELDS, ...T4_MGMT_FIELDS,
         ...T4_INPUTS.map(f => [f.k, f.n]), ['cfgByPeriod', '月度参数'], ['periods', '日数据'],
@@ -549,6 +565,7 @@ async function t4SaveServer(lockOnly = false) {
   } finally {
     T4_SERVER_SAVING = false;
     controls.forEach(({ input, disabled }) => { input.disabled = disabled; });
+    if (T4_SERVER_ERROR && T4_SERVER_ERROR.status === 401 && typeof CURS === 'string' && CURS === 't4-channels') go(CURS);
   }
 }
 function t4Load() {
@@ -1252,6 +1269,7 @@ function t4ChApplySheets(sheets) {
 }
 
 function t4ChPickFile() {
+  try { t4RequireServerReady(); } catch (err) { toast(err.message, 5200); return; }
   const input = document.createElement('input'); input.type = 'file'; input.accept = '.xlsx,.xls,.csv,.tsv,.txt';
   input.onchange = async () => {
     const file = input.files && input.files[0]; if (!file) return;
@@ -1758,8 +1776,9 @@ S['t4-channels'] = () => {
     ? card(T4.chField, table([{t:'销售渠道'},{t:'归属事业部'},{t:'渠道汇总'},{t:T4.chField},{t:'操作'}],
       t4ChFieldRows(T4.chField).map(r => { const c = T4_CHM[r.channel]; return [H(r.source), t4BuPill(c.bu), H(c.n), H(r.value), actions(c)]; })))
     : card(`渠道清单（${T4_CH.length} 个）`, table([{t:'渠道ID'},{t:'归属事业部'},{t:'渠道汇总'},{t:'关联销售渠道'},{t:'来源'},{t:'操作'}], rows));
-  return head('T4 渠道列表', `当前 ${T4_CH.length} 个渠道。自动识别表头、列顺序和 xlsx 内的渠道工作表；新增渠道自动接入录入、明细与汇总。每个附加字段生成同名页签。`, `工具箱 · T4　${t4SyncStatus()}`,
-    '<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="chTemplate">下载当前列表</button><button class="btn pri" data-t4act="chPick">导入渠道列表</button>')
+  return head('T4 渠道列表', `当前 ${T4_CH.length} 个渠道。自动识别表头、列顺序和 xlsx 内的渠道工作表；新增渠道自动接入录入、明细与汇总。每个附加字段生成同名页签。`, '工具箱 · T4',
+    t4SyncStatus() + '<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="chTemplate">下载当前列表</button><button class="btn pri" data-t4act="chPick">导入渠道列表</button>')
+    + (T4_SERVER_ERROR && T4_SERVER_ERROR.status === 401 ? '<div class="note w">点击“登录财务中心”，进入门户登录后点“财务中心”，即可回到当前网址继续保存。</div>' : '')
     + tabs + content
     + '<div class="note"><b>导入规则：</b>至少包含「销售渠道」「渠道名称」或「渠道汇总」之一；支持每行一个渠道，也支持每列一个渠道。销售渠道按「渠道汇总」归集；未填汇总时按渠道名称匹配或新增。已有渠道未填事业部时保留原归属，新渠道未填时归经销并提示。附加字段按销售渠道保存，仅供查看；再次导入只更新文件中提供的渠道和字段，未提供的内容及历史损益保留。事业部支持大电商、拼多多、瑞眠、橘农、经销。</div>';
 };
@@ -2063,7 +2082,7 @@ document.addEventListener('click', async e => {
     return;
   }
   const a = e.target.closest('[data-t4act]'); if (!a) return;
-  if (a.dataset.t4act === 'retrySync') { T4_SERVER_LAST_KEY = ''; await t4LoadServer(); t4Go('overview'); }
+  if (a.dataset.t4act === 'retrySync') { T4_SERVER_LAST_KEY = ''; await t4LoadServer(); }
   else if (a.dataset.t4act === 'migrateDraft') {
     try {
       t4AssertEditable();

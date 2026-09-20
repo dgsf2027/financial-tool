@@ -8,8 +8,11 @@ function app(seed = {}) {
   const storage = new Map(Object.entries(seed).map(([k, v]) => [k, JSON.stringify(v)]));
   const context = vm.createContext({
     console, localStorage: { getItem: k => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, v) },
-    document: { addEventListener() {} }, window: {}, S: {},
+    document: { addEventListener() {}, getElementById() { return null; } }, window: {}, S: {},
   });
+  const helpers = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8').split('/* ============ 系统结构')[0];
+  vm.runInContext(helpers, context);
+  vm.runInContext('toast = () => {};', context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 't4.js'), 'utf8'), context);
   return { run: code => vm.runInContext(code, context), storage,
     apply: rows => { context.rows = rows; return vm.runInContext('t4ChApplyRows(rows)', context); },
@@ -26,11 +29,125 @@ test('sales-channel-only headers create a working channel without a summary colu
 test('channel mutations require a connected shared workspace', () => {
   const a = app();
   assert.throws(() => a.run('t4RequireServerReady()'), /共享数据未连接/);
-  a.run("T4_SERVER_LAST_KEY = 'error:401'");
-  assert.throws(() => a.run('t4RequireServerReady()'), /星逸门户/);
-  assert.match(a.run('t4SyncStatus()'), /共享服务器未连接/);
+  a.run("T4_SERVER_LAST_KEY = 'error:network'");
+  assert.throws(() => a.run('t4RequireServerReady()'), /未能连接财务中心/);
+  assert.match(a.run('t4SyncStatus()'), /未能连接财务中心/);
   a.run('T4_SERVER_READY = true');
-  assert.match(a.run('t4SyncStatus()'), /共享服务器已连接/);
+  assert.match(a.run('t4SyncStatus()'), /已连接财务中心，可保存/);
+});
+
+test('channel mutations wait for an in-flight sync even after a workspace was loaded', () => {
+  const a = app();
+  a.run('T4_SERVER_READY = true; T4_SERVER_SAVING = true;');
+  assert.throws(() => a.run('t4RequireServerReady()'), /正在同步/);
+  a.run('T4_SERVER_SAVING = false; T4_SERVER_LOADING = true;');
+  assert.throws(() => a.run('t4RequireServerReady()'), /正在同步/);
+});
+
+test('an unauthenticated import click stops before opening the file picker', () => {
+  const a = app();
+  a.run(`
+    notices = []; toast = message => notices.push(message);
+    pickerOpened = false;
+    document.createElement = () => ({ click() { pickerOpened = true; } });
+    T4_SERVER_ERROR = { status: 401 };
+    t4ChPickFile();
+  `);
+  assert.equal(a.run('pickerOpened'), false);
+  assert.match(a.run('notices[0]'), /登录财务中心/);
+});
+
+test('a rejected workspace load renders the channel page after loading ends', async () => {
+  const a = app();
+  a.run(`
+    CURS = 't4-channels';
+    renders = [];
+    go = id => renders.push({ loading: T4_SERVER_LOADING, html: S[id]() });
+    window.T4Shared = { load: async () => { throw new Error('未完成门户登录'); } };
+  `);
+  await a.run('t4LoadServer()');
+  const renders = a.json('renders');
+  assert.equal(renders.length, 1);
+  assert.equal(renders[0].loading, false, 'failure must not leave the rendered page in its loading state');
+  assert.match(renders[0].html, /未能连接财务中心/);
+  assert.doesNotMatch(renders[0].html, /正在连接财务中心/);
+});
+
+test('the channel page renders its connection state and retry control as HTML', () => {
+  const a = app();
+  a.run("T4_SERVER_LAST_KEY = 'error:network';");
+  const html = a.run("S['t4-channels']()");
+  assert.match(html, /<span class="pill p-wa">未能连接财务中心<\/span>/);
+  assert.match(html, /<button class="btn sm" data-t4act="retrySync">重新连接<\/button>/);
+  assert.doesNotMatch(html, /&lt;(?:span|button)/);
+});
+
+test('an unauthenticated channel page offers a working login route instead of only retrying', async () => {
+  const a = app();
+  a.run(`
+    CURS = 't4-channels';
+    rendered = '';
+    go = id => { rendered = S[id](); };
+    sessionExpired = 0;
+    window.financeSessionExpired = () => { sessionExpired++; };
+    window.T4Shared = { load: async () => { const error = new Error('未完成门户登录'); error.status = 401; throw error; } };
+  `);
+  await a.run('t4LoadServer()');
+  const html = a.run('rendered');
+  assert.match(html, /请先登录财务中心/);
+  assert.match(html, /<a href="\/sso\/login" class="btn sm pri">登录财务中心<\/a>/);
+  assert.match(html, /登录后.*财务中心/);
+  assert.doesNotMatch(html, /data-t4act="retrySync"/);
+  assert.equal(a.run('sessionExpired'), 1);
+  assert.throws(() => a.run('t4RequireServerReady()'), /登录财务中心/);
+});
+
+test('a service outage remains a connection error without a login instruction', async () => {
+  const a = app();
+  a.run(`
+    CURS = 't4-channels';
+    rendered = '';
+    go = id => { rendered = S[id](); };
+    window.T4Shared = { load: async () => { const error = new Error('服务暂不可用'); error.status = 503; throw error; } };
+  `);
+  await a.run('t4LoadServer()');
+  const html = a.run('rendered');
+  assert.match(html, /未能连接财务中心/);
+  assert.match(html, /data-t4act="retrySync"/);
+  assert.doesNotMatch(html, /href="\/sso\/login"/);
+  assert.throws(() => a.run('t4RequireServerReady()'), /未能连接财务中心/);
+});
+
+test('an expired session during channel saving keeps drafts and renders a login action', async () => {
+  const a = app();
+  a.run(`
+    CURS = 't4-channels';
+    rendered = '';
+    go = id => { rendered = S[id](); };
+    document.querySelectorAll = () => [];
+    sessionExpired = 0;
+    window.financeSessionExpired = () => { sessionExpired++; };
+    window.T4Shared = {
+      clone: value => JSON.parse(JSON.stringify(value)),
+      empty: () => ({ periods: {}, cfg: {}, channels: [] }),
+      load: async () => ({ found: true, version: 1, document: { periods: {}, cfg: {}, channels: [] } }),
+      save: async () => { const error = new Error('会话已过期'); error.status = 401; throw error; }
+    };
+  `);
+  await a.run('t4LoadServer()');
+  a.run(`
+    T4.data.tmall[T4.period + '-01'] = { retailIncome: 321 };
+    T4.cfg.tmall.directLaborMonth = 654;
+    t4ChApplyRows([['销售渠道','归属事业部'],['待同步渠道','大电商']]);
+  `);
+  await assert.rejects(a.run('t4SaveServer(true)'), /会话已过期/);
+  assert.equal(a.run("T4.data.tmall[T4.period + '-01'].retailIncome"), 321);
+  assert.equal(a.run('T4.cfg.tmall.directLaborMonth'), 654);
+  assert.ok(a.run("t4ResolveChannel('待同步渠道')"));
+  assert.match(a.run('rendered'), /href="\/sso\/login"/);
+  assert.doesNotMatch(a.run('t4SyncStatus()'), /已连接财务中心/);
+  assert.equal(a.run('sessionExpired'), 1);
+  assert.throws(() => a.run('t4RequireServerReady()'), /登录财务中心/);
 });
 
 test('new channels repeated within a file or across imports keep one stable identity', () => {

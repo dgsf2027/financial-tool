@@ -1845,8 +1845,8 @@ $('themeBtn').addEventListener('click', () => {
   r.setAttribute('data-theme', (cur || (sys ? 'dark' : 'light')) === 'dark' ? 'light' : 'dark');
 });
 /* 返回星逸平台工作台。
-   优先用 URL 上的 ?from= （门户跳转时带过来），否则回退到本地门户地址。 */
-const PORTAL_FALLBACK = 'http://localhost:5173/apps';
+   优先用 URL 上的 ?from=，否则使用服务端配置的正式门户入口。 */
+const PORTAL_FALLBACK = '/sso/login';
 function portalUrl() {
   try {
     const from = new URLSearchParams(location.search).get('from');
@@ -1861,6 +1861,26 @@ $('backPortal').addEventListener('click', e => {
   e.preventDefault();
   location.href = portalUrl();
 });
+
+window.financeSessionExpired = function () {
+  $('uAv').textContent = '·'; $('uNm').textContent = '未登录'; $('uRl').textContent = '登录后可保存';
+  $('financeLogin').hidden = false;
+};
+async function loadFinanceSession() {
+  try {
+    const response = await fetch('/api/session', { cache: 'no-store' });
+    if (!response.ok) throw new Error('登录状态加载失败');
+    const session = await response.json();
+    if (!session.authenticated) { window.financeSessionExpired(); return; }
+    $('uAv').textContent = String(session.name || '已').slice(0, 1);
+    $('uNm').textContent = session.name || '已登录用户'; $('uRl').textContent = '已登录财务中心';
+    $('financeLogin').hidden = true;
+  } catch (_) {
+    window.financeSessionExpired();
+    $('uRl').textContent = '登录状态未能加载';
+  }
+}
+void loadFinanceSession();
 
 /* 启动 */
 try { useRuleSet(localStorage.getItem('fsc_cur_ent') || ''); } catch (e) { /* 忽略 */ }

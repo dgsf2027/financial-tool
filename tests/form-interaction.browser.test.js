@@ -10,7 +10,7 @@ try { ({ chromium } = require('playwright')); } catch (_) { /* Runtime stays dep
 let browser, server, baseURL;
 before(async () => {
   if (!chromium) return;
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: true, channel: process.env.PLAYWRIGHT_CHANNEL });
   server = http.createServer(async (req, res) => {
     const name = new URL(req.url, 'http://localhost').pathname;
     if (!/^\/(?:[\w-]+\.(?:js|css)|index\.html|lib\/[\w-]+\.js)?$/.test(name)) {
@@ -39,6 +39,7 @@ async function openPage(t, viewport) {
   page.on('pageerror', error => errors.push(error.message));
   t.after(() => assert.deepEqual(errors, [], 'no browser exceptions'));
   await page.route(/https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.abort());
+  await page.route('**/api/session', route => route.fulfill({ json: { authenticated: true, name: '测试同事', loginUrl: '/sso/login' } }));
   // Keep the real shared-workspace client; only the remote API is a fixture.
   let document = { periods: {}, cfg: { pdd_aole: { platformFeeRate: 0.05 } }, channels: [], periodLocks: { '2026-09': false } };
   let version = 1;
@@ -59,6 +60,38 @@ async function openPage(t, viewport) {
   await page.waitForFunction(() => T4_SERVER_READY && !T4_SERVER_LOADING);
   return page;
 }
+
+test('direct visitors see a usable login link after a workspace 401', { skip: !chromium }, async t => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  t.after(() => page.close());
+  await page.route(/https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.abort());
+  await page.route('**/api/session', route => route.fulfill({ json: { authenticated: false, loginUrl: '/sso/login' } }));
+  await page.route('**/api/t4/workspace', route => route.fulfill({ status: 401, body: '需要门户登录' }));
+  await page.goto(baseURL, { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => go('t4-channels'));
+  await page.waitForFunction(() => !T4_SERVER_LOADING && T4_SERVER_LAST_KEY.startsWith('error:'));
+  assert.equal(await page.locator('#uNm').innerText(), '未登录');
+  const view = await page.locator('#view').innerText();
+  assert.match(view, /请先登录财务中心/);
+  assert.doesNotMatch(view, /<span|连接中/);
+  assert.equal(await page.locator('#view a[href="/sso/login"]').count(), 1);
+  let chosenFile = false;
+  page.on('filechooser', async chooser => { chosenFile = true; await chooser.setFiles([]); });
+  await page.getByRole('button', { name: '导入渠道列表', exact: true }).click();
+  // The guard must run before opening the picker so login failure is visible immediately.
+  assert.equal(chosenFile, false);
+  assert.match(await page.locator('#toast').innerText(), /登录/);
+  await page.screenshot({ path: '/tmp/finance-login-required.png', fullPage: true });
+});
+
+test('an authenticated colleague sees their own name and no login button', { skip: !chromium }, async t => {
+  const page = await openPage(t, { width: 1440, height: 900 });
+  await page.waitForFunction(() => document.getElementById('uNm').textContent === '测试同事');
+  assert.equal(await page.locator('#financeLogin').isVisible(), false);
+  await page.evaluate(() => go('t4-channels'));
+  assert.match(await page.locator('#view').innerText(), /已连接财务中心，可保存/);
+  assert.doesNotMatch(await page.locator('#view').innerText(), /<span/);
+});
 
 for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
   test(`T4 parameter saves and rule edits retain the current position (${viewport.width}px)`, { skip: !chromium && 'Install Playwright to run browser interaction tests' }, async t => {

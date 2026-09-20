@@ -18,6 +18,14 @@ node --test tests/form-interaction.browser.test.js
 
 未提供 Playwright 时，浏览器测试会明确标记为跳过。测试使用临时本地静态服务器、独立浏览器会话和模拟共享 API，不访问线上数据。
 
+`login-channel.browser.test.js` 另行启动真实 Node 网关和 Python 数据服务（代理鉴权模式），使用临时 SQLite 数据库与两个独立浏览器上下文，验证登录回调后 xlsx 导入对另一同事可见。只有门户的授权码回验为测试替身，不使用生产账号或数据。运行两套浏览器测试：
+
+```sh
+node --test tests/*.browser.test.js
+```
+
+如已安装完整 Chromium 而非 Headless Shell，可设置 `PLAYWRIGHT_CHANNEL=chromium` 使用该浏览器。
+
 同一页面调用 `go(id)` 默认保留操作位置；打开新的编辑对象或切换向导步骤时，使用 `go(id, { resetScroll: true })`。不同页面之间的导航默认回到顶部。
 
 T4 渠道导入回归覆盖：表头和列顺序变化、横向清单、多工作表、新增渠道去重、附加字段页签、模板回导，以及共享保存后另一客户端读取。浏览器用真实 xlsx 上传检查桌面和手机端；测试数据仅进入模拟共享 API。

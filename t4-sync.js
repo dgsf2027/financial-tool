@@ -68,7 +68,7 @@
       // 服务端按路径校验拒收时只回一句英文，用户看不出该改什么。
       : x.error === 'invalid change path' ? '数据结构不被共享存储接受（多为期间月份无效或本地遗留了无效的月份锁定）。本次输入已保留；请确认月份在 2000-01 至 2099-12 之间后重试'
       : status === 401 ? '未完成门户登录' : x.error || `保存失败 (${status})`;
-    const e = new Error(message); e.code = x.error; e.response = x; return e;
+    const e = new Error(message); e.status = status; e.code = x.error; e.response = x; return e;
   }
   async function read() {
     const r = await fetch('/api/t4/workspace', { cache: 'no-store' });
