@@ -128,7 +128,7 @@ function t1LoadAcc() {
   const init = T1_PRESET.map((p, i) => ({ id: 'B' + String(i + 1).padStart(3, '0'), ent: p[0], name: p[1], type: p[2], no: p[3] || '', on: 1 }));
   t1SaveAcc(init); return init;
 }
-function t1SaveAcc(a) { try { localStorage.setItem(T1_ACC_KEY, JSON.stringify(a)); } catch (e) { toast('账户台账保存失败'); } }
+function t1SaveAcc(a) { try { localStorage.setItem(T1_ACC_KEY, JSON.stringify(a)); return true; } catch (e) { toast('账户台账保存失败'); return false; } }
 let T1_ACC = t1LoadAcc();
 
 function t1LoadCfg() {
@@ -138,11 +138,11 @@ function t1LoadCfg() {
   } catch (e) { /* 忽略 */ }
   return { ratio: 1.5, rateTh: 10, fixed: { ...T1_FIXED } };
 }
-function t1SaveCfg(c) { try { localStorage.setItem(T1_CFG_KEY, JSON.stringify(c)); } catch (e) { /* 忽略 */ } }
+function t1SaveCfg(c) { try { localStorage.setItem(T1_CFG_KEY, JSON.stringify(c)); return true; } catch (e) { toast('配置保存失败'); return false; } }
 let T1_CFG = t1LoadCfg();
 
 function t1LoadDay() { try { return JSON.parse(localStorage.getItem(T1_DAY_KEY) || '{}'); } catch (e) { return {}; } }
-function t1SaveDay(d) { try { localStorage.setItem(T1_DAY_KEY, JSON.stringify(d)); } catch (e) { toast('余额保存失败'); } }
+function t1SaveDay(d) { try { localStorage.setItem(T1_DAY_KEY, JSON.stringify(d)); return true; } catch (e) { toast('余额保存失败'); return false; } }
 
 const t1Prev = date => {
   const all = Object.keys(t1LoadDay()).filter(d => d < date).sort();
@@ -212,25 +212,31 @@ function t1NoMatch(a, b) {
   const x = t1NoKey(a), y = t1NoKey(b);
   if (x.length < 6 || y.length < 6) return false;
   if (x === y) return true;
+  // Fuzzy matching is only safe when one side is explicitly masked.
+  if (!/[*＊]/.test(String(a)) && !/[*＊]/.test(String(b))) return false;
   return x.slice(0, 4) === y.slice(0, 4) && x.slice(-4) === y.slice(-4);
 }
 /** 按账号找在管账户（T2 上传文件后靠这个自动认账户） */
 function t1FindAccByNo(no) {
   if (!no) return null;
-  return T1_ACC.find(a => a.on && a.no && t1NoMatch(a.no, no)) || null;
+  const matches = T1_ACC.filter(a => a.on && a.no && t1NoMatch(a.no, no));
+  if (matches.length <= 1) return matches[0] || null;
+  return { ambiguous: true, candidates: matches.map(a => a.id) };
 }
 /** 把账号写进某个账户（T2 认不出账户时，用户当场绑定，下次就自动了） */
 function t1BindAcctNo(accId, no) {
   const a = t1AccById(accId);
   if (!a || !no) return false;
-  a.no = String(no).trim(); t1SaveAcc(T1_ACC); return true;
+  const old = a.no; a.no = String(no).trim();
+  if (t1SaveAcc(T1_ACC)) return true;
+  a.no = old; return false;
 }
 
 /* 余额来源留痕：哪些余额是 T2 流水带进来的，T1 界面上要标出来，
    否则用户分不清哪个数是自己抄的、哪个是机器填的。 */
 const T1_SRC_KEY = 'fsc_t1_balsrc_v1';
 function t1LoadSrc() { try { return JSON.parse(localStorage.getItem(T1_SRC_KEY) || '{}'); } catch (e) { return {}; } }
-function t1SaveSrc(s) { try { localStorage.setItem(T1_SRC_KEY, JSON.stringify(s)); } catch (e) { /* 忽略 */ } }
+function t1SaveSrc(s) { try { localStorage.setItem(T1_SRC_KEY, JSON.stringify(s)); return true; } catch (e) { toast('余额来源保存失败'); return false; } }
 
 /**
  * 把某账户某天的余额写进 T1。
@@ -241,7 +247,7 @@ function t1SaveSrc(s) { try { localStorage.setItem(T1_SRC_KEY, JSON.stringify(s)
 function t1PutBalance(accId, date, val, from, force) {
   const acc = t1AccById(accId);
   if (!acc) return { ok: false, reason: '账户不存在：' + accId };
-  if (!date || isNaN(Number(val))) return { ok: false, reason: '日期或金额无效' };
+  if (!date || !Number.isFinite(Number(val))) return { ok: false, reason: '日期或金额无效' };
   const day = t1LoadDay();
   const d = day[date] || (day[date] = {});
   const old = d[accId];
@@ -249,10 +255,15 @@ function t1PutBalance(accId, date, val, from, force) {
     return { ok: false, conflict: true, old, val };
   }
   d[accId] = Number(val);
-  t1SaveDay(day);
+  if (!t1SaveDay(day)) return { ok: false, reason: '余额保存失败' };
   const src = t1LoadSrc();
   (src[date] || (src[date] = {}))[accId] = from || 'T2';
-  t1SaveSrc(src);
+  if (!t1SaveSrc(src)) {
+    if (old === undefined) delete d[accId]; else d[accId] = old;
+    if (!Object.keys(d).length) delete day[date];
+    t1SaveDay(day);
+    return { ok: false, reason: '余额来源保存失败' };
+  }
   return { ok: true, val: Number(val) };
 }
 /** 该余额是不是 T2 带进来的 */
@@ -561,7 +572,7 @@ function t1ImpApply() {
   const im = T1.imp;
   const files = (im.files || []).filter(t1ImpReady);
   let seq = t1NextSeq();
-  let nAdd = 0, nUpd = 0, nb = 0, nt = 0, off = 0, nf = 0;
+  let nAdd = 0, nUpd = 0, nb = 0, nt = 0, off = 0, nf = 0, nFail = 0;
   const allKeys = new Set();
 
   files.forEach(f => {
@@ -592,12 +603,12 @@ function t1ImpApply() {
     // 余额：导入的表是用户自己给的口径，直接写；来源标 T1导入，跟 T2 流水分得开
     plan.bals.forEach(b => {
       const id = idOf[b.key]; if (!id) return;
-      if (t1PutBalance(id, b.date, b.val, 'T1导入', 1).ok) nb++;
+      if (t1PutBalance(id, b.date, b.val, 'T1导入', 1).ok) nb++; else nFail++;
     });
     // 流水明细：和 T2 转换共用同一份留存（t1PutTxns 同日整天替换），重导同一份文件不会翻倍
     const txnByAcc = {};
     plan.txns.forEach(x => { const id = idOf[x.key]; if (id) (txnByAcc[id] = txnByAcc[id] || []).push(x); });
-    Object.keys(txnByAcc).forEach(id => { nt += t1PutTxns(id, f.fileName, txnByAcc[id]); });
+    Object.keys(txnByAcc).forEach(id => { const saved = t1PutTxns(id, f.fileName, txnByAcc[id]); nt += saved; if (!saved) nFail++; });
     nf++;
   });
 
@@ -607,7 +618,12 @@ function t1ImpApply() {
       if (a.on && !allKeys.has(t1Norm(a.ent) + '' + t1Norm(a.name))) { a.on = 0; off++; }
     });
   }
-  t1SaveAcc(T1_ACC); t1SaveCfg(T1_CFG);
+  const accSaved = t1SaveAcc(T1_ACC), cfgSaved = t1SaveCfg(T1_CFG);
+  if (!accSaved || !cfgSaved) nFail++;
+  if (nFail) {
+    toast(`${nf} 份文件已处理，但有 ${nFail} 项没有保存成功；导入草稿已保留，请修复存储后重试`, 5200);
+    return;
+  }
 
   T1.imp = null;
   toast(`${nf} 份文件导入完成：新增 ${nAdd} 户、更新 ${nUpd} 户`
@@ -1091,7 +1107,8 @@ document.addEventListener('click', e => {
   const d = e.target.closest('[data-t1del]');
   if (d) {
     if (!confirm('确认删除该账户？历史余额数据会保留。')) return;
-    T1_ACC = T1_ACC.filter(a => a.id !== d.dataset.t1del); t1SaveAcc(T1_ACC);
+    const oldAcc = T1_ACC; T1_ACC = T1_ACC.filter(a => a.id !== d.dataset.t1del);
+    if (!t1SaveAcc(T1_ACC)) { T1_ACC = oldAcc; return; }
     toast('已删除'); go('t1-acc'); return;
   }
   const a = e.target.closest('[data-t1act]');
@@ -1105,7 +1122,7 @@ document.addEventListener('click', e => {
       if (v === '') delete today[id];
       else { today[id] = Number(v) || 0; n++; }
     });
-    day[T1.date] = today; t1SaveDay(day);
+    day[T1.date] = today; if (!t1SaveDay(day)) return;
     toast(`已保存 ${n} 个账户余额`); go('t1');
   }
   else if (act === 'gen') go('t1-report');
@@ -1135,7 +1152,7 @@ document.addEventListener('click', e => {
     // 不能用 length+1：删过账户会撞号，撞上的新账户会继承旧账户的历史余额和流水明细
     const id = t1MkId(t1NextSeq());
     T1_ACC.push({ id, ent: '新主体', name: '新账户', type: 'bank', on: 1 });
-    t1SaveAcc(T1_ACC); go('t1-acc');
+    if (t1SaveAcc(T1_ACC)) go('t1-acc');
   }
   else if (act === 'saveAcc') {
     document.querySelectorAll('[data-t1acc]').forEach(inp => {
@@ -1148,7 +1165,7 @@ document.addEventListener('click', e => {
     document.querySelectorAll('[data-t1fix]').forEach(inp => {
       T1_CFG.fixed[inp.dataset.t1fix] = Number(inp.value) || 0;
     });
-    t1SaveAcc(T1_ACC); t1SaveCfg(T1_CFG);
+    if (!t1SaveAcc(T1_ACC) || !t1SaveCfg(T1_CFG)) return;
     toast('台账已保存'); go('t1');
   }
 });

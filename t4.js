@@ -1165,14 +1165,14 @@ function t4ChSchema(input) {
 }
 function t4ChExtraFields() {
   const fields = new Map();
-  T4_CH.forEach(c => (c.details || []).forEach(r => r.fields.forEach(f => {
+  T4_CH.forEach(c => (c.details || []).forEach(r => (r.fields || []).forEach(f => {
     const key = t4ChClean(f.name); if (!fields.has(key)) fields.set(key, f.name);
   })));
   return [...fields.values()];
 }
 function t4ChFieldRows(name) {
   return T4_CH.flatMap(c => (c.details || []).flatMap(r => {
-    const field = r.fields.find(f => t4ChClean(f.name) === t4ChClean(name));
+    const field = (r.fields || []).find(f => t4ChClean(f.name) === t4ChClean(name));
     return field ? [{ channel: c.id, source: r.source, value: field.value }] : [];
   }));
 }
@@ -1184,6 +1184,19 @@ function t4ChSourceRows() {
     if (imported) return [];
     return [{ channel: c.id, source: c.n, target: c.n, fields: [] }];
   });
+}
+// 渠道列表导入后，仍把尚未出现在文件中的内置渠道展示出来，避免用户误以为
+// 它们被导入覆盖或删除。它们只作为“未导入基础渠道”展示，不计入销售渠道导入数。
+function t4ChDisplaySourceRows() {
+  const importedRows = T4_CH.flatMap(c => (c.details || []).map(r => ({
+    channel: c.id, source: r.source, target: c.n, fields: r.fields || [], fallback: false,
+  })));
+  if (!importedRows.length) return t4ChSourceRows().map(r => ({ ...r, fallback: true }));
+  const seen = new Set(importedRows.map(r => r.channel));
+  const fallbackRows = T4_CH.filter(c => !seen.has(c.id)).map(c => ({
+    channel: c.id, source: c.n, target: c.n, fields: [], fallback: true,
+  }));
+  return [...importedRows, ...fallbackRows];
 }
 function t4ChTemplateRows() {
   const extra = t4ChExtraFields();
@@ -1254,7 +1267,7 @@ function t4ChApplySheets(sheets) {
     const norm = t4ChNorm(source), fields = [];
     ov.forEach(o => {
       const detail = (o.details || []).find(r => t4ChNorm(r.source) === norm);
-      if (detail) fields.push(...detail.fields);
+      if (detail) fields.push(...(detail.fields || []));
       if (o.id !== target.id) {
         if (o.aliases) o.aliases = o.aliases.filter(a => t4ChNorm(a) !== norm);
         if (o.details) o.details = o.details.filter(r => t4ChNorm(r.source) !== norm);
@@ -1269,7 +1282,9 @@ function t4ChApplySheets(sheets) {
       const i = fields.findIndex(v => t4ChClean(v.name) === t4ChClean(fieldName));
       if (i < 0) fields.push(f); else fields[i] = { ...f, name: fields[i].name };
     });
-    if (fields.length) entry.details = [...(entry.details || []).filter(r => t4ChNorm(r.source) !== norm), { source, fields }];
+    // 即使这次只有“销售渠道/归属事业部”等基础列，也要落一条明细记录。
+    // 否则后续页面无法知道该别名已经被导入，且再次导入时会被当成未关联渠道。
+    entry.details = [...(entry.details || []).filter(r => t4ChNorm(r.source) !== norm), { source, fields }];
     channels = t4ChannelList(ov); imported++;
   }));
   if (!imported) throw new Error(`没有可导入的渠道${bad.length ? '：' + bad.slice(0, 3).join('、') : '，请在表头下填写渠道名称'}`);
@@ -1773,8 +1788,11 @@ S['t4-channels'] = () => {
   t4Load();
   const fields = t4ChExtraFields();
   const sourceRows = t4ChSourceRows();
+  const displayRows = t4ChDisplaySourceRows();
+  const fallbackCount = displayRows.filter(r => r.fallback).length;
+  const importedCount = T4_CH.reduce((n, c) => n + (c.details || []).length, 0);
   if (T4.chField !== '__sources' && !fields.includes(T4.chField)) T4.chField = '';
-  const tabs = (sourceRows.length || fields.length) ? `<div class="tabs t4-channel-tabs" aria-label="渠道列表页面">${['', ...(sourceRows.length ? ['__sources'] : []), ...fields].map(name =>
+  const tabs = (displayRows.length || fields.length) ? `<div class="tabs t4-channel-tabs" aria-label="渠道列表页面">${['', ...(displayRows.length ? ['__sources'] : []), ...fields].map(name =>
     `<button type="button" class="${T4.chField === name ? 'on' : ''}" data-t4chfield="${H(name)}" aria-pressed="${T4.chField === name}">${H(name === '__sources' ? '销售渠道' : name || '渠道清单')}</button>`).join('')}</div>` : '';
   const actions = c => `<button class="btn sm" data-t4go="man:${H(c.id)}">录入</button> <button class="btn sm" data-t4go="chday:${H(c.id)}">明细</button>`;
   const rows = T4_CH.map(c => [
@@ -1783,13 +1801,13 @@ S['t4-channels'] = () => {
     c.custom ? pill('自定义', 'in') : pill('内置', 'mu'),
     actions(c) + (c.custom ? ` <button class="btn sm" data-t4chdel="${H(c.id)}">移除</button>` : '')]);
   const content = T4.chField === '__sources'
-    ? card(`销售渠道明细（${sourceRows.length} 条）`, table([{t:'销售渠道'},{t:'归属事业部'},{t:'渠道汇总'},{t:'编号'},{t:'操作'}],
-      sourceRows.map(r => { const c = T4_CHM[r.channel]; const no = (r.fields || []).find(f => t4ChClean(f.name) === '编号'); return [H(r.source), t4BuPill(c.bu), H(r.target), H(no ? no.value : ''), actions(c)]; })))
+    ? card(`销售渠道明细（已导入 ${importedCount} 条${fallbackCount ? `，${fallbackCount} 个基础渠道未导入` : ''}）`, table([{t:'销售渠道'},{t:'归属事业部'},{t:'渠道汇总'},{t:'编号'},{t:'状态'},{t:'操作'}],
+      displayRows.map(r => { const c = T4_CHM[r.channel]; const no = (r.fields || []).find(f => t4ChClean(f.name) === '编号'); return [H(r.source), t4BuPill(c.bu), H(r.target), H(no ? no.value : ''), r.fallback ? pill('未导入基础渠道', 'mu') : pill('已导入', 'ok'), actions(c)]; })))
     : T4.chField
     ? card(T4.chField, table([{t:'销售渠道'},{t:'归属事业部'},{t:'渠道汇总'},{t:T4.chField},{t:'操作'}],
       t4ChFieldRows(T4.chField).map(r => { const c = T4_CHM[r.channel]; return [H(r.source), t4BuPill(c.bu), H(c.n), H(r.value), actions(c)]; })))
     : card(`渠道清单（${T4_CH.length} 个）`, table([{t:'渠道ID'},{t:'归属事业部'},{t:'渠道汇总'},{t:'关联销售渠道'},{t:'来源'},{t:'操作'}], rows));
-  const sourceCount = sourceRows.length;
+  const sourceCount = importedCount;
   return head('T4 渠道列表', `当前 ${T4_CH.length} 个归集渠道${sourceCount ? `，已关联 ${sourceCount} 个销售渠道` : ''}。自动识别表头、列顺序和 xlsx 内的渠道工作表；新增渠道自动接入录入、明细与汇总。每个附加字段生成同名页签。`, '工具箱 · T4',
     t4SyncStatus() + '<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="chTemplate">下载当前列表</button><button class="btn pri" data-t4act="chPick">导入渠道列表</button>')
     + (T4_SERVER_ERROR && T4_SERVER_ERROR.status === 401 ? '<div class="note w">点击“登录财务中心”，进入门户登录后点“财务中心”，即可回到当前网址继续保存。</div>' : '')

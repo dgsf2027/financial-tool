@@ -75,14 +75,34 @@ async function payImport(file) {
     const emps = payEmp();
     const sal = paySal(IV.month);
     let nEmp = 0, nSal = 0, dup = 0;
-    rows.slice(hr + 1).forEach(r => {
+    const errors = [];
+    rows.slice(hr + 1).forEach((r, ri) => {
       const g = k => (map[k] === undefined ? '' : String(r[map[k]] == null ? '' : r[map[k]]).trim());
       const name = g('name'); if (!name) return;
-      let e = emps.find(x => x.name === name);
-      if (!e) { e = { id: uid(), name, idno: g('idno'), dept: g('dept'), on: 1 }; emps.push(e); nEmp++; }
+      const idno = g('idno').replace(/\s/g, '').toUpperCase();
+      const rowNo = ri + hr + 2;
+      let e;
+      if (idno) {
+        const byId = emps.filter(x => String(x.idno || '').replace(/\s/g, '').toUpperCase() === idno);
+        if (byId.length > 1) { errors.push(`第${rowNo}行身份证号 ${idno} 在员工档案中重复，无法匹配`); return; }
+        e = byId[0];
+      } else {
+        // Without an ID every employee record with this name is a candidate,
+        // including inactive records. A dormant record can be reactivated only
+        // when the name is unique; otherwise choosing one would overwrite pay.
+        const byName = emps.filter(x => x.name === name);
+        if (byName.length > 1) { errors.push(`第${rowNo}行员工 ${name} 同名且缺少身份证号，无法判断`); return; }
+        e = byName[0];
+      }
+      if (!e) { e = { id: uid(), name, idno, dept: g('dept'), on: 1 }; emps.push(e); nEmp++; }
       else {
-        if (!e.idno && g('idno')) e.idno = g('idno');
-        if (!e.on) { e.on = 1; nEmp++; }   // 移除过的人重新出现在工资表里 = 重新在职
+        // Certificate number is authoritative; refresh the display name/department
+        // from the import while retaining the existing employee identity.
+        e.name = name;
+        if (!e.idno && idno) e.idno = idno;
+        if (idno && e.idno) e.idno = idno;
+        if (g('dept')) e.dept = g('dept');
+        if (!e.on) { e.on = 1; nEmp++; }
       }
       if (sal[e.id]) dup++;
       sal[e.id] = { gross: numOf(g('gross')), pension: numOf(g('pension')), medical: numOf(g('medical')),
@@ -90,7 +110,7 @@ async function payImport(file) {
       nSal++;
     });
     payEmpSave(emps); paySalSave(IV.month, sal);
-    toast(`导入 ${IV.month} 工资表：${nSal} 人` + (nEmp ? `（新增/恢复员工 ${nEmp}）` : '') + (dup ? `，覆盖已有 ${dup} 人` : ''), 5200);
+    toast(`导入 ${IV.month} 工资表：${nSal} 人` + (nEmp ? `（新增/恢复员工 ${nEmp}）` : '') + (dup ? `，覆盖已有 ${dup} 人` : '') + (errors.length ? `；${errors.join('；')}` : ''), 5200);
     go('iv-pay');
   } catch (e) { toast('读取失败：' + e.message, 4200); }
 }

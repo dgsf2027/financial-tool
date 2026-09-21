@@ -30,8 +30,10 @@ def connect(cfg):
 
 
 def main(cfg_path, job_path):
-    cfg = json.load(open(cfg_path, encoding="utf-8"))
-    job = json.load(open(job_path, encoding="utf-8"))
+    with open(cfg_path, encoding="utf-8") as cfg_file:
+        cfg = json.load(cfg_file)
+    with open(job_path, encoding="utf-8") as job_file:
+        job = json.load(job_file)
     results = []
     try:
         server = connect(cfg)
@@ -52,7 +54,13 @@ def main(cfg_path, job_path):
             if s.get("attachment"):          # 测试邮件可不带附件
                 with open(s["attachment"], "rb") as f:
                     msg.add_attachment(f.read(), maintype=XLSX[0], subtype=XLSX[1], filename=s.get("filename") or "套表.xlsx")
-            server.send_message(msg)
+            # smtplib normally raises SMTPRecipientsRefused when every
+            # recipient is rejected, but test doubles and some transports
+            # return the refusal mapping instead. Treat either form as a
+            # failed delivery rather than reporting a false success.
+            refused = server.send_message(msg)
+            if refused:
+                raise smtplib.SMTPRecipientsRefused(refused)
             results.append({"to": s["to"], "name": s.get("name"), "scopeName": s.get("scopeName"), "ok": True})
         except Exception as e:
             results.append({"to": s.get("to"), "name": s.get("name"), "scopeName": s.get("scopeName"),

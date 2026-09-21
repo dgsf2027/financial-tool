@@ -541,6 +541,16 @@ const numOf = v => {
   const n = Number(s);
   return isNaN(n) ? 0 : n;
 };
+// Strict companion for places where an invalid or missing amount must not silently become zero.
+function financeAmount(v) {
+  let s = String(v == null ? '' : v).trim().replace(/[,，\s¥￥]/g, '');
+  if (!s || s === '-' || s === '—') return null;
+  let neg = false;
+  if (/^\(.*\)$/.test(s)) { neg = true; s = s.slice(1, -1).trim(); }
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(s)) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? (neg ? -n : n) : null;
+}
 function normDate(v) {
   const s = String(v == null ? '' : v).trim();
   if (!s) return '';
@@ -1056,7 +1066,8 @@ function t2AutoBind() {
   if (!no) { t2GuessByFileName(); return; }
   T2.sniffNo = no;
   const acc = t1FindAccByNo(no);
-  if (!acc) { T2.autoBind = { miss: 1 }; return; }
+  if (!acc) { T2.autoBind = { miss: 1 }; T2.acctId = ''; T2.acctNo = ''; return; }
+  if (acc.ambiguous) { T2.autoBind = { ambiguous: 1, candidates: acc.candidates || [] }; T2.acctId = ''; T2.acctNo = ''; return; }
   const ent = ENTITIES.find(e => e.full === acc.ent);
   if (ent) {
     T2.entId = ent.id; T2.ent = ent.full;
@@ -1074,32 +1085,42 @@ function t2AutoBind() {
 function t2ClosingBal() {
   const { rows, headRow, map } = T2;
   if (!rows || map.bal === undefined || map.date === undefined) return null;
-  const body = rows.slice(headRow + 1)
-    .map(r => ({ d: normDate(r[map.date]), raw: r[map.bal] }))
-    .filter(x => x.d && String(x.raw == null ? '' : x.raw).trim() !== '');
+  const body = rows.slice(headRow + 1).map(r => {
+    const rawDate = String(r[map.date] == null ? '' : r[map.date]).trim();
+    const d = normDate(rawDate);
+    const tm = /(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(rawDate);
+    const timed = !!tm;
+    const key = d ? `${d}T${timed ? `${String(+tm[1]).padStart(2, '0')}:${tm[2]}:${tm[3] || '00'}` : '00:00:00'}` : '';
+    return { d, key, timed, raw: r[map.bal] };
+  }).filter(x => x.d && String(x.raw == null ? '' : x.raw).trim() !== '');
   if (!body.length) return null;
-  const asc = body[0].d <= body[body.length - 1].d;
+  const asc = body[0].key <= body[body.length - 1].key;
   const maxD = body.reduce((m, x) => (x.d > m ? x.d : m), body[0].d);
   const sameDay = body.filter(x => x.d === maxD);
-  const pick = asc ? sameDay[sameDay.length - 1] : sameDay[0];
-  return { date: maxD, val: numOf(pick.raw), asc };
+  const vals = sameDay.map(x => financeAmount(x.raw));
+  if (vals.some(v => v === null)) return { err: '余额列存在无法识别的金额，请先修正后再写入 T1', date: maxD };
+  const timed = sameDay.filter(x => x.timed);
+  if (sameDay.length > 1 && timed.length !== sameDay.length) {
+    if (new Set(vals.map(v => v.toFixed(6))).size > 1) return { ambiguous: true, date: maxD };
+  }
+  const pick = timed.length === sameDay.length ? sameDay.reduce((a, x) => x.key > a.key ? x : a, sameDay[0]) : (asc ? sameDay[sameDay.length - 1] : sameDay[0]);
+  return { date: maxD, val: financeAmount(pick.raw), asc };
 }
 
 /* 把期末余额回写到 T1 的当日余额。
    那天已有手工录的数且对不上时先问，不静默覆盖。 */
 function t2PushBalance() {
-  // 同一份文件里改了账户下拉 → 上一次是写错账户了，把那笔撤掉再写新的，
-  // 否则旧账户会凭空多出一笔它从没有过的余额。
-  // 必须核对是同一份文件：不同文件本来就该写到不同账户，不是写错（撤了就是误删）
   const prev = T2.balPush;
-  if (prev && prev.ok && prev.accId && prev.accId !== T2.acctId
-    && T2.file && prev.file === T2.file.name && typeof t1ClearBalance === 'function') {
-    t1ClearBalance(prev.accId, prev.date, 'T2', prev.val);
-  }
   T2.balPush = null;
   if (typeof t1PutBalance !== 'function' || !T2.acctId) return;
   const cb = t2ClosingBal();
   if (!cb) { T2.balPush = { skip: 1 }; return; }
+  if (cb.err || cb.ambiguous) { T2.balPush = cb.err ? { err: cb.err } : { ambiguous: true, date: cb.date }; return; }
+  // 同一份文件里改了账户下拉，且新余额已经可验证后才撤掉旧账户的自动写入。
+  if (prev && prev.ok && prev.accId && prev.accId !== T2.acctId
+    && T2.file && prev.file === T2.file.name && typeof t1ClearBalance === 'function') {
+    t1ClearBalance(prev.accId, prev.date, 'T2', prev.val);
+  }
   let r = t1PutBalance(T2.acctId, cb.date, cb.val, 'T2');
   if (r.conflict) {
     const diff = cb.val - r.old;
@@ -1156,6 +1177,9 @@ function t2AutoBindNote() {
   if (ab.miss) {
     return `<div class="note w"><b>文件里的卡号是 ${H(T2.sniffNo)}，但 T1 台账里没有账号对得上的账户。</b>
       下面手动选一下是哪个账户${T2.acctId ? `，然后 <button class="btn sm" data-act="t2bindNo">把这个卡号记到该账户</button>，下次上传就自动认出来了` : '——选完可以把卡号记进台账，下次就自动了'}。</div>`;
+  }
+  if (ab.ambiguous) {
+    return `<div class="note w"><b>文件里的卡号 ${H(T2.sniffNo)} 同时匹配了多个 T1 账户，工具没有自动写入余额。</b>请在下方手动选择正确账户后再继续。</div>`;
   }
   const p = T2.balPush;
   const bal = !p ? ''
@@ -1225,6 +1249,7 @@ function t2BalNote() {
   const acc = (typeof t1AccById === 'function') ? t1AccById(T2.acctId) : null;
   const who = acc ? `${H(acc.ent)} · ${H(acc.name)}` : T2.acctId;
   if (p.skip) return `<div class="note"><b>T1 余额没动。</b>这份流水里没有余额列（或余额列是空的），工具不会替你估——去 T1 手工录一下 ${who} 的余额。</div>`;
+  if (p.ambiguous) return `<div class="note w"><b>T1 余额没动。</b>${p.date || ''} 有多笔流水但文件没有可判断的时间顺序，工具不会替你猜期末余额，请在 T1 手工录入或补充时间列。</div>`;
   if (p.err) return `<div class="note c"><b>余额没能写进 T1：</b>${H(p.err)}</div>`;
   if (p.kept) return `<div class="note w"><b>保留了 T1 原来的手工余额。</b>${who} ${p.date}：T1 是 ${money(p.old)}，流水期末是 ${money(p.val)}，差 ${money(p.val - p.old)}。你选了不覆盖——两边现在对不上，建议查一下是漏了一笔还是流水不全。</div>`;
   return `<div class="note g"><b>已回写 T1 当日余额。</b>${who} ${p.date} 期末余额 ${money(p.val)}，在 T1 里标了「来自 T2 流水」。</div>`;

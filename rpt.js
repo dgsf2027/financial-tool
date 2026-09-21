@@ -393,7 +393,7 @@ document.addEventListener('click', e => {
     const cur = rptPlData(AC.from, AC.to), yr = rptPlData(AC.to.slice(0, 4) + '-01-01', AC.to);
     const L = [['项目', '本期金额', '本年累计'],
       ['一、营业收入', cur.rev, yr.rev], ['减：营业成本', cur.cost, yr.cost], ['税金及附加', cur.taxSur, yr.taxSur],
-      ['税金及附加', cur.taxSur, yr.taxSur], ['销售费用', cur.sell, yr.sell], ['管理费用', cur.adm, yr.adm], ['财务费用', cur.fin, yr.fin],
+      ['销售费用', cur.sell, yr.sell], ['管理费用', cur.adm, yr.adm], ['财务费用', cur.fin, yr.fin], ['加：投资收益', cur.invInc, yr.invInc],
       ['二、营业利润', cur.op, yr.op], ['加：营业外收入', cur.noIn, yr.noIn], ['减：营业外支出', cur.noOut, yr.noOut],
       ['三、利润总额', cur.total, yr.total], ['减：所得税费用', cur.tax, yr.tax], ['四、净利润', cur.net, yr.net]]
       .map(r => [r[0], typeof r[1] === 'number' ? r[1].toFixed(2) : r[1], typeof r[2] === 'number' ? r[2].toFixed(2) : r[2]]);

@@ -131,6 +131,16 @@ const sendText = (res, code, text) => { res.writeHead(code, { 'Content-Type': 't
 const readJsonFile = (file, fallback) => { try { return JSON.parse(fs.readFileSync(file, 'utf-8')); } catch (e) { return fallback; } };
 const runPy = (script, args) => execFileP(PY, [path.join(SUITE, script), ...args],
   { timeout: 180000, env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, maxBuffer: 10 * 1024 * 1024 });
+const T4_MAIL_SCOPES = new Set(['all', 'aole', 'ruimian', 'orange']);
+function tempDir(tag) {
+  fs.mkdirSync(OUT, { recursive: true });
+  const safeTag = String(tag || 'job').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 48) || 'job';
+  return fs.mkdtempSync(path.join(OUT, `${safeTag}-${crypto.randomUUID()}-`));
+}
+async function removeTempDir(dir) {
+  if (!dir) return;
+  try { await fs.promises.rm(dir, { recursive: true, force: true }); } catch (_) {}
+}
 function formatPyError(error) {
   if (error && (error.code === 'ENOENT' || String(error.message || '').includes('ENOENT'))) {
     return '服务器无法启动 Python，请管理员检查 Python 安装与 T4_PYTHON 配置。';
@@ -140,11 +150,16 @@ function formatPyError(error) {
 
 // 数据包 → build_suite.py → xlsx 路径 + 校验日志
 async function buildSuite(payloadBuf, tag) {
-  fs.mkdirSync(OUT, { recursive: true });
-  const ts = Date.now(), inFile = path.join(OUT, `input_${tag}_${ts}.json`), outFile = path.join(OUT, `suite_${tag}_${ts}.xlsx`);
-  fs.writeFileSync(inFile, payloadBuf);
-  try { const { stdout } = await runPy('build_suite.py', [inFile, outFile]); return { outFile, log: stdout }; }
-  finally { fs.unlink(inFile, () => {}); }
+  const dir = tempDir(`suite-${tag}`);
+  const inFile = path.join(dir, 'input.json'), outFile = path.join(dir, 'output.xlsx');
+  try {
+    fs.writeFileSync(inFile, payloadBuf);
+    const { stdout } = await runPy('build_suite.py', [inFile, outFile]);
+    return { outFile, log: stdout, cleanup: () => removeTempDir(dir) };
+  } catch (e) {
+    await removeTempDir(dir);
+    throw e;
+  }
 }
 // 发件配置状态（只返回是否就绪与非敏感字段，不返回授权码）
 function mailStatus() {
@@ -157,11 +172,13 @@ function mailStatus() {
 }
 // 写一个无附件的发信任务并执行，返回逐人结果
 async function runMailJob(subject, sends) {
-  fs.mkdirSync(OUT, { recursive: true });
-  const jobFile = path.join(OUT, `mailjob_${Date.now()}.json`);
-  fs.writeFileSync(jobFile, JSON.stringify({ subject, sends }));
-  try { const { stdout } = await runPy('send_mail.py', [path.join(CFG, 'mail.config.json'), jobFile]); return JSON.parse(stdout.trim().split('\n').pop()); }
-  finally { fs.unlink(jobFile, () => {}); }
+  const dir = tempDir('mail-job');
+  const jobFile = path.join(dir, 'job.json');
+  try {
+    fs.writeFileSync(jobFile, JSON.stringify({ subject, sends }));
+    const { stdout } = await runPy('send_mail.py', [path.join(CFG, 'mail.config.json'), jobFile]);
+    return JSON.parse(stdout.trim().split('\n').pop());
+  } finally { await removeTempDir(dir); }
 }
 
 async function handleApi(req, res, urlPath) {
@@ -169,12 +186,22 @@ async function handleApi(req, res, urlPath) {
   if (urlPath === '/api/t4/workspace' && (req.method === 'GET' || req.method === 'PUT')) return proxyT4Workspace(req, res);
   if (urlPath === '/api/t4/suite' && req.method === 'POST') {
     const buf = await readBody(req);
+    let built;
+    let workbook;
+    let log;
+    let failure;
     try {
-      const { outFile, log } = await buildSuite(buf, 'dl');
-      res.writeHead(200, { 'Content-Type': XLSX_MIME, 'Content-Disposition': 'attachment; filename="suite.xlsx"',
-        'X-Suite-Log': encodeURIComponent(String(log || '').slice(0, 600)) });
-      return res.end(fs.readFileSync(outFile));
-    } catch (e) { return sendText(res, 500, '套表生成失败：' + formatPyError(e)); }
+      built = await buildSuite(buf, 'dl');
+      log = built.log;
+      workbook = fs.readFileSync(built.outFile);
+      await built.cleanup();
+      built = null;
+    } catch (e) { failure = e; }
+    finally { if (built) await built.cleanup(); }
+    if (failure) return sendText(res, 500, '套表生成失败：' + formatPyError(failure));
+    res.writeHead(200, { 'Content-Type': XLSX_MIME, 'Content-Disposition': 'attachment; filename="suite.xlsx"',
+      'X-Suite-Log': encodeURIComponent(String(log || '').slice(0, 600)) });
+    return res.end(workbook);
   }
   if (urlPath === '/api/t4/recipients' && req.method === 'GET') return sendJson(res, 200, readJsonFile(path.join(CFG, 'recipients.json'), []));
   if (urlPath === '/api/t4/recipients' && req.method === 'POST') {
@@ -215,26 +242,56 @@ async function handleApi(req, res, urlPath) {
     const st = mailStatus();
     if (!st.configured) return sendText(res, 400, '发件邮箱未配置：' + st.missing.join('、'));
     const job = JSON.parse((await readBody(req)).toString('utf-8'));
-    const scopes = Object.keys(job.payloads || {});
-    if (!scopes.length || !(job.recipients || []).length) return sendText(res, 400, '没有可发送的收件人');
-    const files = {};
-    for (const scope of scopes) {   // 每个范围只生成一份，多个收件人共用
-      const p = job.payloads[scope];
-      const { outFile } = await buildSuite(Buffer.from(JSON.stringify(p)), 'mail_' + scope);
-      files[scope] = { path: outFile, filename: `T4日损益套表_${p.scopeName}_${p.period}.xlsx`, scopeName: p.scopeName, period: p.period, generated: p.generated };
+    const payloads = job && job.payloads && typeof job.payloads === 'object' && !Array.isArray(job.payloads) ? job.payloads : {};
+    const recipients = Array.isArray(job && job.recipients) ? job.recipients : [];
+    const normalizedRecipients = recipients.map(r => ({
+      ...(r && typeof r === 'object' ? r : {}),
+      scope: (r && typeof r.scope === 'string') ? r.scope.trim() : '',
+    }));
+    const scopes = Object.keys(payloads).filter(scope => T4_MAIL_SCOPES.has(scope));
+    if (!recipients.length) return sendText(res, 400, '没有可发送的收件人');
+    const failedRecipients = normalizedRecipients.map((r, index) => {
+      const scope = r.scope;
+      let error = '';
+      if (!scope) error = '缺少报表范围';
+      else if (!T4_MAIL_SCOPES.has(scope)) error = `未知报表范围：${scope}`;
+      else if (!Object.prototype.hasOwnProperty.call(payloads, scope)) error = `未提供报表范围数据：${scope}`;
+      else if (!payloads[scope] || typeof payloads[scope] !== 'object' || Array.isArray(payloads[scope])) error = `报表范围数据无效：${scope}`;
+      return error ? { index, name: r && r.name ? String(r.name) : '', email: r && r.email ? String(r.email) : '', scope, error } : null;
+    }).filter(Boolean);
+    if (failedRecipients.length) {
+      return sendJson(res, 400, { ok: false, error: '存在无效的收件人范围', failedRecipients });
     }
-    const sends = job.recipients.filter(r => files[r.scope]).map(r => {
-      const f = files[r.scope];
-      return { to: r.email, name: r.name || '', attachment: f.path, filename: f.filename, scopeName: f.scopeName,
-        body: (job.body ? job.body + '\n\n' : '') + `期间：${f.period}\n报表范围：${f.scopeName}\n生成时间：${f.generated}\n\n附件为财务中心 T4 日损益套表（Excel 工作簿：总表 → 事业部 → 渠道逐日明细，含超链接下钻）。` };
-    });
-    const jobFile = path.join(OUT, `mailjob_${Date.now()}.json`);
-    fs.writeFileSync(jobFile, JSON.stringify({ subject: job.subject || 'T4 日损益套表', sends }));
+    if (!scopes.length) return sendText(res, 400, '没有可发送的收件人');
+    const files = {};
+    const artifacts = [];
+    let mailJobDir;
+    let result;
+    let failure;
     try {
+      for (const scope of scopes) {   // 每个范围只生成一份，多个收件人共用
+        const p = payloads[scope];
+        const built = await buildSuite(Buffer.from(JSON.stringify(p)), 'mail_' + scope);
+        artifacts.push(built);
+        files[scope] = { path: built.outFile, filename: `T4日损益套表_${p.scopeName}_${p.period}.xlsx`, scopeName: p.scopeName, period: p.period, generated: p.generated };
+      }
+      const sends = normalizedRecipients.map(r => {
+        const f = files[r.scope];
+        return { to: r.email, name: r.name || '', attachment: f.path, filename: f.filename, scopeName: f.scopeName,
+          body: (job.body ? job.body + '\n\n' : '') + `期间：${f.period}\n报表范围：${f.scopeName}\n生成时间：${f.generated}\n\n附件为财务中心 T4 日损益套表（Excel 工作簿：总表 → 事业部 → 渠道逐日明细，含超链接下钻）。` };
+      });
+      mailJobDir = tempDir('mail-job');
+      const jobFile = path.join(mailJobDir, 'job.json');
+      fs.writeFileSync(jobFile, JSON.stringify({ subject: job.subject || 'T4 日损益套表', sends }));
       const { stdout } = await runPy('send_mail.py', [path.join(CFG, 'mail.config.json'), jobFile]);
-      return sendJson(res, 200, { ok: true, results: JSON.parse(stdout.trim().split('\n').pop()) });
-    } catch (e) { return sendText(res, 500, '发送失败：' + formatPyError(e)); }
-    finally { fs.unlink(jobFile, () => {}); }
+      result = { ok: true, results: JSON.parse(stdout.trim().split('\n').pop()) };
+    } catch (e) { failure = e; }
+    finally {
+      await removeTempDir(mailJobDir);
+      for (const built of artifacts) await built.cleanup();
+    }
+    if (failure) return sendText(res, 500, '发送失败：' + formatPyError(failure));
+    return sendJson(res, 200, result);
   }
   sendText(res, 404, 'Not found');
 }

@@ -234,7 +234,7 @@ S['p-rec-ap'] = () => {
   const list = recApLoad().slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
   const editing = RECV.apEdit ? list.find(x => x.id === RECV.apEdit) : null;
   const tEnd = +list.reduce((s, x) => s + recApEnd(x), 0).toFixed(2);
-  const tUnhx = +list.reduce((s, x) => s + Math.max(0, recGross('ap', x) - recHxSum('ap', x.id)), 0).toFixed(2);
+  const tUnhx = +list.reduce((s, x) => s + recGross('ap', x) - recHxSum('ap', x.id), 0).toFixed(2);
   const tOd = +list.reduce((s, x) => s + ((recApEnd(x) > 0.005 && recDueOk(x) && recToday() > x.due) ? recApEnd(x) : 0), 0).toFixed(2);
 
   const F = (id, ph, v) => `<div class="field"><label class="fl">${ph}</label>
@@ -617,7 +617,7 @@ document.addEventListener('click', e => {
     recApLoad().forEach(x => {
       rows.push([safe(x.cust), safe(x.name), safe(x.no), safe(x.type), x.date, x.due, x.ccy || 'RMB',
         (+x.open || 0).toFixed(2), (+x.ap || 0).toFixed(2), (+x.pay || 0).toFixed(2), (+x.offset || 0).toFixed(2),
-        recApEnd(x).toFixed(2), Math.max(0, +(recGross('ap', x) - recHxSum('ap', x.id)).toFixed(2)).toFixed(2),
+        recApEnd(x).toFixed(2), (recGross('ap', x) - recHxSum('ap', x.id)).toFixed(2),
         recAgeBand(x.date), safe(x.buyer)]);
     });
     download(`应付账款台账_${entName()}.csv`, toCSV(rows)); toast('已导出'); return;

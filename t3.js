@@ -53,9 +53,12 @@ function t3AutoMap(headerCells) {
 }
 
 const t3Num = v => {
+  if (typeof financeAmount === 'function') return financeAmount(v);
   const s = String(v == null ? '' : v).replace(/[,，\s¥￥]/g, '');
-  const n = Number(s);
-  return isNaN(n) ? 0 : n;
+  if (!s || s === '-' || s === '—') return null;
+  const neg = /^\(.*\)$/.test(s), raw = neg ? s.slice(1, -1) : s;
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(raw)) return null;
+  const n = Number(raw); return Number.isFinite(n) ? (neg ? -n : n) : null;
 };
 const t3Key = (r, m, cnt) => {
   const parts = [String(r[m.key1] == null ? '' : r[m.key1]).trim()];
@@ -68,19 +71,22 @@ function t3Run() {
   const A = T3.ours, B = T3.theirs;
   const build = side => {
     const idx = {};
+    const invalid = [];
     side.rows.slice(side.headRow + 1).forEach((r, i) => {
       const k = t3Key(r, side.map, T3.keyCount);
       if (!k || k === '||') return;
+      const amt = t3Num(r[side.map.amt]);
+      if (amt === null) { invalid.push({ side: side === A ? 'ours' : 'theirs', row: i + side.headRow + 2, key: k, raw: String(r[side.map.amt] == null ? '' : r[side.map.amt]), reason: '金额为空或无法识别' }); return; }
       const rec = {
-        key: k, amt: t3Num(r[side.map.amt]), no: i + 1,
+        key: k, amt, no: i + 1,
         date: side.map.date !== undefined ? String(r[side.map.date] || '').slice(0, 10) : '',
         memo: side.map.memo !== undefined ? String(r[side.map.memo] || '') : '',
       };
       (idx[k] = idx[k] || []).push(rec);
     });
-    return idx;
+    return { idx, invalid };
   };
-  const ia = build(A), ib = build(B);
+  const ba = build(A), bb = build(B), ia = ba.idx, ib = bb.idx;
   const keys = new Set([...Object.keys(ia), ...Object.keys(ib)]);
   const same = [], onlyA = [], onlyB = [], amtDiff = [];
 
@@ -114,6 +120,7 @@ function t3Run() {
     cntB: Object.values(ib).flat().length,
     sumOnlyA: sum(onlyA), sumOnlyB: sum(onlyB),
     sumDiff: amtDiff.reduce((s, x) => s + x.d, 0),
+    invalid: ba.invalid.concat(bb.invalid),
   };
 }
 
@@ -235,7 +242,8 @@ function t3S2() {
 
 function t3S3() {
   const r = T3.result;
-  const bad = r.onlyA.length + r.onlyB.length + r.amtDiff.length;
+  const invalid = r.invalid || [];
+  const bad = r.onlyA.length + r.onlyB.length + r.amtDiff.length + invalid.length;
   const rate = (r.cntA + r.cntB) ? Math.round(r.same.length * 2 / (r.cntA + r.cntB) * 100) : 0;
   const tab = T3.tab;
   const rows = tab === 'a' ? r.onlyA.map(x => [`<span class="code">${H(x.key.replace('||', ' / '))}</span>`, H(x.date || ''), H((x.memo || '').slice(0, 24)), money(x.amt), x.n > 1 ? `${x.n} 行` : ''])
@@ -255,8 +263,9 @@ function t3S3() {
     { k: '合计差额', v: money(r.totalA - r.totalB), t: Math.abs(r.totalA - r.totalB) > T3.tol ? 'c' : 'g' },
   ])
     + (bad
-      ? `<div class="note c"><b>${bad} 笔对不上。</b>己方多 ${r.onlyA.length} 笔（${money(r.sumOnlyA)}）、对方多 ${r.onlyB.length} 笔（${money(r.sumOnlyB)}）、金额不符 ${r.amtDiff.length} 笔（差额 ${money(r.sumDiff)}）。<b>工具只指出差异，不替你判断谁对</b>——拿差异清单找对方核。</div>`
+      ? `<div class="note c"><b>${bad} 笔需要处理。</b>己方多 ${r.onlyA.length} 笔（${money(r.sumOnlyA)}）、对方多 ${r.onlyB.length} 笔（${money(r.sumOnlyB)}）、金额不符 ${r.amtDiff.length} 笔（差额 ${money(r.sumDiff)}）${invalid.length ? `、无效金额 ${invalid.length} 笔（未计入合计）` : ''}。<b>工具只指出差异，不替你判断谁对</b>——拿差异清单找对方核。</div>`
       : `<div class="note g"><b>全部对上。</b>${r.same.length} 笔一致，合计差额在容差 ${T3.tol} 元内。</div>`)
+    + (invalid.length ? `<div class="note w"><b>有 ${invalid.length} 行金额为空或无法识别，已保留在异常清单，未按 0 参与匹配。</b></div>` : '')
     + `<div class="tabs">
         <button data-t3tab="diff" class="${tab === 'diff' ? 'on' : ''}">金额不符<span class="cnt">${r.amtDiff.length}</span></button>
         <button data-t3tab="a" class="${tab === 'a' ? 'on' : ''}">己方多<span class="cnt">${r.onlyA.length}</span></button>
@@ -312,6 +321,7 @@ function t3Export() {
   r.amtDiff.forEach(x => rows.push(['金额不符', x.key.replace('||', ' / '), x.date, x.memo, x.a.toFixed(2), x.b.toFixed(2), x.d.toFixed(2)]));
   r.onlyA.forEach(x => rows.push(['己方多', x.key.replace('||', ' / '), x.date, x.memo, x.amt.toFixed(2), '', x.amt.toFixed(2)]));
   r.onlyB.forEach(x => rows.push(['对方多', x.key.replace('||', ' / '), x.date, x.memo, '', x.amt.toFixed(2), (-x.amt).toFixed(2)]));
+  (r.invalid || []).forEach(x => rows.push(['金额无效', x.key.replace('||', ' / '), '', `源文件${x.side}第${x.row}行：${x.reason}`, x.raw, '', '']));
   rows.push([]);
   rows.push(['—— 小结 ——', `我方 ${r.cntA} 笔 / ${r.totalA.toFixed(2)}`, `对方 ${r.cntB} 笔 / ${r.totalB.toFixed(2)}`,
     `差额 ${(r.totalA - r.totalB).toFixed(2)}`, `容差 ${T3.tol}`, T3.mode === 'sum' ? '同键合并' : '逐笔']);

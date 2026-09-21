@@ -40,6 +40,24 @@ const faPrevM = m => { const [y, mo] = m.split('-'); return ym(new Date(+y, +mo 
 const faDepOf = (a, M) => +(faAccumAt(a, M) - faAccumAt(a, faPrevM(M))).toFixed(2);
 const faNetAt = (a, M) => +(a.cost - faAccumAt(a, M)).toFixed(2);
 
+/* Depreciation vouchers are historical evidence. New vouchers record their
+   contributing cards; legacy aggregate vouchers are checked by month. */
+const faDepVoucher = v => String(v.src || '') === '折旧计提' || /^__fa_dep_/.test(String(v.id || ''));
+function faHistoryFor(a, next) {
+  const old = a || {}, candidate = next || old;
+  return vchLoad(CUR_ENT).filter(v => {
+    if (!faDepVoucher(v)) return false;
+    if (Array.isArray(v.faAssetIds) && v.faAssetIds.length) return v.faAssetIds.includes(old.id || candidate.id);
+    const M = String(v.period || v.date || '').slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(M)) return true; // unknown legacy period: stay conservative
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(old.useDate || '')) || !/^\d{4}-\d{2}-\d{2}$/.test(String(candidate.useDate || ''))) return true;
+    // The voucher could include this card whenever its old or proposed start
+    // month has arrived. This intentionally errs toward blocking edits.
+    return M >= faStartM(old) || M >= faStartM(candidate);
+  });
+}
+const FA_FIN_FIELDS = ['useDate', 'cost', 'res', 'life', 'expAcct', 'initDep'];
+
 /* ---- 资产卡片 ---- */
 S['p-fa'] = () => {
   if (!CUR_ENT) return needEnt('资产卡片');
@@ -177,8 +195,16 @@ document.addEventListener('click', e => {
     const list = faLoad();
     if (FA.edit) {
       const a = list.find(x => x.id === FA.edit);
-      if (a) Object.assign(a, { name, cat, dept: g('faDept') || '', useDate, cost, res: resV,
-        life: years * 12, expAcct: g('faExp') || '5602', initDep: numOf(g('faInit')) });
+      if (a) {
+        const proposed = Object.assign({}, a, { name, cat, dept: g('faDept') || '', useDate, cost, res: resV,
+          life: years * 12, expAcct: g('faExp') || '5602', initDep: numOf(g('faInit')) });
+        const changed = FA_FIN_FIELDS.filter(k => String(a[k] == null ? '' : a[k]) !== String(proposed[k] == null ? '' : proposed[k]));
+        if (changed.length && faHistoryFor(a, proposed).length) {
+          toast('该资产已产生折旧凭证，不能修改影响历史折旧的字段：' + changed.join('、'));
+          return;
+        }
+        Object.assign(a, proposed);
+      }
       FA.edit = '';
     } else {
       const no = 'FA' + String(list.length + 1).padStart(3, '0');
@@ -201,9 +227,13 @@ document.addEventListener('click', e => {
       ({ acct: k, name: acctName(k) || k, dr: byExp[k], cr: 0, memo }))
       .concat([{ acct: '1602', name: acctName('1602') || '累计折旧', dr: 0, cr: total, memo }]);
     const vId = '__fa_dep_' + M + '__';
-    const vs = vchLoad(CUR_ENT).filter(v => v.id !== vId);
-    const existed = vs.length !== vchLoad(CUR_ENT).length;
-    vs.push({ id: vId, period: M, date, word: '记', no: '折', posted: 0, src: '折旧计提', lines });
+    const before = vchLoad(CUR_ENT);
+    const oldVoucher = before.find(v => v.id === vId);
+    if (oldVoucher && oldVoucher.posted) { toast(M + ' 折旧凭证已过账，禁止覆盖；如需调整请新增更正凭证'); return; }
+    const vs = before.filter(v => v.id !== vId);
+    const existed = vs.length !== before.length;
+    vs.push({ id: vId, period: M, date, word: '记', no: '折', posted: 0, src: '折旧计提',
+      faAssetIds: items.map(x => x.a.id).filter(Boolean), lines });
     vchSave(CUR_ENT, vs);
     toast((existed ? '已重新生成（覆盖）' : '计提凭证已生成') + `：${money(total)}，未过账，去凭证库核对`, 5200);
     go('ac-vch'); return;

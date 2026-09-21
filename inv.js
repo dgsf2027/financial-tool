@@ -70,31 +70,56 @@ async function ivImport(file, dir) {  // dir: 'in' | 'out'
     const rows = await XLSXLite.readTable(file);
     const hr = XLSXLite.findHeaderRow(rows, Object.values(IV_ALIAS).flat());
     const map = ivMap(rows[hr] || []);
-    const miss = ['no', 'date', 'amt', 'tax'].filter(k => map[k] === undefined);
+    // A re-import may intentionally contain only a status or a subset of fields.
+    // The number is the only identity field; the old row supplies omitted values.
+    const miss = ['no'].filter(k => map[k] === undefined);
     if (miss.length) {
       toast('缺少必备列：' + miss.map(k => ({ no: '发票号码', date: '开票日期', amt: '金额', tax: '税额' }[k])).join('、') + '。请用税务局或开票软件的明细导出。', 5200);
       return;
     }
     const key = dir === 'in' ? IV_IN_KEY(CUR_ENT) : IV_OUT_KEY(CUR_ENT);
     const list = ivLoad(key);
-    const seen = new Set(list.map(x => x.no));
-    let add = 0, dup = 0, bad = 0, voided = 0;
-    rows.slice(hr + 1).forEach(r => {
+    let add = 0, updated = 0, dup = 0, bad = 0, voided = 0;
+    const errors = [];
+    rows.slice(hr + 1).forEach((r, ri) => {
       const g = k => (map[k] === undefined ? '' : String(r[map[k]] == null ? '' : r[map[k]]).trim());
-      const no = g('no'); const date = normDate(g('date'));
-      const amt = numOf(g('amt')), tax = numOf(g('tax'));
-      if (!no || !date) { if (r.some(c => String(c == null ? '' : c).trim())) bad++; return; }
-      if (seen.has(no)) { dup++; return; }
+      const no = g('no');
+      if (!no) { if (r.some(c => String(c == null ? '' : c).trim())) bad++; return; }
+      const code = g('code');
+      // Code+number is the identity whenever a code is available. For old rows
+      // without a code, a no-code import remains compatible; if several coded rows
+      // share the number, silently choosing one would corrupt a different invoice.
+      const candidates = list.filter(x => String(x.no) === no && (code ? String(x.code || '') === code : !x.code));
+      if (candidates.length > 1) {
+        errors.push(`第${ri + hr + 2}行发票号码 ${no}${code ? '、代码 ' + code : ''} 在票池中重复，无法安全更新`);
+        return;
+      }
+      let old = candidates.length === 1 ? candidates[0] : null;
+      if (!old && !code) {
+        const sameNo = list.filter(x => String(x.no) === no);
+        if (sameNo.length === 1) old = sameNo[0];
+        else if (sameNo.length > 1) { errors.push(`第${ri + hr + 2}行发票号码 ${no} 缺少发票代码，无法判断同号发票`); return; }
+      }
       const state = g('state');
-      if (/作废/.test(state)) { voided++; return; }   // 作废票不进池；红冲票金额本身是负数，正常进
-      seen.add(no);
-      list.push({ no, code: g('code'), date, month: date.slice(0, 7), who: g('who'),
-        amt, tax, total: numOf(g('total')) || +(amt + tax).toFixed(2),
-        state: state || '正常', kind: g('kind'), src: file.name });
-      add++;
+      if (/作废/.test(state) && !old) { voided++; return; } // 新作废票不进池
+      const date = g('date') ? normDate(g('date')) : (old && old.date) || '';
+      if (!date) { errors.push(`第${ri + hr + 2}行发票 ${no} 缺少开票日期`); return; }
+      const has = k => map[k] !== undefined && g(k) !== '';
+      const amt = has('amt') ? numOf(g('amt')) : old ? old.amt : null;
+      const tax = has('tax') ? numOf(g('tax')) : old ? old.tax : null;
+      if (amt == null || tax == null) { errors.push(`第${ri + hr + 2}行发票 ${no} 缺少金额或税额`); return; }
+      const next = old ? Object.assign({}, old) : { no, id: uid() };
+      Object.assign(next, { no, code: has('code') ? code : (old && old.code) || '', date, month: date.slice(0, 7),
+        who: has('who') ? g('who') : (old && old.who) || '', amt, tax,
+        total: has('total') ? numOf(g('total')) : +(amt + tax).toFixed(2),
+        state: has('state') ? state : (old && old.state) || '正常',
+        kind: has('kind') ? g('kind') : (old && old.kind) || '', src: file.name });
+      if (/作废/.test(next.state)) { next.state = '作废'; voided++; }
+      if (old) { list[list.indexOf(old)] = next; updated++; }
+      else { list.push(next); add++; }
     });
     ivSave(key, list);
-    toast(`导入完成：新增 ${add} 张` + (dup ? `、重号跳过 ${dup}` : '') + (voided ? `、作废票剔除 ${voided}` : '') + (bad ? `、缺号码/日期跳过 ${bad}` : ''), 5200);
+    toast(`导入完成：新增 ${add} 张` + (updated ? `、更新 ${updated} 张` : '') + (dup ? `、重号跳过 ${dup}` : '') + (voided ? `、作废票剔除 ${voided}` : '') + (bad ? `、缺号码跳过 ${bad}` : '') + (errors.length ? `、${errors.join('；')}` : ''), 5200);
     go(dir === 'in' ? 'iv-in' : 'iv-out');
   } catch (e) { toast('读取失败：' + e.message, 4200); }
 }
@@ -104,7 +129,8 @@ function ivPool(dir) {
   const isIn = dir === 'in';
   const title = isIn ? '进项票' : '销项票';
   if (!CUR_ENT) return needEnt(title);
-  const list = ivLoad(isIn ? IV_IN_KEY(CUR_ENT) : IV_OUT_KEY(CUR_ENT));
+  const list = ivLoad(isIn ? IV_IN_KEY(CUR_ENT) : IV_OUT_KEY(CUR_ENT))
+    .filter(x => !/作废/.test(String(x.state || '')));
   const cur = list.filter(x => x.month === IV.month);
   const amt = cur.reduce((s, x) => s + x.amt, 0), tax = cur.reduce((s, x) => s + x.tax, 0);
   const red = cur.filter(x => x.amt < 0).length;
@@ -112,7 +138,7 @@ function ivPool(dir) {
     x.date, `<span class="code">${H(x.no.slice(-12))}</span>`, H(x.who || '—'),
     money(x.amt), money(x.tax), money(x.total),
     x.amt < 0 ? pill('红冲', 'cr') : pill(x.state, 'ok'),
-    `<button class="btn sm" data-ivdel="${dir}:${H(x.no)}">删除</button>`,
+    `<button class="btn sm" data-ivdel="${dir}:${H(x.no)}:${H(x.code || '')}">删除</button>`,
   ]);
   return head(title, `${H(entName())} · ${isIn ? '供应商开给我们的票（抵扣/入成本用）' : '我们开出去的票（算销售额用）'}。同号自动查重，作废票剔除，红冲负数原样进池。`, '纳税申报 · ' + IV.month,
     `<input type="month" id="ivMonth" value="${IV.month}" min="2026-01">
@@ -256,10 +282,11 @@ function ivSur(vat, p) {
   const c = +(vat * cj * k).toFixed(2), e = +(vat * 0.03 * k).toFixed(2), l = +(vat * 0.02 * k).toFixed(2);
   return { c, e, l, cj, sum: +(c + e + l).toFixed(2), halved: k === 0.5 };
 }
+const ivActive = x => !/作废/.test(String(x.state || ''));
 function ivSumPool(a, b) {
-  const out = ivLoad(IV_OUT_KEY(CUR_ENT)).filter(x => x.month >= a && x.month <= b);
+  const out = ivLoad(IV_OUT_KEY(CUR_ENT)).filter(x => ivActive(x) && x.month >= a && x.month <= b);
   const noinv = ivLoad(IV_NOINV_KEY(CUR_ENT)).filter(x => x.month >= a && x.month <= b);
-  const inn = ivLoad(IV_IN_KEY(CUR_ENT)).filter(x => x.month >= a && x.month <= b);
+  const inn = ivLoad(IV_IN_KEY(CUR_ENT)).filter(x => ivActive(x) && x.month >= a && x.month <= b);
   const isSp = x => /专用/.test(String(x.kind || ''));
   return {
     spNet: +out.filter(isSp).reduce((s0, x) => s0 + x.amt, 0).toFixed(2),
@@ -506,8 +533,8 @@ S['iv-stamp'] = () => {
   const adj = ivAdj(adjKey);
   const k = (p.type === 'small' && p.halve) ? 0.5 : 1;
   // 计税依据提示：买卖合同可参考本月进销票金额，营业账簿参考账上实收资本+资本公积
-  const inAmt = ivLoad(IV_IN_KEY(CUR_ENT)).filter(x => x.month === IV.month).reduce((s, x) => s + x.amt, 0);
-  const outAmt = ivLoad(IV_OUT_KEY(CUR_ENT)).filter(x => x.month === IV.month).reduce((s, x) => s + x.amt, 0);
+  const inAmt = ivLoad(IV_IN_KEY(CUR_ENT)).filter(x => ivActive(x) && x.month === IV.month).reduce((s, x) => s + x.amt, 0);
+  const outAmt = ivLoad(IV_OUT_KEY(CUR_ENT)).filter(x => ivActive(x) && x.month === IV.month).reduce((s, x) => s + x.amt, 0);
   const bal = rptBalAt(CUR_ENT, IV.month + '-31', 1);
   const capital = -(((bal['3001'] || {}).net || 0) + ((bal['4001'] || {}).net || 0) + ((bal['3002'] || {}).net || 0));
   let total = 0;
@@ -548,7 +575,7 @@ S['iv-cult'] = () => {
   const due = +(saleBase * IV_CULT_RATE).toFixed(2);
   const pay = +(due - relief - pre).toFixed(2);
   // 参考数：本月销项票价税合计 + 无票收入含税——计费收入是含税的全部价款和价外费用
-  const out = ivLoad(IV_OUT_KEY(CUR_ENT)).filter(x => x.month === IV.month);
+  const out = ivLoad(IV_OUT_KEY(CUR_ENT)).filter(x => ivActive(x) && x.month === IV.month);
   const nv = ivLoad(IV_NOINV_KEY(CUR_ENT)).filter(x => x.month === IV.month);
   const refGross = +(out.reduce((s, x) => s + (x.total || 0), 0) + nv.reduce((s, x) => s + (x.gross || 0), 0)).toFixed(2);
   const inp = (k2, v, ph) => `<input type="number" step="0.01" data-cult="${k2}" value="${v || ''}" placeholder="${ph || '0.00'}" style="width:150px">`;
@@ -893,9 +920,11 @@ document.addEventListener('change', e => {
 document.addEventListener('click', e => {
   const del = e.target.closest('[data-ivdel]');
   if (del && CUR_ENT) {
-    const [kind, id] = del.dataset.ivdel.split(':');
+    const parts = del.dataset.ivdel.split(':');
+    const [kind, id, code = ''] = parts;
+    const hasCode = parts.length > 2;
     const key = kind === 'in' ? IV_IN_KEY(CUR_ENT) : kind === 'out' ? IV_OUT_KEY(CUR_ENT) : IV_NOINV_KEY(CUR_ENT);
-    ivSave(key, ivLoad(key).filter(x => (kind === 'noinv' ? x.id : x.no) !== id));
+    ivSave(key, ivLoad(key).filter(x => kind === 'noinv' ? x.id !== id : !(x.no === id && (!hasCode || String(x.code || '') === code))));
     toast('已删除'); go(CURS); return;
   }
   const a = e.target.closest('[data-act]');
