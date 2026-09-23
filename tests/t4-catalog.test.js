@@ -61,7 +61,9 @@ test('renaming and moving a channel keeps its ID, aliases, metadata and historic
   assert.equal(a.run("t4ResolveChannel('新销售店')"), 'tmall');
   assert.equal(a.run('T4_CHM.tmall.bu'), 'dealer');
   assert.deepEqual(a.remote().periods, old.periods);
-  assert.deepEqual(a.remote().channels[0].details, old.channels[0].details);
+  assert.deepEqual(a.remote().channels[0].details.find(row => row.source === '旧销售店'), old.channels[0].details[0]);
+  assert.deepEqual(a.remote().channels[0].details.find(row => row.source === '新销售店'), { source: '新销售店', fields: [] });
+  assert.equal(a.run("t4ChSourceRows().filter(row => row.source === '新销售店').length"), 1);
 });
 
 test('new channel validation rejects names/aliases used by another channel and invalid business units', async () => {

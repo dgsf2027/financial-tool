@@ -315,3 +315,9 @@ tr.lv1 td{color:var(--text-2);font-weight:600;background:var(--surface)}
 /* Uploaded channel fields share the existing tabs and scroll on narrow screens. */
 .t4-channel-tabs{overflow-x:auto;max-width:100%;gap:4px}
 .t4-channel-tabs button{flex-shrink:0;white-space:nowrap;min-height:44px}
+.t4-catalog-form{display:grid;gap:16px;max-width:680px}
+.t4-catalog-form label{display:grid;gap:6px;min-width:0;flex:1}
+.t4-catalog-form input,.t4-catalog-form select,.t4-catalog-form textarea{width:100%;min-width:0;max-width:100%;box-sizing:border-box;font:inherit}
+.t4-catalog-form textarea{text-align:left;line-height:1.6}
+.t4-catalog-form p{margin:0;line-height:1.7;overflow-wrap:anywhere}
+@media(max-width:640px){.t4-catalog-form input,.t4-catalog-form select,.t4-catalog-form textarea{font-size:16px;min-height:44px}.t4-catalog-form .frow{flex-wrap:wrap}.t4-catalog-form .frow label{flex-basis:100%}}

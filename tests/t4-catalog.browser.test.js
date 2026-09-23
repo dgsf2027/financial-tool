@@ -48,8 +48,8 @@ test('channel and custom expense forms save to shared state and show failed writ
   await page.goto(baseURL, { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => { T4.period = '2026-09'; go('t4-channels'); });
   await page.waitForFunction(() => T4_SERVER_READY && !T4_SERVER_LOADING);
-  await page.getByRole('button', { name: '新增渠道', exact: true }).click();
-  await page.getByLabel('渠道名称', { exact: true }).fill('财务测试门店');
+  await page.getByRole('button', { name: '新增归集渠道', exact: true }).click();
+  await page.getByLabel('归集渠道名称', { exact: true }).fill('财务测试门店');
   await page.getByLabel('归属事业部', { exact: true }).selectOption('orange');
   await page.getByLabel('新增销售渠道别名', { exact: true }).fill('平台原门店');
   await page.screenshot({ path: '/tmp/finance-channel-desktop.png', fullPage: true });
@@ -60,8 +60,9 @@ test('channel and custom expense forms save to shared state and show failed writ
   await page.waitForFunction(() => CURS === 't4-channels');
   const original = remote.channels.find(c => c.n === '财务测试门店');
   assert.ok(original?.id);
-  await page.locator('#view tbody tr').filter({ hasText: '财务测试门店' }).getByRole('button', { name: '修改', exact: true }).click();
-  await page.getByLabel('渠道名称', { exact: true }).fill('财务新门店');
+  await page.getByRole('button', { name: '归集渠道', exact: true }).click();
+  await page.locator(`[data-t4chedit="${original.id}"]`).click();
+  await page.getByLabel('归集渠道名称', { exact: true }).fill('财务新门店');
   await page.getByRole('button', { name: '保存渠道', exact: true }).click();
   await page.waitForFunction(() => CURS === 't4-channels');
   assert.equal(remote.channels.find(c => c.n === '财务新门店').id, original.id);

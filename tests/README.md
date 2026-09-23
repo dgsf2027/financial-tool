@@ -31,3 +31,7 @@ node --test tests/*.browser.test.js
 T4 渠道导入回归覆盖：表头和列顺序变化、横向清单、多工作表、新增渠道去重、附加字段页签、模板回导，以及共享保存后另一客户端读取。浏览器用真实 xlsx 上传检查桌面和手机端；测试数据仅进入模拟共享 API。
 
 部署后可设置 `FINANCE_BROWSER_BASE_URL=https://finance.vvaix.com` 复用浏览器测试，验证线上静态资源；工作区 API 仍由测试拦截，不会写入线上财务数据。
+
+`t4-source-roster.test.js` 覆盖销售门店独立编辑、改名链与归集迁移、下载重导、别名可见、基础行去重和多人保存冲突。`t4-channel-roster.browser.test.js` 验证实际 xlsx 上传、默认名单、刷新与另一客户端读取、单店编辑、新增及失败时保留输入。
+
+可用 `FINANCE_CHANNEL_ROSTER_XLSX` 指定真实渠道表、`FINANCE_CHANNEL_METADATA` 指定只含渠道配置的核查 JSON，运行对应浏览器验收；这两类业务样本不纳入仓库。未提供样本时会明确跳过真实文件用例，通用工作簿用例仍运行。

@@ -117,5 +117,7 @@ test('T4 stores a detail row when an imported alias has no extra columns and lab
   assert.ok(rows.some(row => row.source === '无字段别名' && row.fallback === false));
   assert.ok(rows.some(row => row.fallback === true));
   vm.runInContext("T4.chField = '__sources'", context);
-  assert.match(vm.runInContext("S['t4-channels']()", context), /未导入基础渠道/);
+  const html = vm.runInContext("S['t4-channels']()", context);
+  assert.match(html, /26 个归集渠道待登记/);
+  assert.match(html, /data-t4sourceedit="天猫-澳乐旗舰店"[^>]*>登记<\/button>/);
 });
