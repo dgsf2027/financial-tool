@@ -24,7 +24,7 @@ C_TEXT = C_SUB = C_LINK = "000000"
 FMT_AMT = '#,##0.00;-#,##0.00;"-"'
 FMT_PCT = '0.0%;-0.0%;"-"'
 KEY_ROWS = {"grossProfit", "contribution", "netProfit"}          # 关键小计：加粗 + 上划线
-OPERATING = ["platformFee", "platformOther", "promotion", "ztc", "cps", "research", "aftersales", "logistics", "shippingInsurance", "warehouse", "tax"]
+OPERATING = ["platformFee", "platformOther", "promotion", "ztc", "cps", "commission", "research", "aftersales", "logistics", "shippingInsurance", "warehouse", "tax"]
 DIRECT = ["directLabor", "directRent", "directOther"]
 INDIRECT = ["sharedLabor", "sharedRent", "sharedOther"]
 SUMMARY_KEYS = ["salesIncome", "salesCost", "grossProfit", "grossMargin", "operating", "direct",
@@ -139,7 +139,10 @@ def num_cell(cell, m, is_link=False):
 def sheet_name(name, used):
     s = re.sub(r"[\[\]\:\*\?\/\\]", "·", name).strip()[:28] or "渠道"
     base, i = s, 2
-    while s in used:
+    # Excel ignores case in tab names. Reserve the final name ourselves so
+    # openpyxl cannot silently rename a tab after formulas have captured it.
+    occupied = {name.lower() for name in used}
+    while s.lower() in occupied:
         s = f"{base[:25]}~{i}"; i += 1
     used.add(s)
     return s
@@ -293,7 +296,7 @@ def write_summary(ws, tree, chans, chans_by_id, meta, row_of, first_row):
         got = sum(1 for c in node["_leaves"] if chans_by_id[c["id"]]["filled"] > 0)
         cell = ws.cell(r_info, 2 + node["_idx"], f"{got}/{len(node['_leaves'])}")
         cell.font = Font(name=FONT, size=9, color=C_SUB); cell.alignment = Alignment(horizontal="center"); cell.border = BORDER
-    note(ws, f"A{r_info + 2}", "口径：销售收入=零售收入+退货金额+退款金额-返款金额绝对值；返款与客户退款独立保存，均扣减收入。毛利=销售收入-销售成本；边际毛利=毛利-运营费-直接管理费；净利润=边际毛利-间接管理费+历史返利收入；历史销售回款仅记录，不计入收入或利润。平台扣点采用系统按销售收入派生的金额，管理费按自然日分摊。")
+    note(ws, f"A{r_info + 2}", "口径：销售收入=零售收入+退货金额+退款金额-返款金额绝对值；返款与客户退款独立保存，均扣减收入。毛利=销售收入-销售成本；边际毛利=毛利-运营费-直接管理费；净利润=边际毛利-间接管理费+历史返利收入；历史销售回款仅记录，不计入收入或利润。费用比例统一按销售收入计算，实填金额优先；导出采用系统计算金额，管理费按自然日分摊。")
     ws.column_dimensions["A"].width = 22
     for i in range(len(nodes)):
         ws.column_dimensions[get_column_letter(2 + i)].width = 16

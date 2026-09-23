@@ -57,7 +57,7 @@ const T4_CH_BASE = [
   { id: 'jd_zzzrest', n: '京东-zzzrest官方旗舰店', bu: 'ruimian', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「京东-zzzrest官方旗舰店」' }] },
   { id: 'dy_zzzrest', n: '抖音-zzzrest旗舰店', bu: 'ruimian', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「抖音-zzzrest旗舰店」' }] },
   { id: 'xhs_zzzrest', n: '小红书-zzzrest旗舰店', bu: 'ruimian', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「小红书-zzzrest旗舰店」' }] },
-  { id: 'tm_orange', n: '天猫-橘农旗舰店', bu: 'orange', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「天猫-橘农滋补养生旗舰店」' }] },
+  { id: 'tm_orange', n: '天猫-橘农滋补养生旗舰店', aliases: ['天猫-橘农旗舰店'], bu: 'orange', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「天猫-橘农滋补养生旗舰店」' }] },
   { id: 'tb_orange', n: '淘宝-橘农滋补企业店', bu: 'orange', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「淘宝-橘农滋补企业店」' }] },
   { id: 'jd_orange', n: '京东-橘农旗舰店', bu: 'orange', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「京东-橘农旗舰店」' }] },
   { id: 'dy_orange', n: '抖音-橘农滋补旗舰店', bu: 'orange', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「抖音-橘农滋补旗舰店」' }] },
@@ -238,6 +238,7 @@ const T4_INPUTS = [
   { k: 'promotion', n: '推广费用', g: '运营费用' },
   { k: 'ztc', n: '直通车', g: '运营费用' },
   { k: 'cps', n: 'CPS', g: '运营费用' },
+  { k: 'commission', n: '达人佣金', g: '运营费用' },
   { k: 'research', n: '数研', g: '运营费用' },
   { k: 'aftersales', n: '售后费用', g: '运营费用' },
   { k: 'logistics', n: '快递物流', g: '运营费用' },
@@ -270,6 +271,7 @@ const T4_METRICS = [
   { k: 'promotion', n: '　推广费用', lvl: 1 },
   { k: 'ztc', n: '　直通车', lvl: 1 },
   { k: 'cps', n: '　CPS', lvl: 1 },
+  { k: 'commission', n: '　达人佣金', lvl: 1 },
   { k: 'research', n: '　数研', lvl: 1 },
   { k: 'aftersales', n: '　售后费用', lvl: 1 },
   { k: 'logistics', n: '　快递物流', lvl: 1 },
@@ -344,6 +346,7 @@ const T4_CFG_DEFAULT = {
 const T4_CFG_FIELDS = [
   ['retailCostRate', '零售成本率', 'rate'], ['returnRate', '退货率', 'rate'], ['returnCostRate', '退货成本率', 'rate'],
   ['platformFeeRate', '平台扣点率', 'rate'], ['platformOtherRate', '平台其他率', 'rate'],
+  ['commissionRate', '佣金率', 'rate'],
   ['aftersalesRate', '售后费用率', 'rate'], ['logisticsRate', '快递物流率', 'rate'],
   ['shippingInsuranceRate', '运费险', 'rate'],
   ['warehouseRate', '仓储费率', 'rate'], ['taxRate', '税率', 'rate'],
@@ -364,6 +367,7 @@ const T4_FILE_DEFS = {
     ['returnCost', '退货成本', ['退货成本']], ['rebateIncome', '返利收入', ['返利收入']], ['salesReceipt', '销售回款（仅记录）', ['销售回款', '销售回款（仅记录）']], ['platformFee', '平台扣点', ['平台扣点']],
     ['platformOther', '平台其他', ['平台其他']], ['promotion', '推广费用', ['推广费用', '推广费']],
     ['ztc', '直通车', ['直通车']], ['cps', 'CPS', ['CPS']], ['research', '数研', ['数研']],
+    ['commission', '达人佣金', ['达人佣金', '达人佣金金额', '佣金', '佣金金额']],
     ['aftersales', '售后费用', ['售后费用']], ['logistics', '快递物流', ['快递物流', '快递费', '物流费']],
     ['shippingInsurance', '运费险', ['运费险', '运费险费用', '退换货运费险']],
     ['warehouse', '仓储费用', ['仓储费用', '仓储费']], ['tax', '税费', ['税费']],
@@ -1355,7 +1359,7 @@ const t4Filled = ch => Object.keys(T4.data[ch] || {}).filter(dt => t4InputValue(
 
 function t4Assumed(ch, key, base, hard) {
   const cfg = T4.cfg[ch] || {}, days = t4Days();
-  const rateMap = { platformFee: 'platformFeeRate', platformOther: 'platformOtherRate', aftersales: 'aftersalesRate',
+  const rateMap = { platformFee: 'platformFeeRate', platformOther: 'platformOtherRate', commission: 'commissionRate', aftersales: 'aftersalesRate',
     logistics: 'logisticsRate', shippingInsurance: 'shippingInsuranceRate', warehouse: 'warehouseRate', tax: 'taxRate' };
   const monthMap = { logistics: 'logisticsMonth', directLabor: 'directLaborMonth', directRent: 'directRentMonth',
     directOther: 'directOtherMonth', sharedLabor: 'sharedLaborMonth', sharedRent: 'sharedRentMonth', sharedOther: 'sharedOtherMonth' };
@@ -1377,10 +1381,10 @@ function t4Row(ch, dt) {
   ['returnAmount','refundAmount','retailCost','returnCost','promotion','ztc','cps','research','rebateIncome','salesReceipt'].forEach(k => { if (r[k] == null) r[k] = 0; });
   r.rebateAmount = -Math.abs(r.rebateAmount || 0) || 0;
   r.salesIncome = r.retailIncome + r.returnAmount + r.refundAmount + r.rebateAmount;
-  ['platformFee','platformOther','aftersales','logistics','shippingInsurance','warehouse','tax','directLabor','directRent','directOther','sharedLabor','sharedRent','sharedOther'].forEach(k => {
-    // Only platform commission uses net sales; the other agreed rates retain
-    // their retail-income base. Explicit imported/manual amounts still win.
-    if (r[k] == null) r[k] = t4Assumed(ch, k, k === 'platformFee' ? r.salesIncome : r.retailIncome, hard);
+  ['platformFee','platformOther','commission','aftersales','logistics','shippingInsurance','warehouse','tax','directLabor','directRent','directOther','sharedLabor','sharedRent','sharedOther'].forEach(k => {
+    // Expense rates share the sales base after returns, refunds and rebates.
+    // Explicit imported/manual amounts (including zero) still win.
+    if (r[k] == null) r[k] = t4Assumed(ch, k, r.salesIncome, hard);
   });
   r.salesCost = r.retailCost + r.returnCost;
   r.grossProfit = r.salesIncome - r.salesCost;
@@ -1682,7 +1686,10 @@ function t4AutoMap(row, def) {
   const map = {}, cells = row.map(x => String(x || '').replace(/\s/g, ''));
   def.fields.forEach(([k, , names]) => {
     let idx = -1;
-    for (const n of names) { idx = cells.findIndex(c => c === n || c.includes(n)); if (idx >= 0) break; }
+    // Try every exact alias before allowing a partial match: an earlier
+    // “订单日期” or “渠道备注” must not hide “发货时间” or “销售渠道”.
+    for (const n of names) { idx = cells.findIndex(c => c === n); if (idx >= 0) break; }
+    if (idx < 0) for (const n of names) { idx = cells.findIndex(c => c.includes(n)); if (idx >= 0) break; }
     if (idx >= 0) map[k] = idx;
   });
   return map;
@@ -2230,7 +2237,7 @@ async function t4ImpRun() {
       if (t4ResolveChannel(get('channel')) !== ch) { skip('渠道与当前渠道不符'); return; }
       const isReturn = /退货/.test(String(get('type')).trim()), amount = numeric('amount'), cost = numeric('cost');
       if (amount != null) add(dt, isReturn ? 'returnAmount' : 'retailIncome', isReturn ? -Math.abs(amount) : amount);
-      if (cost != null) add(dt, isReturn ? 'returnCost' : 'retailCost', isReturn ? -Math.abs(cost) : Math.abs(cost));
+      if (cost != null) add(dt, isReturn ? 'returnCost' : 'retailCost', isReturn ? -Math.abs(cost) : cost);
       if (imp.map.research != null && get('research') != null && String(get('research')).trim()) add(dt, 'research', Math.abs(numeric('research')));
     } else {
       if (imp.fileK === 'ztc' && ((String(get('direction')) && !/支出/.test(String(get('direction')))) || /充值/.test(String(get('type'))))) { skip('非支出或充值行'); return; }
@@ -2344,32 +2351,30 @@ function t4CfgReadInputs() {
   });
 }
 
-// 单渠道每日明细：利润表格式——损益科目竖排（行），日期横排（列），末列合计
+// 单渠道每日明细与汇总共用日期范围，管理费只累计所选日期。
 S['t4-chday'] = () => {
   t4Load();
   if (!T4_CHM[T4.dayCh]) T4.dayCh = T4_CH[0].id;
-  const c = T4_CHM[T4.dayCh], days = t4Days();
+  const c = T4_CHM[T4.dayCh], range = t4ViewRange();
+  const from = range ? range.from : t4Date(1), to = range ? range.to : t4Date(t4Days());
+  const dates = t4RangeDates(from, to);
   const sel = `<label class="sel">渠道 <select id="t4DayCh">${T4_CH.map(x => `<option value="${x.id}" ${x.id === T4.dayCh ? 'selected' : ''}>${H(x.n)}</option>`).join('')}</select></label>`;
-  // 每天算一次损益对象（含参数/分摊派生），末列取月合计
-  const daily = [], hasData = [];
-  for (let d = 1; d <= days; d++) {
-    const dt = t4Date(d);
-    daily.push(t4DayData(c.id, dt));
-    hasData.push(t4DayHasData(c.id, dt) || t4MgmtDaily(c.id).any);
-  }
-  const m = t4Month(c.id);
+  const daily = dates.map(dt => t4DayData(c.id, dt));
+  const allocated = t4MgmtDaily(c.id).any;
+  const hasData = dates.map(dt => t4DayHasData(c.id, dt) || allocated);
+  const m = t4RangeData(c.id, from, to);
   // 合计列放最左（紧挨科目名）与最右各一列，两头都能直接看到
-  const headers = [{ t: '损益项目' }, { t: '合计', n: 1 }, ...Array.from({ length: days }, (_, i) => ({ t: `${i + 1}日`, n: 1 })), { t: '合计', n: 1 }];
+  const headers = [{ t: '损益项目' }, { t: '区间合计', n: 1 }, ...dates.map(dt => ({ t: `${+dt.slice(8)}日`, n: 1 })), { t: '区间合计', n: 1 }];
   const rows = T4_METRICS.map(metric => {
     const name = metric.lvl ? `<span class="mut">${H(metric.n)}</span>` : `<b>${H(metric.n)}</b>`;
     const total = `<b>${t4Fmt(m[metric.k], metric.pct)}</b>`;
     const dayCells = daily.map((g, i) => hasData[i] ? t4Fmt(g[metric.k], metric.pct) : '<span class="mut">—</span>');
     return [name, total, ...dayCells, total];
   });
-  return head(`每日明细 · ${c.n}`, `${T4.period} 逐日损益表（利润表格式）：损益科目竖排，每天一列，末列为当月合计。空白日仅计管理费日摊。`, '工具箱 · T4',
-    t4PeriodControl(`${sel}<button class="btn" data-t4go="sheet">← 返回损益表</button><button class="btn pri" data-t4act="dayExport">导出 CSV</button>`))
-    + t4OverrideNotice([c.id])
-    + card(`${c.n} · ${T4.period} 每日损益表（实取 ${t4Filled(c.id)}/${days} 天）`, table(headers, rows));
+  return head(`每日明细 · ${c.n}`, `${from} ～ ${to}，共 ${dates.length} 天。损益项目固定在左侧，每天一列；管理费按月金额 ÷ 当月自然日计入所选日期，区间合计不含区间外日期。当前月默认截至今天，选择月末可查看整月。`, '工具箱 · T4',
+    t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="chday" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${from}" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="chday" type="date" min="${from}" max="${t4Date(t4Days())}" value="${to}" style="width:132px"></label>${sel}<button class="btn" data-t4go="sheet">← 返回损益表</button><button class="btn pri" data-t4act="dayExport">导出 CSV</button>`))
+    + t4OverrideNotice([c.id], dates)
+    + card(`${c.n} · ${from} ～ ${to} 每日损益表（实取 ${t4FilledRange(c.id, from, to)}/${dates.length} 天）`, t4PinnedTable(headers, rows));
 };
 
 // ---------- 邮件发送：收件人清单（服务端保存，多端共用）+ 按各自范围生成套表并逐人发送 ----------
@@ -2593,7 +2598,7 @@ S['t4-cfg'] = () => {
         : '<div class="mut" style="padding:14px 14px 0">暂无费用规则；用下方「添加费用规则」为本渠道设置分摊。</div>')
       + `<div style="padding:11px 14px;display:flex;gap:7px;align-items:center;flex-wrap:wrap">${addCtrl}<span style="flex:1"></span><button class="btn sm pri" data-t4act="cfgSave">保存参数</button></div>`, '', `t4-cfg:${c.id}`);
   }).join('');
-  return head('T4 参数', '平台扣点按每日销售收入（零售收入加退货、退款及返款的负数金额）计算；运费险等其他费率按每日零售收入计算。月度金额按当月自然日平均分摊；直接/间接管理费用在「工资 / 费用分摊」页维护。', '工具箱 · T4',
+  return head('T4 参数', '费用比例统一按每日销售收入（零售收入扣除退货、退款及返款）计算。零售成本率、退货率仍以零售收入为基数，退货成本率以零售成本为基数。月度金额按当月自然日平均分摊；直接/间接管理费用在「工资 / 费用分摊」页维护。', '工具箱 · T4',
     t4SyncStatus() + `<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="cfgReset">恢复底稿值</button><button class="btn pri" data-t4act="cfgSave">保存参数</button>`)
     + '<div class="note w"><b>修改会影响所有对应日期的派生结果。</b>人工录入的同名科目优先于参数值。添加规则后填入数值并「保存参数」生效。</div>' + blocks;
 };
@@ -2667,7 +2672,7 @@ S['t4-rules'] = () => head('T4 取数口径', '以下规则来自用户提供的
   ]))
   + card('底稿设定', table([{t:'渠道'},{t:'项目'},{t:'规则'}], [
     ['京东自营','零售成本','零售收入 × 45%'], ['京东自营','退货金额','零售收入 × -16%'], ['京东自营','退货成本','零售成本 × -16%'],
-    ['天猫-澳乐旗舰店','平台/售后/物流/仓储/税费','按收入比例计算，比例见参数页'], ['各渠道','管理费用','月度设定值 ÷ 当月自然日'],
+    ['各渠道','平台/佣金/售后/物流/运费险/仓储/税费','销售收入 × 对应费率，比例见参数页；实填金额优先'], ['各渠道','管理费用','月度设定值 ÷ 当月自然日'],
   ]))
   + '<div class="note"><b>重复导入是幂等的：</b>只替换文件内有有效金额的日期和同类来源字段；指定区间仅筛选日期。缺少的日期、空白字段与其他来源保留；要冲销请明确填 0 或先清空。</div>';
 
@@ -2722,8 +2727,8 @@ function t4SuiteClientWorkbook(payload) {
   const sheetName = raw => {
     const base = String(raw || '报表').replace(/[\\/*?:\[\]]/g, '·').slice(0, 28) || '报表';
     let name = base, i = 2;
-    while (used.has(name)) name = `${base.slice(0, 25)}~${i++}`;
-    used.add(name); return name;
+    while (used.has(name.toLowerCase())) name = `${base.slice(0, 25)}~${i++}`;
+    used.add(name.toLowerCase()); return name;
   };
   const meta = title => [[{ h: title }], [`日期：${payload.rangeLabel || payload.period}`, `范围：${payload.scopeName}`, `生成：${payload.generated}`], []];
 
@@ -2857,15 +2862,15 @@ function t4ExportSuiteCsv() {
 
 function t4DayExport() {
   const c = T4_CHM[T4.dayCh]; if (!c) return;
-  const days = t4Days();
-  const daily = [], has = [];
-  for (let d = 1; d <= days; d++) { const dt = t4Date(d); daily.push(t4DayData(c.id, dt)); has.push(t4DayHasData(c.id, dt) || t4MgmtDaily(c.id).any); }
-  const m = t4Month(c.id);
-  const hdr = ['损益项目', ...Array.from({ length: days }, (_, i) => `${T4.period}-${String(i + 1).padStart(2, '0')}`), '合计'];
+  const range = t4ViewRange(), from = range ? range.from : t4Date(1), to = range ? range.to : t4Date(t4Days());
+  const dates = t4RangeDates(from, to), daily = dates.map(dt => t4DayData(c.id, dt));
+  const allocated = t4MgmtDaily(c.id).any, has = dates.map(dt => t4DayHasData(c.id, dt) || allocated);
+  const m = t4RangeData(c.id, from, to);
+  const hdr = ['损益项目', ...dates, '合计'];
   const fmt = (g, metric) => metric.pct ? `${(g[metric.k] * 100).toFixed(2)}%` : (g[metric.k] || 0).toFixed(2);
   const rows = T4_METRICS.map(metric => [metric.n.trim(),
     ...daily.map((g, i) => has[i] ? fmt(g, metric) : ''), fmt(m, metric)]);
-  download(`每日损益_${c.n}_${T4.period}.csv`, toCSV([hdr, ...rows])); toast('已导出每日损益明细');
+  download(`每日损益_${c.n}_${from}_${to}.csv`, toCSV([hdr, ...rows])); toast('已导出当前日期区间的每日损益明细');
 }
 function t4ExportSelection() {
   const range = t4ViewRange();
@@ -3228,7 +3233,7 @@ document.addEventListener('change', e => {
   else if (e.target.id === 't4ViewFrom' || e.target.id === 't4ViewTo') {
     if (e.target.id === 't4ViewFrom') T4.viewFrom = e.target.value || ''; else T4.viewTo = e.target.value || '';
     if (T4.viewFrom && T4.viewTo && T4.viewTo < T4.viewFrom) T4.viewTo = T4.viewFrom;
-    t4Go(e.target.dataset.view === 'sheet' ? 'sheet' : 'overview');
+    t4Go(['sheet', 'chday'].includes(e.target.dataset.view) ? e.target.dataset.view : 'overview');
   }
   else if (e.target.id === 't4MgmtFrom' || e.target.id === 't4MgmtTo') {
     if (T4_SERVER_LOADING || T4_SERVER_SAVING || (e.target.value && !e.target.value.startsWith(T4.period + '-'))) {

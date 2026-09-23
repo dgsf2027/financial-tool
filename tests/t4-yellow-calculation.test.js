@@ -36,11 +36,42 @@ test('default range uses the selected month length and the local calendar date',
   assert.equal(run("t4DefaultRangeEnd(new Date(2026,8,23))"), '2028-02-29');
 });
 
-test('platform commission uses sales after returns/refunds, other rates retain retail base', () => {
+test('all expense rates use sales after returns, refunds and rebates', () => {
   const run = app();
-  run("T4.data.tmall={'2026-09-01':{retailIncome:1000,returnAmount:-100,refundAmount:-50}};");
-  assert.equal(run("t4Row('tmall','2026-09-01').platformFee"), 42.5);
-  assert.equal(run("t4Row('tmall','2026-09-01').logistics"), 100);
+  run("T4.data.tmall={'2026-09-01':{retailIncome:1000,returnAmount:-100,refundAmount:-50,rebateAmount:50}};");
+  for (const key of ['platformFee', 'platformOther', 'aftersales', 'logistics', 'shippingInsurance', 'warehouse', 'tax']) {
+    run(`T4.cfg.tmall[${JSON.stringify(key + 'Rate')}]=0.05`);
+    assert.equal(run(`t4Row('tmall','2026-09-01')[${JSON.stringify(key)}]`), 40, key);
+  }
+});
+
+test('expense-rate actuals including zero stay authoritative and negative sales retain their sign', () => {
+  const run = app();
+  for (const key of ['platformOther', 'aftersales', 'logistics', 'shippingInsurance', 'warehouse', 'tax']) {
+    run(`T4.cfg.tmall[${JSON.stringify(key + 'Rate')}]=0.1`);
+    for (const actual of [0, 12]) {
+      run(`T4.data.tmall={'2026-09-01':{retailIncome:1000,refundAmount:-200,_fileParts:{daily:{${key}:${actual}}}}}`);
+      assert.equal(run(`t4Row('tmall','2026-09-01')[${JSON.stringify(key)}]`), actual, key);
+      run(`T4.data.tmall['2026-09-01'][${JSON.stringify(key)}]=3`);
+      assert.equal(run(`t4Row('tmall','2026-09-01')[${JSON.stringify(key)}]`), 3, key);
+    }
+    for (const [refund, expected] of [[-1000, 0], [-1200, -20]]) {
+      run(`T4.data.tmall={'2026-09-01':{retailIncome:1000,refundAmount:${refund}}}`);
+      assert.equal(run(`t4Row('tmall','2026-09-01')[${JSON.stringify(key)}]`), expected, key);
+    }
+  }
+});
+
+test('sales-based expense rates preserve cost assumptions and fixed monthly allocations', () => {
+  const run = app();
+  run("T4.cfg.tmall={retailCostRate:.45,returnRate:-.16,returnCostRate:-.16,taxRate:.04,logisticsMonth:3000}; T4.data.tmall={'2026-09-01':{retailIncome:1000,refundAmount:-40}};");
+  const row = run("t4Row('tmall','2026-09-01')");
+  assert.equal(row.retailCost, 450);
+  assert.equal(row.returnAmount, -160);
+  assert.equal(row.returnCost, -72);
+  assert.equal(row.salesIncome, 800);
+  assert.equal(row.tax, 32);
+  assert.equal(row.logistics, 100);
 });
 
 test('explicit platform commission including zero overrides the sales-based rule', () => {

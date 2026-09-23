@@ -87,7 +87,7 @@ for (const width of [1440, 390]) {
       delete T4.data.dycreator['2026-09-01'];
       return { insurance: r.shippingInsurance, operating: r.operating, netProfit: r.netProfit };
     });
-    assert.deepEqual(result, { insurance: 12.5, operating: 12.5, netProfit: 487.5 });
+    assert.deepEqual(result, { insurance: 11.25, operating: 11.25, netProfit: 488.75 });
     await card.scrollIntoViewIfNeeded();
     await card.screenshot({ path: `/tmp/finance-shipping-insurance-${width}.png` });
     await card.locator('[data-t4cfgdel="dycreator:shippingInsuranceRate"]').click();
@@ -97,6 +97,35 @@ for (const width of [1440, 390]) {
     await page.waitForFunction(() => T4_SERVER_READY && !T4_SERVER_LOADING);
     assert.equal(await field.count(), 0, 'deleted insurance rule must stay deleted after reload');
     assert.equal(await select.locator('option[value="shippingInsuranceRate"]').count(), 1);
+  });
+}
+
+for (const width of [1440, 390]) {
+  test(`Douyin commission saves and exports sales-based amounts at ${width}px`, { skip: !chromium }, async t => {
+    const page = await openPage(t, { width, height: 900 });
+    const card = page.locator('#view .card').filter({ has: page.locator('[data-t4cfgadd="dycreator"]') });
+    await card.locator('.t4addsel').selectOption('commissionRate');
+    await card.locator('[data-t4cfgadd]').click();
+    const field = card.locator('[data-t4cfg="dycreator:commissionRate"]');
+    await field.fill('10');
+    await card.locator('[data-t4act="cfgSave"]').click();
+    await page.waitForFunction(() => !T4_SERVER_SAVING && T4_SERVER_DOCUMENT.cfgByPeriod['2026-09'].dycreator.commissionRate === 0.1);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.evaluate(() => { T4.period = '2026-09'; go('t4-cfg'); });
+    await page.waitForFunction(() => T4_SERVER_READY && !T4_SERVER_LOADING);
+    assert.equal(await field.inputValue(), '10');
+    assert.match(await page.locator('#view').innerText(), /费用比例统一按每日销售收入/);
+    const result = await page.evaluate(() => {
+      T4.data.dycreator['2026-09-01'] = { retailIncome: 1000, retailCost: 400, returnAmount: -100, refundAmount: -50, rebateAmount: 50 };
+      const row = t4Row('dycreator', '2026-09-01');
+      const payload = t4SuitePayload();
+      delete T4.data.dycreator['2026-09-01'];
+      return { sales: row.salesIncome, commission: row.commission, profit: row.netProfit,
+        exported: payload.dailyByCh.dycreator[0].commission, month: payload.monthByCh.dycreator.commission };
+    });
+    assert.deepEqual(result, { sales: 800, commission: 80, profit: 320, exported: 80, month: 80 });
+    await card.scrollIntoViewIfNeeded();
+    await card.screenshot({ path: `/tmp/finance-commission-${width}.png` });
   });
 }
 

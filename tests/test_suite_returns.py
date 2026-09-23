@@ -97,7 +97,7 @@ class ReturnsSuiteTest(unittest.TestCase):
                              f"='返款测试店'!B{rows['rebateAmount']}")
             report_note = wb['总表'].cell(max(rows.values()) + 3, 1).value
             self.assertIn('退款金额-返款金额绝对值', report_note)
-            self.assertIn('平台扣点采用系统按销售收入派生的金额', report_note)
+            self.assertIn('费用比例统一按销售收入计算，实填金额优先', report_note)
             self.assertTrue(wb.calculation.fullCalcOnLoad)
 
     def test_python_verification_keeps_cash_out_of_profit_with_custom_expenses(self):

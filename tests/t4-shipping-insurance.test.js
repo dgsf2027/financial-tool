@@ -45,21 +45,21 @@ test('Douyin insurance rule starts unset, adds at zero and saves a percentage fo
   assert.equal(a.remote().cfgByPeriod['2026-09'].dy_orange.shippingInsuranceRate, undefined);
 });
 
-test('insurance is based on retail income and reduces daily, monthly and date-range profit', async () => {
+test('insurance is based on sales after deductions and reduces daily, monthly and date-range profit', async () => {
   const a = await app({ cfg: { dycreator: { shippingInsuranceRate: 0.02, platformFeeRate: 0.05 } },
     periods: { '2026-09': { dycreator: {
       '2026-09-01': { retailIncome: 1000, returnAmount: -200, refundAmount: -50, rebateAmount: 50, retailCost: 400 },
       '2026-09-02': { retailIncome: 500, retailCost: 200 },
     } } } });
   const first = clone(a.run("t4Row('dycreator','2026-09-01')"));
-  assert.equal(first.shippingInsurance, 20);
+  assert.equal(first.shippingInsurance, 14);
   assert.equal(first.platformFee, 35);
-  assert.equal(first.operating, 55);
-  assert.equal(first.netProfit, 245);
+  assert.equal(first.operating, 49);
+  assert.equal(first.netProfit, 251);
   assert.ok(first._hard.includes('shippingInsurance'));
-  assert.equal(a.run("t4Month('dycreator').shippingInsurance"), 30);
-  assert.equal(a.run("t4Month('dycreator').netProfit"), 510);
-  assert.equal(a.run("t4RangeData('dycreator','2026-09-01','2026-09-01').netProfit"), 245);
+  assert.equal(a.run("t4Month('dycreator').shippingInsurance"), 24);
+  assert.equal(a.run("t4Month('dycreator').netProfit"), 516);
+  assert.equal(a.run("t4RangeData('dycreator','2026-09-01','2026-09-01').netProfit"), 251);
   assert.equal(a.run("t4DayData('dycreator','2026-09-03').shippingInsurance"), 0);
 });
 

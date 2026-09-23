@@ -59,6 +59,19 @@ for (const width of [1440, 390]) {
     const x = await sheet.locator('tbody tr>:first-child').first().evaluate(el => el.getBoundingClientRect().x);
     await sheet.evaluate(el => { el.scrollLeft = 650; });
     assert.ok(Math.abs(await sheet.locator('tbody tr>:first-child').first().evaluate(el => el.getBoundingClientRect().x) - x) < 1, 'report metric stays in place');
+    await page.evaluate(() => { t4DefaultRangeEnd = () => '2026-09-23'; T4.viewFrom = ''; T4.viewTo = ''; T4.dayCh = 'tmall'; go('t4-chday'); });
+    const daily = page.locator('.t4-pinned-one');
+    assert.equal(await page.locator('#t4ViewTo').inputValue(), '2026-09-23');
+    assert.equal(await daily.locator('thead th').count(), 26);
+    const dailyLabel = daily.locator('tbody tr>:first-child').first();
+    const labelX = await dailyLabel.evaluate(el => el.getBoundingClientRect().x);
+    await daily.evaluate(el => { el.scrollLeft = 850; el.scrollTop = 300; });
+    assert.ok(Math.abs(await dailyLabel.evaluate(el => el.getBoundingClientRect().x) - labelX) < 1, 'daily metric stays visible');
+    await page.screenshot({ path: `/tmp/finance-yellow-daily-${width}.png`, fullPage: true });
+    await page.locator('#t4ViewTo').fill('2026-09-10');
+    await page.locator('#t4ViewTo').dispatchEvent('change');
+    assert.match(await page.locator('#view').innerText(), /每日明细/);
+    assert.equal(await page.locator('.t4-pinned-one thead th').count(), 13);
     assert.deepEqual(errors, []);
   });
 }
