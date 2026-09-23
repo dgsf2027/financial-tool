@@ -59,6 +59,48 @@ class ImportHistoryTest(unittest.TestCase):
         self.assertEqual(resaved['document']['expenseItems'], items)
         self.assertEqual(resaved['document']['importHistory'], saved['document']['importHistory'])
 
+    def test_old_data_only_cas_preserves_new_metadata_and_rejects_stale_full_save(self):
+        items = [{'k': 'expense_test', 'n': '返款费用'}]
+        status, saved = self.save_changes(
+            self.change(['expenseItems'], value=items, oldExists=False),
+            self.change(['importHistory', 'import_one'], value=self.record(), oldExists=False))
+        self.assertEqual(status, 200, saved)
+        # The old client only knows version 1 and sends a business-field patch.
+        status, merged = self.save_changes(
+            self.change(['periods', MONTH, 'tmall', DAY, 'retailIncome'], 100, 200))
+        self.assertEqual(status, 200, merged)
+        self.assertEqual(merged['document']['expenseItems'], items)
+        self.assertEqual(merged['document']['importHistory'], saved['document']['importHistory'])
+        legacy = copy.deepcopy(self.original)
+        status, rejected = self.request('PUT', {'baseVersion': 1, 'document': legacy})
+        self.assertEqual(status, 409, rejected)
+        self.assert_unchanged(merged['document'], merged['version'])
+
+    def test_history_edits_and_deletions_reject_companion_business_change_atomically(self):
+        status, saved = self.save_changes(self.change(['importHistory', 'import_one'], value=self.record(), oldExists=False))
+        self.assertEqual(status, 200, saved)
+        record = saved['document']['importHistory']['import_one']
+        mutations = [
+            self.change(['importHistory', 'import_one', 'fileName'], record['fileName'], 'edited.xlsx'),
+            self.change(['importHistory', 'import_one', 'actor'], record['actor'], 'other-person'),
+            self.change(['importHistory', 'import_one', 'issues'], record['issues'], ['edited reason']),
+            self.change(['importHistory', 'import_one'], record, newExists=False),
+        ]
+        for mutation in mutations:
+            with self.subTest(path=mutation['path']):
+                status, rejected = self.save_changes(
+                    self.change(['periods', MONTH, 'tmall', DAY, 'retailIncome'], 100, 200),
+                    mutation, version=saved['version'])
+                self.assertEqual(status, 400, rejected)
+                self.assert_unchanged(saved['document'], saved['version'])
+        # An explicit empty dictionary is deletion, not a legacy omission.
+        emptied = copy.deepcopy(saved['document'])
+        emptied['importHistory'] = {}
+        emptied['periods'][MONTH]['tmall'][DAY]['retailIncome'] = 200
+        status, rejected = self.request('PUT', {'baseVersion': saved['version'], 'document': emptied})
+        self.assertEqual(status, 400, rejected)
+        self.assert_unchanged(saved['document'], saved['version'])
+
     def test_expense_catalog_schema_atomic_paths_and_open_daily_field_keys(self):
         bad_items = [
             {}, [{'k': 'other', 'n': '费用'}], [{'k': 'expense_A', 'n': '费用'}],

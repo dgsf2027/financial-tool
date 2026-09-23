@@ -56,7 +56,7 @@ test('combined import validates both partitions before mutation and rolls back f
   assert.match(a.run('T4.importFeedback.message'), /原数据与记录已恢复/);
 });
 
-test('explicit range clears only selected source dates and records skipped reasons', async () => {
+test('explicit range filters dates, preserves missing values, and records skipped reasons', async () => {
   const a = app(); seed(a);
   summary(a, [['天猫-澳乐旗舰店', '2099-12-02', '售后退货', 20, 8], ['天猫-澳乐旗舰店', '2099-12-01', '', 20, 8], ['未知', '2099-12-02', '', 20, 8]],
     { rangeMode: 'range', from: '2099-12-02', to: '2099-12-03' });
@@ -64,7 +64,10 @@ test('explicit range clears only selected source dates and records skipped reaso
   assert.equal(a.run("t4InputValue(T4.data.tmall['2099-12-01'],'retailIncome')"), 100);
   assert.equal(a.run("t4InputValue(T4.data.tmall['2099-12-02'],'returnAmount')"), -20);
   assert.equal(a.run("t4InputValue(T4.data.tmall['2099-12-02'],'returnCost')"), -8);
-  assert.equal(a.run("T4.data.tmall['2099-12-03']"), undefined);
+  assert.equal(a.run("t4InputValue(T4.data.tmall['2099-12-02'],'retailIncome')"), 200);
+  assert.equal(a.run("t4InputValue(T4.data.tmall['2099-12-02'],'retailCost')"), 80);
+  assert.equal(a.run("t4InputValue(T4.data.tmall['2099-12-03'],'retailIncome')"), 300);
+  assert.equal(a.run("t4InputValue(T4.data.tmall['2099-12-03'],'retailCost')"), 120);
   const record = a.json('Object.values(T4.importHistory)[0]');
   assert.equal(record.skipped, 2); assert.equal(record.issues.length, 2); assert.equal(record.mode, 'range');
 });
@@ -125,4 +128,29 @@ test('range entry renders distinct date-keyed cells and refuses switching with u
   const target = {id:'t4SumTo',value:'2099-12-10'};
   a.handlers.change({target});
   assert.equal(a.run('T4.sumTo'), '2099-12-03'); assert.equal(target.value, '2099-12-03');
+});
+
+test('blank return fields never erase existing same-source returns during a normal sales import', async () => {
+  const a = app();
+  a.run(`T4.data.tmall={'2099-12-01':{_fileParts:{summaryIncome:{retailIncome:100,returnAmount:-15,refundAmount:-5},summaryCost:{retailCost:40,returnCost:-6}}}}`);
+  summary(a, [['天猫-澳乐旗舰店','2099-12-01','普通销售',120,50,'','','']], { map:{channel:0,date:1,type:2,retailIncome:3,retailCost:4,returnAmount:5,refundAmount:6,returnCost:7} });
+  await a.run('t4SummaryImpRun()');
+  assert.equal(a.run("t4InputValue(T4.data.tmall['2099-12-01'],'retailIncome')"), 120);
+  assert.equal(a.run("t4InputValue(T4.data.tmall['2099-12-01'],'retailCost')"), 50);
+  assert.equal(a.run("t4InputValue(T4.data.tmall['2099-12-01'],'returnAmount')"), -15);
+  assert.equal(a.run("t4InputValue(T4.data.tmall['2099-12-01'],'returnCost')"), -6);
+  assert.equal(a.run("t4InputValue(T4.data.tmall['2099-12-01'],'refundAmount')"), -5);
+});
+
+test('explicit range is only a filter and preserves missing dates and blank daily fields', async () => {
+  const a = app();
+  a.run(`T4.data.tmall={'2099-12-01':{_fileParts:{daily:{retailIncome:10,retailCost:5}}},'2099-12-02':{_fileParts:{daily:{retailIncome:20,retailCost:8}}},'2099-12-03':{_fileParts:{daily:{retailIncome:30,retailCost:12}}}};
+    T4.imp={mode:'channel',fileK:'daily',fileName:'daily.xlsx',headRow:0,rangeMode:'range',from:'2099-12-01',to:'2099-12-03',map:{date:0,retailIncome:1,retailCost:2},rows:[[],['2099-12-01',12,6],['2099-12-02',24,'']]}`);
+  await a.run('t4ImpRun()');
+  assert.equal(a.run("t4InputValue(T4.data.tmall['2099-12-01'],'retailIncome')"), 12);
+  assert.equal(a.run("t4InputValue(T4.data.tmall['2099-12-01'],'retailCost')"), 6);
+  assert.equal(a.run("t4InputValue(T4.data.tmall['2099-12-02'],'retailIncome')"), 24);
+  assert.equal(a.run("t4InputValue(T4.data.tmall['2099-12-02'],'retailCost')"), 8);
+  assert.equal(a.run("t4InputValue(T4.data.tmall['2099-12-03'],'retailIncome')"), 30);
+  assert.equal(a.run("t4InputValue(T4.data.tmall['2099-12-03'],'retailCost')"), 12);
 });

@@ -35,7 +35,9 @@ async function t4SaveReturn(entry = t4ReturnEntry()) {
   controls.forEach(el => { el.disabled = true; });
   try {
     const days = T4.data[entry.channel] ||= {};
-    Object.assign(days[entry.date] ||= {}, values);
+    const raw = days[entry.date] ||= {};
+    Object.assign(raw, values);
+    Object.keys(values).forEach(key => { (raw._manualFields ||= {})[key] = true; });
     await t4Save();
   } catch (error) {
     if (T4.period === period) T4.data = before;

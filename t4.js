@@ -637,12 +637,20 @@ function t4Load() {
 
 // Catalog edits save only their own top-level array. Nothing is changed locally
 // before field CAS succeeds; a rejected save therefore cannot leak into a later save.
-async function t4SaveCatalog(field, value) {
+async function t4SaveCatalog(field, value, importInfo = null) {
   t4RequireServerReady();
   if (!['channels', 'expenseItems'].includes(field)) throw new Error('不支持的目录');
   const pendingView = t4ViewDocument(), before = t4Clone(T4_SERVER_BASELINE);
   const candidate = t4Clone(T4_SERVER_DOCUMENT);
   candidate[field] = t4Clone(value);
+  if (importInfo) {
+    // Build the audit entry for this CAS without exposing unsaved history locally.
+    const previousHistory = T4.importHistory;
+    try {
+      const record = t4AddImportHistory(importInfo);
+      candidate.importHistory = { ...(candidate.importHistory || {}), [record.id]: record };
+    } finally { T4.importHistory = previousHistory; }
+  }
   const controls = [...document.querySelectorAll('[data-t4act="channelSave"], [data-t4act="expenseItemSave"], #t4ChannelName, #t4ChannelBu, #t4ChannelAliases, #t4ExpenseName, #t4Period')]
     .map(input => ({ input, disabled: input.disabled }));
   controls.forEach(({ input }) => { input.disabled = true; });
@@ -657,8 +665,10 @@ async function t4SaveCatalog(field, value) {
       const pending = window.T4Shared.reapply(before, pendingView, T4_SERVER_BASELINE);
       T4.data = pending.periods[T4.period]; T4.cfg = pending.cfgByPeriod[T4.period];
       T4.periodLocks = pending.periodLocks;
+      T4.importHistory = pending.importHistory || {};
     }
     localStorage.setItem(T4_EXPENSE_ITEMS_KEY, JSON.stringify(T4.expenseItems));
+    localStorage.setItem(T4_IMPORT_HISTORY_KEY, JSON.stringify(T4.importHistory || {}));
     T4_SERVER_ERROR = null;
     return saved;
   } catch (err) {
@@ -874,8 +884,8 @@ function t4ImportRange(imp) {
 }
 function t4ImportRangeControls(imp) {
   const range = imp.rangeMode === 'range';
-  return cardp('导入日期范围', `<div class="frow"><label>替换范围 <select id="t4ImportRangeMode"><option value="file" ${range ? '' : 'selected'}>文件覆盖日期</option><option value="range" ${range ? 'selected' : ''}>指定起止日期</option></select></label>
-    ${range ? `<label>起 <input id="t4ImportFrom" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${H(imp.from ?? t4Date(1))}"></label><label>止 <input id="t4ImportTo" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${H(imp.to ?? t4Date(t4Days()))}"></label>` : ''}</div><p class="mut">${range ? '只读取所选区间。成功导入的渠道在所选区间内替换同类来源，区间内未出现在文件中的旧值会清除。起止相同表示一天。' : '按渠道保留文件未覆盖日期。文件内同渠道同日多行先合计，再替换该日同类来源。'} 未匹配渠道和无有效金额的文件不会清空旧数据。</p>`);
+  return cardp('导入日期范围', `<div class="frow"><label>日期筛选 <select id="t4ImportRangeMode"><option value="file" ${range ? '' : 'selected'}>文件覆盖日期</option><option value="range" ${range ? 'selected' : ''}>指定起止日期</option></select></label>
+    ${range ? `<label>起 <input id="t4ImportFrom" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${H(imp.from ?? t4Date(1))}"></label><label>止 <input id="t4ImportTo" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${H(imp.to ?? t4Date(t4Days()))}"></label>` : ''}</div><p class="mut">${range ? '只读取所选区间，起止相同表示一天。只替换文件内有有效金额的日期和科目，缺少的日期及空白字段保留原值。' : '只替换文件内有有效金额的日期和科目。同渠道同日同科目多行先合计，缺少的日期及空白字段保留原值。'} 未匹配渠道和无有效金额的文件不会清空旧数据。要冲销旧值请明确填 0，或使用清空功能。修改订单类型只更新其对应科目，请同时核对原零售或退货科目是否需要冲销。</p>`);
 }
 function t4ImportFeedback() {
   const feedback = T4.importFeedback;
@@ -902,31 +912,20 @@ function t4AddImportHistory(info) {
 async function t4CommitImport(imp, pending, used, skipped, issues, range) {
   const before = t4Clone(T4.data), history = t4Clone(T4.importHistory || {});
   const targets = new Map();
+  // Both modes replace only accepted (channel, date, source, field) values.
+  // A selected interval filters rows; it never turns absent dates or blank
+  // fields into deletion requests. Explicit zero is an accepted value.
   pending.forEach(x => {
     const key = `${x.ch}:${x.source}`;
-    if (!targets.has(key)) targets.set(key, { ch: x.ch, source: x.source, dates: new Set(range || []), keys: new Set(), dateKeys: new Map() });
+    if (!targets.has(key)) targets.set(key, { ch: x.ch, source: x.source, dateKeys: new Map() });
     const target = targets.get(key);
-    if (!range) target.dates.add(x.dt);
     if (!target.dateKeys.has(x.dt)) target.dateKeys.set(x.dt, new Set());
-    const keys = target.dateKeys.get(x.dt);
-    keys.add(x.key);
-    // Sales rows may become returns after type mapping. Clear the paired old
-    // metric too so a corrected order type cannot leave both amounts behind.
-    if (imp.fileK === 'sales' || imp.mode === 'summary') {
-      if (['retailIncome', 'returnAmount'].includes(x.key) && (imp.map.retailIncome != null || imp.map.amount != null)) {
-        keys.add('retailIncome'); keys.add('returnAmount');
-      }
-      if (['retailCost', 'returnCost'].includes(x.key) && (imp.map.retailCost != null || imp.map.cost != null)) {
-        keys.add('retailCost'); keys.add('returnCost');
-      }
-    }
-    keys.forEach(k => target.keys.add(k));
+    target.dateKeys.get(x.dt).add(x.key);
   });
   let record;
   try {
     targets.forEach(x => {
-      if (range) t4ClearSource(x.ch, x.source, x.dates, x.keys);
-      else x.dateKeys.forEach((keys, dt) => t4ClearSource(x.ch, x.source, new Set([dt]), keys));
+      x.dateKeys.forEach((keys, dt) => t4ClearSource(x.ch, x.source, new Set([dt]), keys));
     });
     pending.forEach(x => t4Add(x.ch, x.dt, x.key, x.num, x.source));
     record = t4AddImportHistory({ fileName: imp.fileName || imp.fileN, scope: imp.mode === 'summary' ? t4SumScope().n : (imp.fileN || imp.fileK),
@@ -1169,11 +1168,12 @@ S.t4 = () => {
     const n = t4Filled(c.id), rn = vr ? t4FilledRange(c.id, vr.from, vr.to) : 0;
     const m = vr ? t4RangeData(c.id, vr.from, vr.to) : t4Month(c.id);
     const mgmtAny = t4MgmtDaily(c.id).any, hasInc = vr ? rn > 0 : n > 0, mgmtOnly = !n && mgmtAny;
+    const hasData = Object.entries(T4.data[c.id] || {}).some(([dt, raw]) => (!vr || (dt >= vr.from && dt <= vr.to)) && t4HasInputs(raw));
     const src = c.files.length ? pill('文件/人工', 'ok') : pill('人工', 'wa');
-    const st = n === 0 ? (mgmtOnly ? pill('仅管理费', 'wa') : pill('未开始', 'cr')) : n < 15 ? pill('缺口大', 'wa') : pill('已有数据', 'ok');
+    const st = n === 0 ? (hasData ? pill('有成本 / 费用 / 返款', 'wa') : mgmtOnly ? pill('仅管理费', 'wa') : pill('未开始', 'cr')) : n < 15 ? pill('缺口大', 'wa') : pill('已有数据', 'ok');
     return [t4ProjectPill(c.bu), t4BuPill(c.bu), `<b>${H(c.n)}</b>`,
       vr ? `<b class="mono">${rn}</b> / ${vr.n}` : `<b class="mono">${n}</b> / ${t4Days()}`, t4Cal(c.id), src,
-      hasInc ? money(m.salesIncome) : '—', hasInc || mgmtAny ? money(m.netProfit) : '—', hasInc ? `${(m.netMargin * 100).toFixed(1)}%` : '—', st,
+      hasData ? money(m.salesIncome) : '—', hasData || mgmtAny ? money(m.netProfit) : '—', hasInc ? `${(m.netMargin * 100).toFixed(1)}%` : '—', st,
       `${c.files.length ? `<button class="btn sm" data-t4go="imp:${c.id}">导入</button>` : ''}
        <button class="btn sm" data-t4go="man:${c.id}">录入</button>`];
   });
@@ -1650,10 +1650,22 @@ function t4ChPickFile() {
       if (T4_SERVER_SAVING || T4_SERVER_LOADING) throw new Error('正在同步，请稍后再导入');
       t4RequireServerReady();
       const sheets = await XLSXLite.readSheets(file), previous = t4Clone(t4ChOverrides());
-      let r, channels;
-      try { r = t4ChApplySheets(sheets); channels = t4Clone(t4ChOverrides()); }
-      finally { t4SaveChOverrides(previous); t4RebuildChannels(); }
-      await t4SaveCatalog('channels', channels);
+      let r, channels, importedChannels;
+      try {
+        r = t4ChApplySheets(sheets); channels = t4Clone(t4ChOverrides());
+        const sources = new Set();
+        sheets.map(t4ChSchema).filter(Boolean).forEach(({ body, map }) => body.forEach(row => {
+          const bu = map.bu < 0 ? '' : String(row[map.bu] || '').replace(/\s/g, '');
+          if (bu && !Object.hasOwn(T4_BU_ALIAS, bu)) return;
+          const source = (map.source < 0 ? '' : row[map.source]) || (map.target < 0 ? '' : row[map.target]);
+          if (source) sources.add(t4ChNorm(source));
+        }));
+        importedChannels = channels.filter(c => (c.details || []).some(d => sources.has(t4ChNorm(d.source)))).map(c => c.id);
+      } finally { t4SaveChOverrides(previous); t4RebuildChannels(); }
+      const dates = Array.from({ length: t4Days() }, (_, i) => t4Date(i + 1));
+      await t4SaveCatalog('channels', channels, { fileName: file.name, scope: '渠道列表', mode: 'file',
+        dates, from: dates[0], to: dates[dates.length - 1], channels: importedChannels,
+        used: r.imported, skipped: r.bad.filter(x => !x.includes('未填事业部')).length, issues: r.bad });
       t4Load(); T4.chField = '__sources'; t4Go('channels');
       const warn = r.bad.length ? `；注意：${r.bad.slice(0, 3).join('、')}` : '';
       toast(`已识别 ${r.sheets} 张渠道表：读取销售渠道 ${r.imported} 条，新增归集渠道 ${r.added}、映射销售渠道 ${r.mapped}、改名 ${r.renamed}、调事业部 ${r.moved}${warn}`, 5600);
@@ -1695,14 +1707,20 @@ function t4AllocationPreview() {
 async function t4ApplyAllocationImport() {
   t4AssertEditable();
   const imp = T4.allocImport; if (!imp) return;
-  const before = t4Clone(T4.cfg), period = T4.period;
+  const before = t4Clone(T4.cfg), history = t4Clone(T4.importHistory || {}), period = T4.period;
   try {
+    t4RequireServerReady();
     const r = t4MgmtApplyRows(imp.sheets[imp.sheet], imp.kind);
     if (!r.entries.length) throw new Error('没有可写入的分摊金额');
+    const dates = Array.from({ length: t4Days() }, (_, i) => t4Date(i + 1));
+    t4AddImportHistory({ fileName: imp.fileName, scope: imp.kind === 'payroll' ? '工资分摊' : '费用分摊', mode: 'file',
+      dates, from: dates[0], to: dates[dates.length - 1], channels: r.entries.map(x => x.channel), used: r.matchedRows, skipped: 0, issues: [] });
     await t4SaveCfg(); T4.allocImport = null; t4Go('mgmt');
     toast(`已写入 ${period} 的 ${r.entries.length} 个渠道，日损益自动按月分摊`);
   } catch (e) {
     if (T4.period === period) T4.cfg = before;
+    T4.importHistory = history;
+    localStorage.setItem(T4_IMPORT_HISTORY_KEY, JSON.stringify(history));
     const all = t4Stored(T4_PERIOD_CFG_KEY, {}); all[period] = before;
     localStorage.setItem(T4_PERIOD_CFG_KEY, JSON.stringify(all));
     toast(`未完成导入：${e.message}`, 5200);
@@ -2240,7 +2258,7 @@ S['t4-rules'] = () => head('T4 取数口径', '以下规则来自用户提供的
     ['京东自营','零售成本','零售收入 × 45%'], ['京东自营','退货金额','零售收入 × -16%'], ['京东自营','退货成本','零售成本 × -16%'],
     ['天猫-澳乐旗舰店','平台/售后/物流/仓储/税费','按收入比例计算，比例见参数页'], ['各渠道','管理费用','月度设定值 ÷ 当月自然日'],
   ]))
-  + '<div class="note"><b>重复导入是幂等的：</b>默认只替换文件覆盖日期的同类来源字段；指定区间时只替换所选区间，其他日期与其他来源保留。</div>';
+  + '<div class="note"><b>重复导入是幂等的：</b>只替换文件内有有效金额的日期和同类来源字段；指定区间仅筛选日期。缺少的日期、空白字段与其他来源保留；要冲销请明确填 0 或先清空。</div>';
 
 // 套表数据包：按当前项目筛选裁剪（全部/澳乐/瑞眠），交给服务端 Python 生成多 Sheet 工作簿
 function t4SuitePayload(options = {}) {
@@ -2459,7 +2477,7 @@ function t4RawExportRows() {
       const raw = T4.data[c.id][dt];
       if (!raw || typeof raw !== 'object') return;
       const sources = Object.fromEntries(Object.entries(raw._fileParts || {}).map(([source, values]) => [source, { ...values }]));
-      const manual = {};
+      const manual = {}, legacy = {};
       fields.forEach(({ k }) => {
         if (raw[k] == null || raw[k] === '') return;
         const source = raw._srcs && raw._srcs[k];
@@ -2467,11 +2485,12 @@ function t4RawExportRows() {
         if (source) {
           const values = sources[source] ||= {};
           if (values[k] == null) values[k] = raw[k];
-        } else manual[k] = raw[k];
+        } else if (raw._src === 'file' && !raw._fileParts && !raw._manualFields?.[k]) legacy[k] = raw[k];
+        else manual[k] = raw[k];
       });
       Object.entries(sources).forEach(([source, values]) => append(c, dt, source, names[source] || '文件导入', values));
-      append(c, dt, raw._src === 'file' && !raw._fileParts ? 'legacy-file' : 'manual',
-        raw._src === 'file' && !raw._fileParts ? '文件导入（旧记录，来源未细分）' : '人工录入 / 覆盖', manual);
+      append(c, dt, 'legacy-file', '文件导入（旧记录，来源未细分）', legacy);
+      append(c, dt, 'manual', '人工录入 / 覆盖', manual);
     });
   });
   return { selection, rows };
@@ -2514,10 +2533,11 @@ function t4Export() {
   ].forEach(([n,bu,group]) => {
     const ids = group.filter(id => idsInView.has(id)); if (!ids.length) return;
     const ok = range ? t4RangeOK(ids, from, to) : t4SumOK(ids);
-    const m = ok ? (range ? t4GroupRange(ids, from, to) : t4Group(ids)) : null;
+    const m = range ? t4GroupRange(ids, from, to) : t4Group(ids);
     const counts = ids.map(id => t4FilledRange(id, from, to)), gap = Math.max(...counts) - Math.min(...counts);
-    rows.push([T4.period,n,bu,ok ? `${from} ～ ${to}` : `禁用：渠道取数天数极差 ${gap} 天`,
-      ...(ok ? T4_METRICS.map(x => x.pct ? `${(m[x.k]*100).toFixed(2)}%` : (m[x.k] || 0).toFixed(2)) : [])]);
+    rows.push([T4.period,n,bu,`${from} ～ ${to}`,
+      ...T4_METRICS.map(x => x.pct ? `${(m[x.k]*100).toFixed(2)}%` : (m[x.k] || 0).toFixed(2)),
+      ok ? '按当前范围汇总' : `按已保存数据汇总；渠道收入取数天数极差 ${gap} 天`, '汇总']);
   });
   download(`渠道事业部日损益表_${scopeName}_${from}_${to}.csv`, toCSV([hdr, ...rows])); toast('已按当前项目和日期导出日损益明细');
 }

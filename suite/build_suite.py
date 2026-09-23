@@ -39,14 +39,15 @@ BORDER = GRID
 # ---------- 公式：与系统 t4Row 完全一致 ----------
 def operating_keys(meta):
     """Keep existing fixed fees and include registered custom daily expense rows."""
-    extra = meta.get("operatingKeys", OPERATING)
+    extra = meta.get("operatingKeys", [])
     metric_keys = {m["k"] for m in meta["metrics"]}
     inputs = set(meta["inputKeys"])
     if not isinstance(extra, list) or any(not isinstance(k, str) or k not in metric_keys or k not in inputs
                                         or (k not in OPERATING and not re.fullmatch(r"expense_[a-z0-9_]{1,64}", k))
                                         for k in extra):
         raise ValueError("invalid operatingKeys")
-    return list(dict.fromkeys(OPERATING + extra))
+    base = [k for k in OPERATING if k in metric_keys and k in inputs]
+    return list(dict.fromkeys(base + extra))
 
 
 def formula_for(key, col, row_of, operating=None):
@@ -287,7 +288,7 @@ def write_summary(ws, tree, chans, chans_by_id, meta, row_of, first_row):
         got = sum(1 for c in node["_leaves"] if chans_by_id[c["id"]]["filled"] > 0)
         cell = ws.cell(r_info, 2 + node["_idx"], f"{got}/{len(node['_leaves'])}")
         cell.font = Font(name=FONT, size=9, color=C_SUB); cell.alignment = Alignment(horizontal="center"); cell.border = BORDER
-    note(ws, f"A{r_info + 2}", "口径：销售收入=零售收入+退货金额+退款金额；毛利=销售收入-销售成本；边际毛利=毛利-运营费-直接管理费；净利润=边际毛利-间接管理费。管理费按自然日分摊，费率类科目按参数页比例派生。")
+    note(ws, f"A{r_info + 2}", "口径：销售收入=零售收入+退货金额+退款金额；毛利=销售收入-销售成本；边际毛利=毛利-运营费-直接管理费；净利润=边际毛利-间接管理费+返利收入；销售回款仅记录，不计入收入或利润。管理费按自然日分摊，费率类科目按参数页比例派生。")
     ws.column_dimensions["A"].width = 22
     for i in range(len(nodes)):
         ws.column_dimensions[get_column_letter(2 + i)].width = 16
