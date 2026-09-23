@@ -48,7 +48,7 @@ def formula_for(key, col, row_of):
     if key == "contribution":     return f"={r('grossProfit')}-{r('operating')}-{r('direct')}"
     if key == "contributionRate": return f"=IF({r('salesIncome')}=0,0,{r('contribution')}/{r('salesIncome')})"
     if key == "indirect":         return "=" + "+".join(r(k) for k in INDIRECT)
-    if key == "netProfit":        return f"={r('contribution')}-{r('indirect')}"
+    if key == "netProfit":        return f"={r('contribution')}-{r('indirect')}" + (f"+{r('rebateIncome')}" if 'rebateIncome' in row_of else '')
     if key == "netMargin":        return f"=IF({r('salesIncome')}=0,0,{r('netProfit')}/{r('salesIncome')})"
     return None
 
@@ -64,7 +64,7 @@ def derive(vals):
     d["direct"] = sum(g(k) for k in DIRECT)
     d["contribution"] = d["grossProfit"] - d["operating"] - d["direct"]
     d["indirect"] = sum(g(k) for k in INDIRECT)
-    d["netProfit"] = d["contribution"] - d["indirect"]
+    d["netProfit"] = d["contribution"] - d["indirect"] + g("rebateIncome")
     return d
 
 

@@ -202,6 +202,8 @@ const T4_INPUTS = [
   { k: 'refundAmount', n: '退款金额', g: '销售与成本' },
   { k: 'retailCost', n: '零售成本', g: '销售与成本' },
   { k: 'returnCost', n: '退货成本', g: '销售与成本' },
+  { k: 'rebateIncome', n: '返利收入（计入净利润）', g: '返款' },
+  { k: 'salesReceipt', n: '销售回款（仅记录）', g: '返款' },
   { k: 'platformFee', n: '平台扣点', g: '运营费用' },
   { k: 'platformOther', n: '平台其他', g: '运营费用' },
   { k: 'promotion', n: '推广费用', g: '运营费用' },
@@ -252,8 +254,10 @@ const T4_METRICS = [
   { k: 'sharedLabor', n: '　人力公摊', lvl: 1 },
   { k: 'sharedRent', n: '　房租水电公摊', lvl: 1 },
   { k: 'sharedOther', n: '　其他公摊', lvl: 1 },
+  { k: 'rebateIncome', n: '返利收入', lvl: 0 },
   { k: 'netProfit', n: '净利润', lvl: 0 },
   { k: 'netMargin', n: '净利润率', pct: true, lvl: 0 },
+  { k: 'salesReceipt', n: '销售回款（仅记录）', lvl: 0 },
 ];
 
 /* 管理费 6 项月摊不再内置底稿默认值——统一在「管理费分摊」页由用户录入/导入维护 */
@@ -302,7 +306,7 @@ const T4_FILE_DEFS = {
     ['date', '日期', ['日期', '业务日期', '统计日期']],
     ['retailIncome', '零售收入', ['零售收入']], ['returnAmount', '退货金额', ['退货金额']],
     ['refundAmount', '退款金额', ['退款金额']], ['retailCost', '零售成本', ['零售成本']],
-    ['returnCost', '退货成本', ['退货成本']], ['platformFee', '平台扣点', ['平台扣点']],
+    ['returnCost', '退货成本', ['退货成本']], ['rebateIncome', '返利收入', ['返利收入']], ['salesReceipt', '销售回款（仅记录）', ['销售回款', '销售回款（仅记录）']], ['platformFee', '平台扣点', ['平台扣点']],
     ['platformOther', '平台其他', ['平台其他']], ['promotion', '推广费用', ['推广费用', '推广费']],
     ['ztc', '直通车', ['直通车']], ['cps', 'CPS', ['CPS']], ['research', '数研', ['数研']],
     ['aftersales', '售后费用', ['售后费用']], ['logistics', '快递物流', ['快递物流', '快递费', '物流费']],
@@ -711,7 +715,7 @@ function t4Row(ch, dt) {
   if (!explicit.has('retailCost') && cfg.retailCostRate != null) { r.retailCost = r.retailIncome * cfg.retailCostRate; hard.push('retailCost'); }
   if (!explicit.has('returnAmount') && cfg.returnRate != null) { r.returnAmount = r.retailIncome * cfg.returnRate; hard.push('returnAmount'); }
   if (!explicit.has('returnCost') && cfg.returnCostRate != null) { r.returnCost = (r.retailCost || 0) * cfg.returnCostRate; hard.push('returnCost'); }
-  ['returnAmount','refundAmount','retailCost','returnCost','promotion','ztc','cps','research'].forEach(k => { if (r[k] == null) r[k] = 0; });
+  ['returnAmount','refundAmount','retailCost','returnCost','promotion','ztc','cps','research','rebateIncome','salesReceipt'].forEach(k => { if (r[k] == null) r[k] = 0; });
   r.salesIncome = r.retailIncome + r.returnAmount + r.refundAmount;
   ['platformFee','platformOther','aftersales','logistics','warehouse','tax','directLabor','directRent','directOther','sharedLabor','sharedRent','sharedOther'].forEach(k => {
     // Only platform commission uses net sales; the other agreed rates retain
@@ -726,7 +730,7 @@ function t4Row(ch, dt) {
   r.contribution = r.grossProfit - r.operating - r.direct;
   r.contributionRate = r.salesIncome ? r.contribution / r.salesIncome : 0;
   r.indirect = r.sharedLabor + r.sharedRent + r.sharedOther;
-  r.netProfit = r.contribution - r.indirect;
+  r.netProfit = r.contribution - r.indirect + r.rebateIncome;
   r.netMargin = r.salesIncome ? r.netProfit / r.salesIncome : 0;
   r._hard = hard; r._src = raw._src || 'manual';
   return r;
@@ -882,7 +886,7 @@ S.t4 = () => {
        <button class="btn sm" data-t4go="man:${c.id}">录入</button>`];
   });
   return head('T4　日损益表', `按底稿完整科目重算 ${T4_CH.length} 个渠道，并分别归集到大电商、拼多多、瑞眠、橘农和经销事业部。`, '工具箱 · 已更新',
-    t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="overview" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="当前月默认截至今天；选择月末可看整月" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="overview" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label>${t4ProjSelect('overview')}<button class="btn" data-t4go="sumimp:income">收入导入</button><button class="btn" data-t4go="sumimp:cost">成本导入</button><button class="btn" data-t4go="summan:income">收入录入</button><button class="btn" data-t4go="summan:cost">成本录入</button><button class="btn" data-t4go="channels">渠道列表</button><button class="btn" data-t4go="rules">取数口径</button><button class="btn" data-t4go="mgmt">工资 / 费用分摊</button><button class="btn" data-t4go="cfg">参数</button><button class="btn" data-t4act="wipePeriod" title="清空当前期间全部渠道的收入/成本/费用数据；参数、管理费分摊和渠道列表不受影响">清空本期</button><button class="btn pri" data-t4go="sheet">看损益表</button>`))
+    t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="overview" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="当前月默认截至今天；选择月末可看整月" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="overview" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label>${t4ProjSelect('overview')}<button class="btn" data-t4go="sumimp:income">收入导入</button><button class="btn" data-t4go="sumimp:cost">成本导入</button><button class="btn" data-t4go="summan:income">收入录入</button><button class="btn" data-t4go="summan:cost">成本录入</button><button class="btn" data-t4go="returns">瑞眠 / 橘农返款</button><button class="btn" data-t4go="channels">渠道列表</button><button class="btn" data-t4go="rules">取数口径</button><button class="btn" data-t4go="mgmt">工资 / 费用分摊</button><button class="btn" data-t4go="cfg">参数</button><button class="btn" data-t4act="wipePeriod" title="清空当前期间全部渠道的收入/成本/费用数据；参数、管理费分摊和渠道列表不受影响">清空本期</button><button class="btn pri" data-t4go="sheet">看损益表</button>`))
     + kpis([
       { k: '渠道', v: String(T4_CH.length), u: '个' },
       { k: '大电商', v: String(T4_BIG_ECOM.length), u: '个渠道' },
@@ -1488,7 +1492,7 @@ async function t4ImpRun() {
 // 损益树的列：一条从销售收入到净利润的「层层递减」链
 const T4_TREE_COLS = [
   ['salesIncome', '销售收入'], ['salesCost', '销售成本'], ['grossProfit', '毛利'], ['grossMargin', '毛利率', true],
-  ['operating', '运营费'], ['contribution', '边际毛利'], ['mgmt', '管理费'], ['netProfit', '净利润'], ['netMargin', '净利率', true],
+  ['operating', '运营费'], ['contribution', '边际毛利'], ['mgmt', '管理费'], ['rebateIncome', '返利收入'], ['netProfit', '净利润'], ['netMargin', '净利率', true], ['salesReceipt', '销售回款（仅记录）'],
 ];
 const t4TreeVal = (g, key) => key === 'mgmt' ? (g.direct || 0) + (g.indirect || 0) : (g[key] || 0);
 function t4PinnedTable(cols, rows, count = 1) {
@@ -1971,7 +1975,7 @@ function t4ExportSuiteCsv() {
   const days = t4Days(), period = T4.period;
   const money = v => (Number(v) || 0).toFixed(2);
   const fmt = (g, m) => m.pct ? `${((g[m.k] || 0) * 100).toFixed(2)}%` : money(t4TreeVal(g, m.k));
-  const sumCols = [['salesIncome', '销售收入'], ['salesCost', '销售成本'], ['grossProfit', '毛利'], ['grossMargin', '毛利率', true], ['operating', '运营费'], ['contribution', '边际毛利'], ['mgmt', '管理费'], ['netProfit', '净利润'], ['netMargin', '净利率', true]];
+  const sumCols = [['salesIncome', '销售收入'], ['salesCost', '销售成本'], ['grossProfit', '毛利'], ['grossMargin', '毛利率', true], ['operating', '运营费'], ['contribution', '边际毛利'], ['mgmt', '管理费'], ['rebateIncome', '返利收入'], ['netProfit', '净利润'], ['netMargin', '净利率', true]];
   const out = [];
   const push = row => out.push(row);
   const blank = () => out.push([]);
