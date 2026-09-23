@@ -15,6 +15,11 @@ function app() {
   });
   vm.runInContext(fs.readFileSync(path.join(ROOT, 't4.js'), 'utf8'), context);
   vm.runInContext("t4LoadServer=async()=>{}; T4.period='2099-12'; t4Load(); T4.periodLocks={'2099-12':false};", context);
+  // These import/entry tests model a connected workspace. Exercise the real
+  // save path and acknowledge its document through an explicit service stub.
+  vm.runInContext(`T4_SERVER_READY=true; T4_SERVER_VERSION=1;
+    T4_SERVER_DOCUMENT=t4ViewDocument(); T4_SERVER_BASELINE=t4ViewDocument();
+    window.T4Shared.save=async document=>({version:T4_SERVER_VERSION+1,document:t4Clone(document)});`, context);
   return { run: x => vm.runInContext(x, context), json: x => JSON.parse(vm.runInContext(`JSON.stringify(${x})`, context)), storage, handlers, inputs };
 }
 function seed(a) {

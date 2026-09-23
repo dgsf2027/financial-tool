@@ -15,6 +15,22 @@ const PUBLIC_FILES = new Set([
   't4.js', 't4-sync.js', 't4-allocation.js', 't4-returns.js', 'lib/xlsx-lite.js', 'lib/xlsx-write.js',
 ]);
 
+function versionPageAssets(html) {
+  // The public CDN gives JS/CSS a browser TTL even when origin says no-cache.
+  // Hash the deployed bytes, including bind-mounted updates before a restart,
+  // so each release gets fresh URLs without a manual hard refresh.
+  return html.replace(/((?:src|href)="\.\/)([^"?]+\.(?:js|css))(?:\?[^\"]*)?"/g, (match, prefix, asset) => {
+    if (!PUBLIC_FILES.has(asset)) return match;
+    const file = path.join(ROOT, asset);
+    try {
+      const stat = fs.lstatSync(file);
+      if (!stat.isFile() || stat.isSymbolicLink()) return match;
+      const hash = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex').slice(0, 16);
+      return `${prefix}${asset}?v=${hash}"`;
+    } catch (_) { return match; }
+  });
+}
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -376,11 +392,13 @@ const server = http.createServer((req, res) => {
     }
     fs.readFile(target, (e3, buf) => {
       if (e3) { res.writeHead(500); return res.end('Read error'); }
+      const isPage = publicPath === 'index.html';
       res.writeHead(200, {
         'Content-Type': MIME[path.extname(target).toLowerCase()] || 'application/octet-stream',
-        'Cache-Control': 'no-cache',
+        'Cache-Control': isPage ? 'no-store' : 'no-cache',
+        ...(isPage ? { 'CDN-Cache-Control': 'no-store', 'Cloudflare-CDN-Cache-Control': 'no-store' } : {}),
       });
-      res.end(buf);
+      res.end(isPage ? versionPageAssets(buf.toString('utf8')) : buf);
     });
   });
 });

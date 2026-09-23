@@ -50,7 +50,8 @@ test('channel mutations require a connected shared workspace', () => {
   assert.throws(() => a.run('t4RequireServerReady()'), /未能连接财务中心/);
   assert.match(a.run('t4SyncStatus()'), /未能连接财务中心/);
   a.run('T4_SERVER_READY = true');
-  assert.match(a.run('t4SyncStatus()'), /已连接财务中心，可保存/);
+  assert.match(a.run('t4SyncStatus()'), /已连接财务中心/);
+  assert.match(a.run('t4SyncStatus()'), /data-t4act="refreshSync"/);
 });
 
 test('channel mutations wait for an in-flight sync even after a workspace was loaded', () => {

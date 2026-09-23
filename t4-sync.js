@@ -71,7 +71,9 @@
     const e = new Error(message); e.status = status; e.code = x.error; e.response = x; return e;
   }
   async function read() {
-    const r = await fetch('/api/t4/workspace', { cache: 'no-store' });
+    const signal = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+      ? AbortSignal.timeout(15000) : undefined;
+    const r = await fetch('/api/t4/workspace', { cache: 'no-store', ...(signal ? { signal } : {}) });
     if (!r.ok) throw failure(await r.json().catch(() => ({})), r.status);
     return r.json();
   }
@@ -86,6 +88,14 @@
     state.loading = true;
     loading = read().then(x => { accept(x); return state; }).finally(() => { state.loading = false; loading = null; });
     return loading;
+  }
+  // Background reads must not acknowledge a new baseline until the page has
+  // checked again for edits made while the request was in flight.
+  function acceptRefresh(snapshot, expectedVersion) {
+    if (!state.ready || state.loading || state.saving || state.version !== expectedVersion ||
+        !Number.isInteger(snapshot.version) || snapshot.version < state.version) return false;
+    accept(snapshot);
+    return true;
   }
   function rebase(original, viewBaseline, candidate, latest, edits) {
     const conflicts = [];
@@ -138,5 +148,6 @@
       throw failure({ error: 'version_conflict' }, 409);
     } finally { state.saving = false; }
   }
-  window.T4Shared = { state, empty, clone, load, save, reapply };
+  window.T4Shared = { state, empty, clone, load, save, reapply, readSnapshot: read, acceptRefresh,
+    hasChanges: (before, after) => diff(before, after).length > 0 };
 })();

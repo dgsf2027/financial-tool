@@ -128,7 +128,8 @@ test('an authenticated colleague sees their own name and no login button', { ski
   await page.waitForFunction(() => document.getElementById('uNm').textContent === '测试同事');
   assert.equal(await page.locator('#financeLogin').isVisible(), false);
   await page.evaluate(() => go('t4-channels'));
-  assert.match(await page.locator('#view').innerText(), /已连接财务中心，可保存/);
+  assert.match(await page.locator('#view').innerText(), /已连接财务中心/);
+  assert.equal(await page.locator('[data-t4act="refreshSync"]').count(), 1);
   assert.doesNotMatch(await page.locator('#view').innerText(), /<span/);
 });
 

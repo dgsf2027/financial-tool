@@ -82,8 +82,27 @@ test('portal callback creates a real session usable by the finance APIs', async 
 test('every local script and stylesheet referenced by the page is public', async () => {
   const html = await (await fetch(base)).text();
   const assets = [...html.matchAll(/(?:src|href)="\.\/([^"]+)"/g)].map(m => m[1]);
-  assert(assets.includes('t4-sync.js'));
+  assert(assets.some(asset => asset.split('?')[0] === 't4-sync.js'));
   for (const asset of assets) assert.equal((await fetch(base + '/' + asset)).status, 200, asset);
+});
+test('page references change when deployed assets change even if the CDN caches scripts', async () => {
+  const page = await fetch(base);
+  assert.equal(page.headers.get('cache-control'), 'no-store');
+  const assetUrl = html => html.match(/src="(\.\/t4-sync\.js\?v=[a-f0-9]+)"/)[1];
+  const before = assetUrl(await page.text());
+  const file = path.join(root, 't4-sync.js'), original = fs.readFileSync(file);
+  try {
+    fs.appendFileSync(file, '\n/* deployed update */\n');
+    const after = assetUrl(await (await fetch(base + '/index.html')).text());
+    assert.notEqual(after, before, 'a new release must use a new browser/CDN cache key');
+    assert.match(await (await fetch(new URL(after, base))).text(), /deployed update/);
+    const assets = [...(await (await fetch(base)).text()).matchAll(/(?:src|href)="\.\/([^"?]+\.(?:js|css))([^\"]*)"/g)];
+    assert(assets.length > 10);
+    for (const [, asset, query] of assets) {
+      const hash = crypto.createHash('sha256').update(fs.readFileSync(path.join(root, asset))).digest('hex').slice(0, 16);
+      assert.equal(query, '?v=' + hash, asset);
+    }
+  } finally { fs.writeFileSync(file, original); }
 });
 test('internal files and encoded paths are denied without exposing fixture content', async () => {
   for (const p of ['/suite/_cfg/probe.txt','/suite/%5fcfg/probe.txt','/suite/_out/probe.txt','/.git/config','/.env','/server.js','/sync_api.py','/promo-fetch/config.js','/Dockerfile.web','/suite/_cfg-other/probe.txt']) {

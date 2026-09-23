@@ -19,6 +19,15 @@ function app(seed = {}) {
   return { run: code => vm.runInContext(code, context), storage, handlers };
 }
 
+// Opt in only for tests that save edits. Load/migration tests must continue to
+// begin disconnected and establish readiness through their own load response.
+function connectShared(a) {
+  a.run(`T4_SERVER_READY=true; T4_SERVER_VERSION=1;
+    T4_SERVER_DOCUMENT=t4ViewDocument({periods:t4Stored(T4_KEY,{}),cfg:t4Stored(T4_CFG_KEY,{}),cfgByPeriod:t4Stored(T4_PERIOD_CFG_KEY,{}),channels:[]});
+    T4_SERVER_BASELINE=t4ViewDocument();
+    window.T4Shared.save=async document=>({version:T4_SERVER_VERSION+1,document:t4Clone(document)});`);
+}
+
 test('orange sales appear only in the orange project, including Douyin', () => {
   const a = app();
   assert.equal(a.run("t4ResolveChannel('抖音-橘农滋补旗舰店')"), 'dy_orange');
@@ -36,6 +45,7 @@ test('an uploaded channel mapping overrides a built-in source mapping', () => {
 
 test('after-sales shipments retain actual income and cost on summary import, without duplicate reimports', async () => {
   const a = app();
+  connectShared(a);
   a.run("T4.periodLocks={'2026-09':false}; T4.sumScope='income'; T4.imp={mode:'summary',headRow:0,map:{channel:0,date:1,type:2,retailIncome:3,retailCost:4},rows:[[],['天猫-澳乐旗舰店','2026-09-02','售后发货',25,12],['天猫-澳乐旗舰店','2026-09-02','售后退货',5,2]]}; savedImp=JSON.stringify(T4.imp)");
   await a.run('t4SummaryImpRun()');
   assert.equal(a.run("t4Row('tmall','2026-09-02').salesIncome"), 20);
@@ -58,6 +68,7 @@ test('switching a shared workspace month loads its own data and monthly allocati
 
 test('clearing income for one project preserves costs, other projects and other months', async () => {
   const a = app({ fsc_t4_data_v2: {'2026-08':{tmall:{'2026-08-01':{retailIncome:500}}}} });
+  connectShared(a);
   a.run("T4.periodLocks={'2026-09':false}; T4.data={tmall:{'2026-09-01':{retailIncome:100,retailCost:40,_fileParts:{sales:{retailIncome:90,retailCost:30}}}},tm_orange:{'2026-09-01':{retailIncome:200}}}; T4_CH.forEach(c=>T4.data[c.id] ||= {})");
   await a.run("t4ClearPeriodData('aole','income')");
   assert.equal(a.run("t4InputValue(t4Raw('tmall','2026-09-01'),'retailIncome')"), null);
@@ -96,7 +107,8 @@ test('a per-channel file without matching current-month rows cannot erase its pr
 
 test('per-channel after-sales import records income and cost without counting cost again as after-sales expense', async () => {
   const a = app();
-  a.run("T4.periodLocks={'2026-09':false}; T4.cfg.tmall={}; T4.imp={fileK:'sales',headRow:0,map:{date:0,channel:1,type:2,amount:3,cost:4},rows:[[],['2026-09-01','天猫-澳乐旗舰店','售后发货',25,12]]}");
+  connectShared(a);
+  a.run("T4.periodLocks={'2026-09':false}; T4.cfg.tmall={aftersalesRate:0}; T4.imp={fileK:'sales',headRow:0,map:{date:0,channel:1,type:2,amount:3,cost:4},rows:[[],['2026-09-01','天猫-澳乐旗舰店','售后发货',25,12]]}");
   await a.run('t4ImpRun()');
   assert.equal(a.run("t4Month('tmall').salesIncome"), 25);
   assert.equal(a.run("t4Month('tmall').salesCost"), 12);
@@ -105,6 +117,7 @@ test('per-channel after-sales import records income and cost without counting co
 
 test('monthly allocation edits leave the previous month and legacy configuration intact', async () => {
   const a = app({ fsc_t4_cfg_v1:{tmall:{directLaborMonth:310}}, fsc_t4_period_locks_v1:{'2026-09':false} });
+  connectShared(a);
   await a.run("T4.cfg.tmall.directLaborMonth=600; t4SaveCfg()");
   a.run("T4.period='2026-08'; t4Load()");
   assert.equal(a.run("t4MgmtDaily('tmall').directLabor"),10);

@@ -155,8 +155,18 @@ const T4_SOURCE_CHANNEL_NORM = Object.fromEntries(Object.entries(T4_SOURCE_CHANN
 const T4_CHLIST_KEY = 'fsc_t4_channels_v2';
 const T4_EXPENSE_ITEMS_KEY = 'fsc_t4_expense_items_v1';
 let T4_CH = [], T4_CHM = {}, T4_TMAI = [], T4_BIG_ECOM = [], T4_PDD = [], T4_RUIMIAN = [], T4_ORANGE = [], T4_DEALER = [], T4_ALL = [];
-function t4ChOverrides() { try { const v = JSON.parse(localStorage.getItem(T4_CHLIST_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; } }
-function t4SaveChOverrides(list) { localStorage.setItem(T4_CHLIST_KEY, JSON.stringify(list)); }
+let T4_CH_OVERRIDES = null;
+function t4ChOverrides() {
+  // localStorage is shared by browser tabs. Once this page has loaded a catalog,
+  // another tab's cache write must not become an unsaved edit on this page.
+  if (T4_CH_OVERRIDES !== null) return JSON.parse(JSON.stringify(T4_CH_OVERRIDES));
+  try { const v = JSON.parse(localStorage.getItem(T4_CHLIST_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; }
+}
+function t4SaveChOverrides(list) {
+  const serialized = JSON.stringify(list);
+  localStorage.setItem(T4_CHLIST_KEY, serialized);
+  T4_CH_OVERRIDES = JSON.parse(serialized);
+}
 function t4ChannelList(overrides) {
   const base = T4_CH_BASE.map(c => ({ ...c }));
   overrides.forEach(o => {
@@ -422,6 +432,11 @@ let T4_SERVER_BASELINE = null;
 let T4_LOADED_PERIOD = '';
 let T4_SERVER_SAVING = false;
 let T4_PENDING_DRAFT = null;
+let T4_SERVER_REFRESHING = false;
+let T4_REFRESH_TIMER = null;
+let T4_REFRESH_DEFERRED = false;
+let T4_REFRESH_REASON = '';
+let T4_REFRESH_DRAFT_ROUTE = '';
 function t4Stored(key, fallback) { try { return JSON.parse(localStorage.getItem(key) || 'null') || fallback; } catch (_) { return fallback; } }
 function t4CurrentMonth() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit' }).format(new Date()).slice(0, 7);
@@ -445,16 +460,123 @@ function t4RequireServerReady() {
   }
   throw new Error('共享数据未连接，本次修改未写入服务器');
 }
-function t4SyncStatus() {
+function t4SyncStatusContent() {
   if (T4_SERVER_LOADING) return pill('正在连接财务中心…', 'mu');
   if (T4_SERVER_ERROR && T4_SERVER_ERROR.status === 401) {
     return pill('请先登录财务中心', 'wa') + '<a href="/sso/login" class="btn sm pri">登录财务中心</a>';
   }
-  if (T4_SERVER_READY) return pill('已连接财务中心，可保存', 'ok');
+  if (T4_SERVER_READY) {
+    const refresh = '<button class="btn sm" data-t4act="refreshSync">更新共享数据</button>';
+    if (T4_SERVER_ERROR) return pill('连接中断，当前显示上次共享数据', 'wa') + refresh;
+    if (T4_SERVER_REFRESHING) return pill('正在更新共享数据…', 'mu');
+    const resume = T4_REFRESH_DEFERRED && T4_REFRESH_DRAFT_ROUTE && CURS !== `t4-${T4_REFRESH_DRAFT_ROUTE}`
+      ? '<button class="btn sm" data-t4act="resumeSyncDraft">返回未完成编辑</button>' : '';
+    return pill(T4_REFRESH_DEFERRED ? H(T4_REFRESH_REASON) : '已连接财务中心 · 每15秒自动更新', T4_REFRESH_DEFERRED ? 'wa' : 'ok') + resume + refresh;
+  }
   const retry = T4_SERVER_LAST_KEY.startsWith('error:')
     ? '<button class="btn sm" data-t4act="retrySync">重新连接</button>' : '';
   return pill('未能连接财务中心', 'wa') + retry;
 }
+function t4SyncStatus() { return `<span data-t4-sync-status role="status">${t4SyncStatusContent()}</span>`; }
+function t4UpdateSyncStatus() {
+  document.querySelectorAll('[data-t4-sync-status]').forEach(el => { el.innerHTML = t4SyncStatusContent(); });
+}
+function t4ReturnDraftDirty() {
+  const entry = T4.returnEntry;
+  if (!entry || String(entry.amount ?? '').trim() === '') return false;
+  const raw = T4_SERVER_BASELINE?.periods?.[entry.period]?.[entry.channel]?.[entry.date] || {};
+  const current = t4InputValue(raw, 'rebateAmount'), amount = Number(entry.amount);
+  return !Number.isFinite(amount) || amount < 0 || current == null || amount !== Math.abs(current);
+}
+function t4RefreshBlockedReason() {
+  // Several editors keep values only in their form until Save. Checking the
+  // workspace alone would erase those inputs, even after the field loses focus.
+  T4_REFRESH_DRAFT_ROUTE = '';
+  if (t4ReturnDraftDirty()) { T4_REFRESH_DRAFT_ROUTE = 'returns'; return `${T4.returnEntry.period} 返款录入有未保存金额，请保存后更新共享数据`; }
+  if (T4.imp) { T4_REFRESH_DRAFT_ROUTE = T4.imp.mode === 'summary' ? 'sumimp' : 'imp'; return '导入文件尚未完成，请返回预览完成或取消导入'; }
+  if (T4.allocImport) { T4_REFRESH_DRAFT_ROUTE = 'mgmt'; return '工资 / 费用分摊还有导入预览，请完成或取消导入'; }
+  if (T4.expenseDraft) { T4_REFRESH_DRAFT_ROUTE = 'expenses'; return '运营费用有待保存科目，请保存或取消编辑'; }
+  const expenseDraft = Object.entries(T4.expenseEdits || {}).find(([, edits]) => Object.keys(edits).length);
+  if (expenseDraft) {
+    const [channel, date] = expenseDraft[0].split(':');
+    T4_REFRESH_DRAFT_ROUTE = 'expenses';
+    return `运营费用 ${date || ''} ${T4_CHM[channel]?.n || channel} 有未保存输入，请返回保存后更新共享数据`;
+  }
+  const active = document.activeElement;
+  if (active && (active.matches?.('input, textarea, select') || active.isContentEditable)) return '请先结束当前输入，再更新共享数据';
+  if (typeof CURS === 'string' && ['t4-channel-edit', 't4-source-edit', 't4-mail', 't4-contacts', 't4-clear'].includes(CURS)) return '当前正在编辑，请完成后返回概览更新共享数据';
+  const edited = [...document.querySelectorAll('#view input, #view textarea, #view select')].some(el => {
+    if (el.tagName === 'SELECT') {
+      const options = [...el.options], hasDefault = options.some(option => option.defaultSelected);
+      return options.some((option, i) => option.selected !== (option.defaultSelected || (!hasDefault && i === 0)));
+    }
+    if (el.type === 'checkbox' || el.type === 'radio') return el.checked !== el.defaultChecked;
+    return !!el.validity?.badInput || el.value !== el.defaultValue;
+  });
+  if (edited || window.T4Shared.hasChanges(T4_SERVER_BASELINE, t4ViewDocument())) return '请先保存本页未提交的修改，再更新共享数据';
+  return '';
+}
+async function t4RefreshServer(manual = false) {
+  if (typeof CURS !== 'string' || !/^t4($|-)/.test(CURS) || (!manual && document.hidden)) return false;
+  if (!T4_SERVER_READY || !window.T4Shared.readSnapshot) return false;
+  if (T4_SERVER_LOADING || T4_SERVER_SAVING || T4_SERVER_REFRESHING || window.T4Shared.state.saving) {
+    if (manual) toast('正在同步，请稍后再更新');
+    return false;
+  }
+  const blocked = t4RefreshBlockedReason();
+  if (blocked) {
+    T4_REFRESH_DEFERRED = true; T4_REFRESH_REASON = blocked; t4UpdateSyncStatus();
+    if (!T4_SERVER_ERROR) { if (manual) toast(blocked, 4200); return false; }
+    // Login may have been restored in another tab. Probe the connection without
+    // acknowledging the response, so a retained draft can still use its old CAS.
+  }
+  const version = T4_SERVER_VERSION, documentBefore = T4_SERVER_DOCUMENT, period = T4.period, route = CURS;
+  T4_SERVER_REFRESHING = true; T4_REFRESH_DEFERRED = !!blocked; t4UpdateSyncStatus();
+  try {
+    const snapshot = await window.T4Shared.readSnapshot();
+    // Never advance the acknowledged baseline of a draft. A save, navigation,
+    // or edit can start while GET is pending; discard that read and retry later.
+    if (T4_SERVER_LOADING || T4_SERVER_SAVING || window.T4Shared.state.saving ||
+        T4_SERVER_VERSION !== version || T4_SERVER_DOCUMENT !== documentBefore ||
+        T4.period !== period || CURS !== route || (!manual && document.hidden)) return false;
+    const changedDuringRead = blocked || t4RefreshBlockedReason();
+    if (changedDuringRead) {
+      T4_SERVER_ERROR = null; T4_SERVER_LAST_KEY = '';
+      T4_REFRESH_DEFERRED = true; T4_REFRESH_REASON = changedDuringRead;
+      if (manual) toast(`连接已恢复，${changedDuringRead}`, 4200); return false;
+    }
+    if (!Number.isInteger(snapshot.version) || snapshot.version < version) return false;
+    // Cache writes can fail (for example storage quota); do them before
+    // acknowledging the response so a failure retains the previous baseline.
+    if (snapshot.version !== version) t4SaveChOverrides(t4Clone(snapshot.document.channels || []));
+    if (!window.T4Shared.acceptRefresh(snapshot, version)) return false;
+    T4_SERVER_ERROR = null; T4_SERVER_LAST_KEY = '';
+    if (snapshot.version !== version) {
+      T4_SERVER_VERSION = snapshot.version; T4_SERVER_DOCUMENT = snapshot.document;
+      t4RebuildChannels(); t4ApplyPeriod(T4_SERVER_DOCUMENT);
+      go(CURS);
+    }
+    if (manual) toast('已更新到最新共享数据');
+    return true;
+  } catch (error) {
+    // A late failed GET must not undo a successful save's connection status.
+    if (T4_SERVER_VERSION === version && T4_SERVER_DOCUMENT === documentBefore && !T4_SERVER_SAVING) {
+      T4_SERVER_ERROR = error;
+      if (error.status === 401 && typeof window.financeSessionExpired === 'function') window.financeSessionExpired();
+      if (manual) toast(`共享数据未更新：${error.message || error}。当前输入已保留`, 5200);
+    }
+    return false;
+  } finally { T4_SERVER_REFRESHING = false; t4UpdateSyncStatus(); }
+}
+function t4StartAutoRefresh() {
+  if (T4_REFRESH_TIMER !== null || typeof window.setInterval !== 'function') return;
+  T4_REFRESH_TIMER = window.setInterval(() => { void t4RefreshServer(); }, 15000);
+}
+if (typeof window.addEventListener === 'function') {
+  window.addEventListener('focus', () => { void t4RefreshServer(); });
+  window.addEventListener('online', () => { void t4RefreshServer(); });
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) void t4RefreshServer(); });
 function t4ConfigForPeriod(doc, period) {
   const saved = (doc.cfgByPeriod || {})[period] || doc.cfg || {};
   const cfg = t4Clone(T4_CFG_DEFAULT);
@@ -462,6 +584,8 @@ function t4ConfigForPeriod(doc, period) {
   return cfg;
 }
 function t4ApplyPeriod(doc) {
+  const returnEntry = T4.returnEntry;
+  const refreshReturnAmount = returnEntry && String(returnEntry.amount ?? '').trim() !== '' && !t4ReturnDraftDirty();
   t4ApplyExpenseItems(doc.expenseItems || []);
   T4.data = t4Clone((doc.periods || {})[T4.period] || {});
   T4.cfg = t4ConfigForPeriod(doc, T4.period);
@@ -469,6 +593,10 @@ function t4ApplyPeriod(doc) {
   T4.importHistory = t4Clone(doc.importHistory || {});
   T4_CH.forEach(c => { if (!T4.data[c.id]) T4.data[c.id] = {}; });
   t4MigrateFileParts();
+  if (refreshReturnAmount) {
+    const current = t4InputValue(doc.periods?.[returnEntry.period]?.[returnEntry.channel]?.[returnEntry.date] || {}, 'rebateAmount');
+    returnEntry.amount = current == null ? '' : String(Math.abs(current));
+  }
   T4_LOADED_PERIOD = T4.period;
   T4_SERVER_BASELINE = t4ViewDocument(doc);
 }
@@ -537,6 +665,7 @@ async function t4LoadServer() {
     t4ApplyPeriod(T4_SERVER_DOCUMENT);
     T4_SERVER_READY = true;
     T4_SERVER_LAST_KEY = '';
+    t4StartAutoRefresh();
   } catch (e) {
     T4_SERVER_ERROR = e;
     T4_SERVER_LAST_KEY = `error:${Date.now()}`;
@@ -550,6 +679,7 @@ async function t4LoadServer() {
   }
 }
 async function t4SaveServer(lockOnly = false) {
+  t4RequireServerReady();
   if (!window.T4Shared || !T4_SERVER_READY) throw new Error('共享数据尚未完成加载');
   if (T4_SERVER_SAVING) throw new Error('正在同步，请稍后再操作');
   const doc = lockOnly ? window.T4Shared.clone(T4_SERVER_DOCUMENT) : t4ViewDocument();
@@ -830,7 +960,7 @@ S['t4-channel-edit'] = () => {
   t4Load();
   const draft = T4.channelDraft || { n: '', bu: 'dealer', aliases: '' }, current = T4_CHM[draft.id];
   return head(current ? `修改归集渠道 · ${H(current.n)}` : '新增归集渠道', '归集渠道用于汇总损益。修改名称或事业部会作用于该组；如只改一个门店，请返回销售渠道列表修改。', '工具箱 · T4',
-    '<button class="btn" data-t4go="channels">返回渠道列表</button>')
+    t4SyncStatus() + '<button class="btn" data-t4go="channels">返回渠道列表</button>')
     + (T4.catalogError ? `<div class="note c" role="alert">${H(T4.catalogError)}</div>` : '')
     + cardp('归集渠道信息', `<div class="t4-catalog-form"><div class="frow"><label>归集渠道名称 <input id="t4ChannelName" type="text" maxlength="80" value="${H(draft.n)}"></label>
       <label>归属事业部 <select id="t4ChannelBu" aria-label="归属事业部">${Object.entries(T4_BU_META).map(([id, meta]) => `<option value="${id}" ${id === draft.bu ? 'selected' : ''}>${H(meta.n)}</option>`).join('')}</select></label></div>
@@ -845,7 +975,7 @@ S['t4-source-edit'] = () => {
   const draft = T4.sourceDraft || { source: '', number: '', channel: '' };
   const editing = !!draft.originalSource;
   return head(editing ? `修改销售渠道 · ${H(draft.originalSource)}` : '新增销售渠道', '每个销售渠道对应源文件中的一个门店名称，按所选归集渠道汇总损益。', '工具箱 · T4',
-    '<button class="btn" data-t4go="channels">返回渠道列表</button>')
+    t4SyncStatus() + '<button class="btn" data-t4go="channels">返回渠道列表</button>')
     + (T4.catalogError ? `<div class="note c" role="alert">${H(T4.catalogError)}</div>` : '')
     + cardp('销售渠道信息', `<div class="t4-catalog-form">
       <label>销售渠道名称 <input id="t4SourceName" type="text" maxlength="80" required value="${H(draft.source)}" autocomplete="off"></label>
@@ -928,6 +1058,7 @@ function t4MigrateFileParts() {
   }));
 }
 async function t4Save() {
+  t4RequireServerReady();
   t4AssertEditable();
   let all;
   try {
@@ -936,18 +1067,19 @@ async function t4Save() {
     localStorage.setItem(T4_KEY, JSON.stringify(all));
     localStorage.setItem(T4_IMPORT_HISTORY_KEY, JSON.stringify(T4.importHistory || {}));
   } catch (e) { throw new Error('保存失败：浏览器存储空间不足'); }
-  if (T4_SERVER_READY) return t4SaveServer();
-  return { ok: true, localOnly: true };
+  return t4SaveServer();
 }
 async function t4SaveCfg() {
+  t4RequireServerReady();
   t4AssertEditable();
   const all = t4Stored(T4_PERIOD_CFG_KEY, {});
   all[T4.period] = t4Clone(T4.cfg);
   localStorage.setItem(T4_PERIOD_CFG_KEY, JSON.stringify(all));
-  if (T4_SERVER_READY) await t4SaveServer();
+  return t4SaveServer();
 }
 
 async function t4SetPeriodLock(locked) {
+  t4RequireServerReady();
   if (T4_SERVER_LOADING || T4_SERVER_SAVING) throw new Error('正在同步，请稍后再操作');
   const before = t4Clone(T4.periodLocks || {});
   T4.periodLocks = { ...before, [T4.period]: locked };
@@ -1319,7 +1451,7 @@ function t4PeriodControl(extra) {
   const locked = t4IsPeriodLocked();
   const draft = T4_PENDING_DRAFT && T4_PENDING_DRAFT.period === T4.period ? '<button class="btn" data-t4act="migrateDraft">导入本机草稿</button>' : '';
   const retry = T4_SERVER_LAST_KEY.startsWith('error:') ? '<button class="btn" data-t4act="retrySync">本机草稿 · 重新连接</button>' : '';
-  return `<label class="sel">期间 <input id="t4Period" type="month" value="${T4.period}" style="width:116px" ${T4_SERVER_LOADING || T4_SERVER_SAVING ? 'disabled' : ''}></label><button class="btn" data-t4act="togglePeriodLock" title="往期默认锁定；锁定后禁止修改、导入与清空">${locked ? '本月已锁定 · 解锁' : '锁定本月'}</button>${draft}${retry}${extra || ''}`;
+  return `<label class="sel">期间 <input id="t4Period" type="month" value="${T4.period}" style="width:116px" ${T4_SERVER_LOADING || T4_SERVER_SAVING ? 'disabled' : ''}></label><button class="btn" data-t4act="togglePeriodLock" title="往期默认锁定；锁定后禁止修改、导入与清空">${locked ? '本月已锁定 · 解锁' : '锁定本月'}</button>${draft}${retry}${t4SyncStatus()}${extra || ''}`;
 }
 S['t4-clear'] = () => {
   t4Load();
@@ -1574,7 +1706,7 @@ S['t4-sumimp'] = () => {
   const def = T4_FILE_DEFS.summaryDaily, hdr = imp.rows[imp.headRow] || [];
   const fields = def.fields.filter(([k]) => ['date','bu','channel','type','product'].includes(k) || sc.keys.includes(k));
   const options = k => hdr.map((x, i) => `<option value="${i}" ${imp.map[k] === i ? 'selected' : ''}>${H(String(x || '(空)').slice(0,30))}</option>`).join('');
-  return head(`汇总导入 · ${sc.n} · ${H(imp.fileName)}`, `确认渠道、日期及${sc.n}科目的列对应关系。`, '工具箱 · T4', '<button class="btn" data-t4act="sumImpCancel">取消</button>')
+  return head(`汇总导入 · ${sc.n} · ${H(imp.fileName)}`, `确认渠道、日期及${sc.n}科目的列对应关系。`, '工具箱 · T4', t4SyncStatus() + '<button class="btn" data-t4act="sumImpCancel">取消</button>')
     + `<div class="frow" style="margin-bottom:13px"><span class="fi">✓</span><span><span class="fn">${H(imp.fileName)}</span><br><span class="fm">${imp.rows.length} 行</span></span></div>`
     + cardp('表头行', `<select id="t4head">${imp.rows.slice(0,15).map((r,i) => `<option value="${i}" ${i===imp.headRow?'selected':''}>第 ${i+1} 行：${H(r.filter(Boolean).slice(0,6).join(' | ').slice(0,80))}</option>`).join('')}</select>`)
     + card('列对应', table([{t:'目标字段'},{t:'文件字段'}], fields.map(([k,n]) => [`${H(n)}${def.required.includes(k) ? ' <span class="red">*</span>' : ''}`, `<select data-t4map="${k}"><option value="">— 不使用 —</option>${options(k)}</select>`])))
@@ -1975,7 +2107,7 @@ function t4MgmtPickFile(kind = 'expense') {
 
 S['t4-imp'] = () => {
   t4Load(); const c = T4_CHM[T4.editCh], imp = T4.imp;
-  if (!c.files.length) return head(`导入　${c.n}`, '该渠道没有标准源文件，请人工录入。', '工具箱 · T4', '<button class="btn" data-t4go="overview">← 返回</button>')
+  if (!c.files.length) return head(`导入　${c.n}`, '该渠道没有标准源文件，请人工录入。', '工具箱 · T4', t4SyncStatus() + '<button class="btn" data-t4go="overview">← 返回</button>')
     + '<div class="note w">本渠道当前采用人工录入；录入值和文件导入值使用同一套损益计算。</div>';
   if (!imp) return head(`导入　${c.n}`, '选择源文件；默认只替换该文件覆盖的日期，其他日期保留，不会重复累计。', '工具箱 · T4', t4PeriodControl('<button class="btn" data-t4go="overview">← 返回</button>'))
     + card('源文件', table([{t:'文件'},{t:'取数口径'},{t:''}], c.files.map(f => [`<b>${H(f.n)}</b>`, H(f.hint), `<button class="btn sm" data-t4file="${f.k}">选择文件</button>`])))
@@ -1984,7 +2116,7 @@ S['t4-imp'] = () => {
   const options = k => hdr.map((x, i) => `<option value="${i}" ${imp.map[k] === i ? 'selected' : ''}>${H(String(x || '(空)').slice(0,30))}</option>`).join('');
   const ready = def.required.every(k => imp.map[k] != null)
     && (imp.fileK !== 'daily' || T4_INPUT_KEYS.some(k => imp.map[k] != null));
-  return head(`导入　${c.n} · ${H(imp.fileN)}`, '请确认表头和字段映射。', '工具箱 · T4', '<button class="btn" data-t4act="impCancel">取消</button>')
+  return head(`导入　${c.n} · ${H(imp.fileN)}`, '请确认表头和字段映射。', '工具箱 · T4', t4SyncStatus() + '<button class="btn" data-t4act="impCancel">取消</button>')
     + `<div class="frow" style="margin-bottom:13px"><span class="fi">✓</span><span><span class="fn">${H(imp.fileName)}</span><br><span class="fm">${imp.rows.length} 行</span></span></div>`
     + cardp('表头行', `<select id="t4head">${imp.rows.slice(0,15).map((r,i) => `<option value="${i}" ${i===imp.headRow?'selected':''}>第 ${i+1} 行：${H(r.filter(Boolean).slice(0,5).join(' | ').slice(0,70))}</option>`).join('')}</select>`)
     + card('列对应', table([{t:'目标字段'},{t:'文件字段'}], def.fields.map(([k,n]) => [`${H(n)}${def.required.includes(k) ? ' <span class="red">*</span>' : ''}`, `<select data-t4map="${k}"><option value="">— 不使用 —</option>${options(k)}</select>`])))
@@ -2337,7 +2469,7 @@ S['t4-contacts'] = () => {
   const st = T4.mail;
   if (!st.loaded && !st.loading) t4MailLoad();
   return head('邮件通讯录', '按姓名或邮箱查找，维护联系人及默认报表范围。', '工具箱 · T4',
-    `<button class="btn" data-t4go="mail">返回邮件发送</button><button class="btn pri" data-t4act="mailSave" ${st.loading || !st.loaded || st.saving || st.error ? 'disabled' : ''}>${st.saving ? '正在保存…' : '保存通讯录'}</button>`)
+    t4SyncStatus() + `<button class="btn" data-t4go="mail">返回邮件发送</button><button class="btn pri" data-t4act="mailSave" ${st.loading || !st.loaded || st.saving || st.error ? 'disabled' : ''}>${st.saving ? '正在保存…' : '保存通讯录'}</button>`)
     + (st.error ? `<div class="note c" role="alert">${H(st.error)} <button class="btn sm" data-t4act="mailReload">重新读取</button></div>` : t4ContactsCard());
 };
 async function t4MailSend() {
@@ -2366,14 +2498,14 @@ S['t4-mail'] = () => {
   t4Load();
   const st = T4.mail;
   if (!st.loaded && !st.loading) t4MailLoad();
-  if (st.error) return head('邮件发送套表', '发件配置暂未加载。', '工具箱 · T4', '<button class="btn" data-t4go="sheet">← 返回损益表</button>')
+  if (st.error) return head('邮件发送套表', '发件配置暂未加载。', '工具箱 · T4', t4SyncStatus() + '<button class="btn" data-t4go="sheet">← 返回损益表</button>')
     + `<div class="note c">${H(st.error)}</div>`;
   const cfg = st.status;
   const cfgNote = !cfg ? '<div class="note">正在读取发件配置…</div>'
     : cfg.configured ? `<div class="note g"><b>发件配置已保存，请发送测试邮件验证：</b>${H(cfg.fromName ? cfg.fromName + ' ' : '')}${H(cfg.from)}（${H(cfg.host)}:${H(String(cfg.port))}）</div>`
     : `<div class="note c"><b>发件邮箱尚未配置。</b>在下方选择服务商、填写发件账号和授权码后点「保存配置」，再发一封测试邮件确认。</div>`;
   return head('邮件发送套表', '维护收件人清单，每人指定报表范围（全部 / 澳乐 / 瑞眠 / 橘农）；发送时按范围各生成一份套表工作簿，逐人附上对应的那份。', '工具箱 · T4',
-    '<button class="btn" data-t4go="sheet">← 返回损益表</button><button class="btn" data-t4go="contacts">通讯录</button><button class="btn" data-t4act="mailSave">保存通讯录</button><button class="btn pri" data-t4act="mailSend">生成并发送</button>')
+    t4SyncStatus() + '<button class="btn" data-t4go="sheet">← 返回损益表</button><button class="btn" data-t4go="contacts">通讯录</button><button class="btn" data-t4act="mailSave">保存通讯录</button><button class="btn pri" data-t4act="mailSend">生成并发送</button>')
     + cfgNote
     + t4SmtpCard(cfg)
     + t4ContactsCard()
@@ -2403,7 +2535,7 @@ S['t4-cfg'] = () => {
       + `<div style="padding:11px 14px;display:flex;gap:7px;align-items:center;flex-wrap:wrap">${addCtrl}<span style="flex:1"></span><button class="btn sm pri" data-t4act="cfgSave">保存参数</button></div>`, '', `t4-cfg:${c.id}`);
   }).join('');
   return head('T4 参数', '平台扣点按每日销售收入（零售收入加退货、退款及返款的负数金额）计算；运费险等其他费率按每日零售收入计算。月度金额按当月自然日平均分摊；直接/间接管理费用在「工资 / 费用分摊」页维护。', '工具箱 · T4',
-    `<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="cfgReset">恢复底稿值</button><button class="btn pri" data-t4act="cfgSave">保存参数</button>`)
+    t4SyncStatus() + `<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="cfgReset">恢复底稿值</button><button class="btn pri" data-t4act="cfgSave">保存参数</button>`)
     + '<div class="note w"><b>修改会影响所有对应日期的派生结果。</b>人工录入的同名科目优先于参数值。添加规则后填入数值并「保存参数」生效。</div>' + blocks;
 };
 
@@ -2464,7 +2596,7 @@ S['t4-channels'] = () => {
     + '<div class="note"><b>导入规则：</b>至少包含「销售渠道」「渠道名称」或「渠道汇总」之一；支持每行一个渠道，也支持每列一个渠道。销售渠道按「渠道汇总」归集；未填汇总时按渠道名称匹配或新增。已有渠道未填事业部时保留原归属，新渠道未填时归经销并提示。附加字段按销售渠道保存，编号可直接修改，其余字段可通过表格更新；再次导入只更新文件中提供的渠道和字段，未提供的内容及历史损益保留。事业部支持大电商、拼多多、瑞眠、橘农、经销。</div>';
 };
 
-S['t4-rules'] = () => head('T4 取数口径', '以下规则来自用户提供的销售明细、平台推广明细和 2026-08 日损益底稿。', '工具箱 · T4', '<button class="btn" data-t4go="overview">← 返回</button>')
+S['t4-rules'] = () => head('T4 取数口径', '以下规则来自用户提供的销售明细、平台推广明细和 2026-08 日损益底稿。', '工具箱 · T4', t4SyncStatus() + '<button class="btn" data-t4go="overview">← 返回</button>')
   + card('文件取数', table([{t:'渠道/文件'},{t:'落表规则'},{t:'控制'}], [
     ['汇总导入', '一个文件按渠道 + 日期导入全部渠道；归属事业部由系统配置确定', pill('批量导入','ok')],
     ['全部渠道 · 标准日损益明细', '按日期映射完整损益科目；至少选择一个金额字段', pill('通用导入','ok')],
@@ -2877,7 +3009,24 @@ document.addEventListener('click', async e => {
     try { const count = await t4SaveDailyExpenses(T4.expenseCh, T4.expenseDate, entries); delete T4.expenseEdits[`${T4.expenseCh}:${T4.expenseDate}`]; T4.catalogError = ''; toast(count ? `已保存 ${count} 项当日费用` : '没有需要保存的修改'); t4Go('expenses'); }
     catch (err) { toast(`费用未保存，原数据已保留：${err.message}`, 6000); }
   }
-  else if (a.dataset.t4act === 'retrySync') { T4_SERVER_LAST_KEY = ''; await t4LoadServer(); }
+  else if (a.dataset.t4act === 'resumeSyncDraft') {
+    if (T4_REFRESH_DRAFT_ROUTE === 'returns' && T4.returnEntry?.period !== T4.period) {
+      toast(`请先保存当前月份的修改，再切换到 ${T4.returnEntry.period} 继续处理返款`, 5200); return;
+    }
+    if (T4_REFRESH_DRAFT_ROUTE === 'expenses' && !T4.expenseDraft) {
+      const draft = Object.entries(T4.expenseEdits || {}).find(([, edits]) => Object.keys(edits).length);
+      if (draft) {
+        const [channel, date] = draft[0].split(':');
+        if (date && !date.startsWith(T4.period + '-')) {
+          toast(`请先保存当前月份的修改，再切换到 ${date.slice(0, 7)} 继续处理运营费用`, 5200); return;
+        }
+        T4.expenseCh = channel; T4.expenseDate = date || T4.expenseDate;
+      }
+    }
+    if (['returns', 'imp', 'sumimp', 'mgmt', 'expenses'].includes(T4_REFRESH_DRAFT_ROUTE)) t4Go(T4_REFRESH_DRAFT_ROUTE);
+  }
+  else if (a.dataset.t4act === 'refreshSync') { await t4RefreshServer(true); }
+  else if (a.dataset.t4act === 'retrySync') { T4_SERVER_LAST_KEY = ''; if (T4_SERVER_READY) await t4RefreshServer(true); else await t4LoadServer(); }
   else if (a.dataset.t4act === 'migrateDraft') {
     try {
       t4AssertEditable();

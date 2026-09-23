@@ -19,6 +19,11 @@ function app() {
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 't4.js'), 'utf8'), context);
   vm.runInContext("t4LoadServer=async()=>{}; T4.period='2099-12'; t4Load(); T4.periodLocks={'2099-12':false}; T4.editCh='tmall';", context);
+  // The financial override tests run with a connected shared-service stub;
+  // the product save guard and response adoption still execute normally.
+  vm.runInContext(`T4_SERVER_READY=true; T4_SERVER_VERSION=1;
+    T4_SERVER_DOCUMENT=t4ViewDocument(); T4_SERVER_BASELINE=t4ViewDocument();
+    window.T4Shared.save=async document=>({version:T4_SERVER_VERSION+1,document:t4Clone(document)});`, context);
   return {
     run: code => vm.runInContext(code, context),
     json: code => JSON.parse(vm.runInContext(`JSON.stringify(${code})`, context)),
