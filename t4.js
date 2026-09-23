@@ -202,6 +202,7 @@ const T4_INPUTS = [
   { k: 'retailIncome', n: '零售收入', g: '销售与成本' },
   { k: 'returnAmount', n: '退货金额', g: '销售与成本' },
   { k: 'refundAmount', n: '退款金额', g: '销售与成本' },
+  { k: 'rebateAmount', n: '返款金额（扣减收入）', g: '销售与成本' },
   { k: 'retailCost', n: '零售成本', g: '销售与成本' },
   { k: 'returnCost', n: '退货成本', g: '销售与成本' },
   { k: 'rebateIncome', n: '返利收入（计入净利润）', g: '返款' },
@@ -230,6 +231,7 @@ const T4_METRICS = [
   { k: 'retailIncome', n: '　零售收入', lvl: 1 },
   { k: 'returnAmount', n: '　退货金额', lvl: 1 },
   { k: 'refundAmount', n: '　退款金额', lvl: 1 },
+  { k: 'rebateAmount', n: '　返款金额', lvl: 1 },
   { k: 'salesCost', n: '销售成本', lvl: 0 },
   { k: 'retailCost', n: '　零售成本', lvl: 1 },
   { k: 'returnCost', n: '　退货成本', lvl: 1 },
@@ -329,7 +331,7 @@ const T4_FILE_DEFS = {
   daily: { fields: [
     ['date', '日期', ['日期', '业务日期', '统计日期']],
     ['retailIncome', '零售收入', ['零售收入']], ['returnAmount', '退货金额', ['退货金额']],
-    ['refundAmount', '退款金额', ['退款金额']], ['retailCost', '零售成本', ['零售成本']],
+    ['refundAmount', '退款金额', ['退款金额']], ['rebateAmount', '返款金额', ['返款金额', '返款', '返款金额（扣减收入）']], ['retailCost', '零售成本', ['零售成本']],
     ['returnCost', '退货成本', ['退货成本']], ['rebateIncome', '返利收入', ['返利收入']], ['salesReceipt', '销售回款（仅记录）', ['销售回款', '销售回款（仅记录）']], ['platformFee', '平台扣点', ['平台扣点']],
     ['platformOther', '平台其他', ['平台其他']], ['promotion', '推广费用', ['推广费用', '推广费']],
     ['ztc', '直通车', ['直通车']], ['cps', 'CPS', ['CPS']], ['research', '数研', ['数研']],
@@ -399,8 +401,8 @@ const t4ProjSelect = view => `<label class="sel">项目 <select id="t4ProjSel" d
 
 /* 合并入口保留收入/成本两个来源分区，旧导入与单科目文件继续兼容。 */
 const T4_SUM_SCOPES = {
-  both: { n: '收入与成本', fileK: 'summaryDaily', keys: ['retailIncome', 'returnAmount', 'refundAmount', 'retailCost', 'returnCost'] },
-  income: { n: '销售收入', fileK: 'summaryIncome', keys: ['retailIncome', 'returnAmount', 'refundAmount'] },
+  both: { n: '收入与成本', fileK: 'summaryDaily', keys: ['retailIncome', 'returnAmount', 'refundAmount', 'rebateAmount', 'retailCost', 'returnCost'] },
+  income: { n: '销售收入', fileK: 'summaryIncome', keys: ['retailIncome', 'returnAmount', 'refundAmount', 'rebateAmount'] },
   cost: { n: '销售成本', fileK: 'summaryCost', keys: ['retailCost', 'returnCost'] },
 };
 const t4SumScope = () => T4_SUM_SCOPES[T4.sumScope] || T4_SUM_SCOPES.both;
@@ -1005,7 +1007,8 @@ function t4Row(ch, dt) {
   if (!explicit.has('returnAmount') && cfg.returnRate != null) { r.returnAmount = r.retailIncome * cfg.returnRate; hard.push('returnAmount'); }
   if (!explicit.has('returnCost') && cfg.returnCostRate != null) { r.returnCost = (r.retailCost || 0) * cfg.returnCostRate; hard.push('returnCost'); }
   ['returnAmount','refundAmount','retailCost','returnCost','promotion','ztc','cps','research','rebateIncome','salesReceipt'].forEach(k => { if (r[k] == null) r[k] = 0; });
-  r.salesIncome = r.retailIncome + r.returnAmount + r.refundAmount;
+  r.rebateAmount = -Math.abs(r.rebateAmount || 0) || 0;
+  r.salesIncome = r.retailIncome + r.returnAmount + r.refundAmount + r.rebateAmount;
   ['platformFee','platformOther','aftersales','logistics','warehouse','tax','directLabor','directRent','directOther','sharedLabor','sharedRent','sharedOther'].forEach(k => {
     // Only platform commission uses net sales; the other agreed rates retain
     // their retail-income base. Explicit imported/manual amounts still win.
@@ -1218,7 +1221,7 @@ function t4EntryTable(ch, group) {
 }
 S['t4-man'] = () => {
   t4Load(); const c = T4_CHM[T4.editCh];
-  return head(`录入　${c.n}`, '留空表示没有数据；填 0 表示当日确认为零。退货金额、退款金额和退货成本请按负数录入。', '工具箱 · T4',
+  return head(`录入　${c.n}`, '留空表示没有数据；填 0 表示当日确认为零。退货金额、退款金额和退货成本请按负数录入；返款填正数，系统自动扣减收入。', '工具箱 · T4',
     t4PeriodControl(`${t4EntryRangeControls(false)}<select id="t4chSel">${T4_CH.map(x => `<option value="${x.id}" ${x.id === c.id ? 'selected' : ''}>${x.n}</option>`).join('')}</select><button class="btn" data-t4go="overview">← 返回</button><button class="btn pri" data-t4act="saveMan">保存</button>`))
     + `<div class="note"><b>当前收入取数 ${t4Filled(c.id)} / ${t4Days()} 天。</b>浅色空格会由参数页中的比例或月度分摊值计算；在这里填值可覆盖该参数。</div>`
     + t4EntryTable(c.id, '销售与成本') + t4EntryTable(c.id, '运营费用')
@@ -1250,7 +1253,7 @@ S['t4-summan'] = () => {
   T4.sumDate = dates[0]; T4.sumTo = dates[dates.length - 1];
   return head(`汇总录入 · ${sc.n}`, '选择起止日期，每个日期分别填写各渠道收入与成本。一个格子只对应一天，不会复制到其他日期。', '工具箱 · T4',
     t4PeriodControl(`${t4EntryRangeControls(true)}<button class="btn" data-t4go="overview">← 返回</button><button class="btn pri" data-t4act="sumManSave">保存全部渠道</button>`))
-    + `<div class="note"><b>只保存发生变化的格子。</b>留空删除该格的人工录入值；文件值或参数仍可继续生效。填 0 表示当日确认为零。退货金额、退款金额和退货成本按负数录入。切换日期前请保存本页变更。</div>`
+    + `<div class="note"><b>只保存发生变化的格子。</b>留空删除该格的人工录入值；文件值或参数仍可继续生效。填 0 表示当日确认为零。退货金额、退款金额和退货成本按负数录入；返款填正数，系统自动扣减收入。切换日期前请保存本页变更。</div>`
     + t4SummaryEntryTable('销售与成本', dates, sc.keys, `${sc.n} · ${dates[0]} ～ ${dates[dates.length - 1]}`);
 };
 function t4EntryDirty() {
@@ -1276,7 +1279,14 @@ async function t4SaveEntries(summary) {
   try {
     changes.forEach(({ dt, ch, key, num }) => {
       const raw = T4.data[ch][dt] || { _src: 'manual', _fileParts: {} };
-      if (num === null) delete raw[key]; else { raw[key] = num; raw._src = 'manual'; }
+      if (num === null) {
+        delete raw[key];
+        if (raw._manualFields) delete raw._manualFields[key];
+      } else if (key === 'rebateAmount') {
+        raw[key] = -Math.abs(num) || 0;
+        // A new rebate must not relabel the day's existing imported amounts.
+        (raw._manualFields ||= {})[key] = true;
+      } else { raw[key] = num; raw._src = 'manual'; }
       if (t4HasInputs(raw)) T4.data[ch][dt] = raw; else delete T4.data[ch][dt];
     });
     await t4Save();
@@ -1317,6 +1327,7 @@ function t4DateNorm(v) {
   const d = new Date(s); return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
 }
 function t4Add(ch, dt, key, value, fileK) {
+  if (key === 'rebateAmount') value = -Math.abs(value) || 0;
   const raw = T4.data[ch][dt] || { _src: 'file', _fileParts: {} };
   if (!raw._fileParts) raw._fileParts = {};
   if (!raw._fileParts[fileK]) raw._fileParts[fileK] = {};
@@ -1845,7 +1856,7 @@ async function t4ImpRun() {
 
 // 损益树的列：一条从销售收入到净利润的「层层递减」链
 const T4_TREE_COLS = [
-  ['salesIncome', '销售收入'], ['salesCost', '销售成本'], ['grossProfit', '毛利'], ['grossMargin', '毛利率', true],
+  ['salesIncome', '销售收入'], ['rebateAmount', '返款金额'], ['salesCost', '销售成本'], ['grossProfit', '毛利'], ['grossMargin', '毛利率', true],
   ['operating', '运营费'], ['contribution', '边际毛利'], ['mgmt', '管理费'], ['rebateIncome', '返利收入'], ['netProfit', '净利润'], ['netMargin', '净利率', true], ['salesReceipt', '销售回款（仅记录）'],
 ];
 const t4TreeVal = (g, key) => key === 'mgmt' ? (g.direct || 0) + (g.indirect || 0) : (g[key] || 0);
@@ -2183,7 +2194,7 @@ S['t4-cfg'] = () => {
         : '<div class="mut" style="padding:14px 14px 0">暂无费用规则；用下方「添加费用规则」为本渠道设置分摊。</div>')
       + `<div style="padding:11px 14px;display:flex;gap:7px;align-items:center;flex-wrap:wrap">${addCtrl}<span style="flex:1"></span><button class="btn sm pri" data-t4act="cfgSave">保存参数</button></div>`, '', `t4-cfg:${c.id}`);
   }).join('');
-  return head('T4 参数', '平台扣点按每日销售收入（零售收入加退货、退款的负数金额）计算；其他费率仍按零售收入。月度金额按当月自然日平均分摊；直接/间接管理费用在「工资 / 费用分摊」页维护。', '工具箱 · T4',
+  return head('T4 参数', '平台扣点按每日销售收入（零售收入加退货、退款及返款的负数金额）计算；其他费率仍按零售收入。月度金额按当月自然日平均分摊；直接/间接管理费用在「工资 / 费用分摊」页维护。', '工具箱 · T4',
     `<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="cfgReset">恢复底稿值</button><button class="btn pri" data-t4act="cfgSave">保存参数</button>`)
     + '<div class="note w"><b>修改会影响所有对应日期的派生结果。</b>人工录入的同名科目优先于参数值。添加规则后填入数值并「保存参数」生效。</div>' + blocks;
 };
@@ -2390,7 +2401,7 @@ function t4ExportSuiteCsv() {
   const days = t4Days(), period = T4.period;
   const money = v => (Number(v) || 0).toFixed(2);
   const fmt = (g, m) => m.pct ? `${((g[m.k] || 0) * 100).toFixed(2)}%` : money(t4TreeVal(g, m.k));
-  const sumCols = [['salesIncome', '销售收入'], ['salesCost', '销售成本'], ['grossProfit', '毛利'], ['grossMargin', '毛利率', true], ['operating', '运营费'], ['contribution', '边际毛利'], ['mgmt', '管理费'], ['rebateIncome', '返利收入'], ['netProfit', '净利润'], ['netMargin', '净利率', true]];
+  const sumCols = [['salesIncome', '销售收入'], ['rebateAmount', '返款金额'], ['salesCost', '销售成本'], ['grossProfit', '毛利'], ['grossMargin', '毛利率', true], ['operating', '运营费'], ['contribution', '边际毛利'], ['mgmt', '管理费'], ['rebateIncome', '返利收入'], ['netProfit', '净利润'], ['netMargin', '净利率', true]];
   const out = [];
   const push = row => out.push(row);
   const blank = () => out.push([]);

@@ -52,9 +52,10 @@ test('legacy per-field sources export once without inventing manual values', () 
   a.run(`T4.projFilter='orange'; T4.data={tm_orange:{'2026-09-01':{retailIncome:10,retailCost:5,promotion:0,_srcs:{retailIncome:'sales',retailCost:'sales'},_fileParts:{sales:{retailIncome:10}}}}};`);
   const { rows } = plain(a.run('t4RawExportRows()'));
   assert.equal(rows.length, 3);
-  assert.equal(rows[1][8], 10);
-  assert.equal(rows[1][11], 5);
-  assert.equal(rows[2][8], '');
+  const col = name => rows[0].indexOf(name);
+  assert.equal(rows[1][col('零售收入')], 10);
+  assert.equal(rows[1][col('零售成本')], 5);
+  assert.equal(rows[2][col('零售收入')], '');
 });
 
 test('derived export uses selected project and interval for both daily rows and summary', () => {

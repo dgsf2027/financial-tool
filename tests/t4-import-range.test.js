@@ -29,6 +29,65 @@ function summary(a, rows, extra = {}) {
     map: { channel: 0, date: 1, type: 2, retailIncome: 3, retailCost: 4 }, rows: [[], ...rows], ...extra })}`);
 }
 
+test('mixed-sign rebate imports deduct each row, preserve refunds, and remain idempotent', async () => {
+  const a = app();
+  a.run("T4.data.tm_orange={'2099-12-01':{retailIncome:1000,refundAmount:-100,retailCost:400}};T4.cfg.tm_orange={platformFeeRate:0.05};");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    summary(a, [['tm_orange','2099-12-01',25],['tm_orange','2099-12-01',-25]], {map:{channel:0,date:1,rebateAmount:2}});
+    await a.run('t4SummaryImpRun()');
+    assert.equal(a.run("t4InputValue(t4Raw('tm_orange','2099-12-01'),'rebateAmount')"), -50);
+    assert.equal(a.run("t4Raw('tm_orange','2099-12-01').refundAmount"), -100);
+    assert.equal(a.run("t4Row('tm_orange','2099-12-01').salesIncome"), 850);
+    assert.equal(a.run("t4Row('tm_orange','2099-12-01').platformFee"), 42.5);
+    assert.equal(a.run("t4Row('tm_orange','2099-12-01').netProfit"), 407.5);
+  }
+  assert.equal(a.run("t4AutoMap(['日期','渠道','返款金额'],T4_FILE_DEFS.summaryDaily).rebateAmount"), 2);
+});
+
+test('daily rebate file normalizes signs before summing and accepts explicit zero', async () => {
+  const a = app();
+  a.run("T4.editCh='tm_orange';T4.data.tm_orange={'2099-12-02':{refundAmount:-8}};T4.imp={mode:'channel',fileK:'daily',fileName:'返款.csv',headRow:0,map:{date:0,rebateAmount:1},rows:[[],['2099-12-01',15],['2099-12-01',-20],['2099-12-02',0]]};");
+  await a.run('t4ImpRun()');
+  assert.equal(a.run("t4InputValue(t4Raw('tm_orange','2099-12-01'),'rebateAmount')"), -35);
+  assert.equal(a.run("t4InputValue(t4Raw('tm_orange','2099-12-02'),'rebateAmount')"), 0);
+  assert.equal(a.run("t4Raw('tm_orange','2099-12-02').refundAmount"), -8);
+});
+
+test('range manual rebate input normalizes the amount and follows income-only clearing scope', async () => {
+  const a = app();
+  a.run("T4.data.tm_orange={'2099-12-01':{retailCost:400,refundAmount:-100},'2099-12-02':{rebateAmount:-75}};");
+  a.inputs.push({dataset:{t4sumcell:'2099-12-01:tm_orange:rebateAmount',t4orig:''},value:'50'});
+  await a.run('t4SaveEntries(true)');
+  assert.equal(a.run("t4Raw('tm_orange','2099-12-01').rebateAmount"), -50);
+  await a.run("t4ClearPeriodData('orange','income','2099-12-01','2099-12-01')");
+  assert.equal(a.run("t4InputValue(t4Raw('tm_orange','2099-12-01'),'rebateAmount')"), null);
+  assert.equal(a.run("t4Raw('tm_orange','2099-12-01').retailCost"), 400);
+  assert.equal(a.run("t4Raw('tm_orange','2099-12-02').rebateAmount"), -75);
+});
+
+test('range rebate entry and clearing preserve legacy imported field provenance', async () => {
+  const a = app();
+  a.run("T4.projFilter='orange';T4.data.tm_orange={'2099-12-01':{retailIncome:1000,retailCost:400,refundAmount:-100,_src:'file'}};");
+  const input = {dataset:{t4sumcell:'2099-12-01:tm_orange:rebateAmount',t4orig:''},value:'50'};
+  a.inputs.push(input);
+  await a.run('t4SaveEntries(true)');
+  const rows = a.json('t4RawExportRows().rows');
+  const col = name => rows[0].indexOf(name);
+  const legacy = rows.find(row => row[col('来源代码')] === 'legacy-file');
+  const manual = rows.find(row => row[col('来源代码')] === 'manual');
+  assert.equal(legacy[col('零售收入')], 1000);
+  assert.equal(legacy[col('零售成本')], 400);
+  assert.equal(legacy[col('退款金额')], -100);
+  assert.equal(legacy[col('返款金额（扣减收入）')], '');
+  assert.equal(manual[col('返款金额（扣减收入）')], -50);
+  assert.equal(manual[col('零售收入')], '');
+  input.dataset.t4orig = '-50'; input.value = '';
+  await a.run('t4SaveEntries(true)');
+  assert.equal(a.run("t4Raw('tm_orange','2099-12-01')._src"), 'file');
+  assert.equal(a.run("t4Raw('tm_orange','2099-12-01')._manualFields.rebateAmount"), undefined);
+  assert.equal(a.json('t4RawExportRows().rows').length, 2);
+});
+
 test('single-day combined import retains other dates, sources, blank cost, and explicit zero', async () => {
   const a = app(); seed(a);
   summary(a, [['天猫-澳乐旗舰店', '2099-12-02', '普通销售', 0, '']]);

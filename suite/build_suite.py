@@ -52,7 +52,7 @@ def operating_keys(meta):
 
 def formula_for(key, col, row_of, operating=None):
     r = lambda k: f"{col}{row_of[k]}"
-    if key == "salesIncome":      return f"={r('retailIncome')}+{r('returnAmount')}+{r('refundAmount')}"
+    if key == "salesIncome":      return f"={r('retailIncome')}+{r('returnAmount')}+{r('refundAmount')}" + (f"-ABS({r('rebateAmount')})" if 'rebateAmount' in row_of else '')
     if key == "salesCost":        return f"={r('retailCost')}+{r('returnCost')}"
     if key == "grossProfit":      return f"={r('salesIncome')}-{r('salesCost')}"
     if key == "grossMargin":      return f"=IF({r('salesIncome')}=0,0,{r('grossProfit')}/{r('salesIncome')})"
@@ -70,7 +70,8 @@ def derive(vals, operating=None):
     """Python 复算，用于校验（与 formula_for 同口径）"""
     g = lambda k: vals.get(k, 0) or 0
     d = dict(vals)
-    d["salesIncome"] = g("retailIncome") + g("returnAmount") + g("refundAmount")
+    d["rebateAmount"] = -abs(g("rebateAmount"))
+    d["salesIncome"] = g("retailIncome") + g("returnAmount") + g("refundAmount") + d["rebateAmount"]
     d["salesCost"] = g("retailCost") + g("returnCost")
     d["grossProfit"] = d["salesIncome"] - d["salesCost"]
     d["operating"] = sum(g(k) for k in (OPERATING if operating is None else operating))
@@ -171,14 +172,18 @@ def write_channel(wb, ch, days_data, meta, row_of, first_row):
         r = row_of[m["k"]]
         metric_name_cell(ws.cell(r, 1), m)
         is_input = m["k"] in inputs
-        # 合计列 B：取数项 = SUM(各日)；派生项 = 同口径公式作用于 B 列
-        cb = ws.cell(r, 2, f"=SUM(C{r}:{last_col}{r})" if is_input else formula_for(m["k"], "B", row_of, operating))
+        # 返款逐日按绝对值扣减；Excel 中修改某日的符号也不能抵消其他日返款。
+        total = (f"=-SUMPRODUCT(ABS(C{r}:{last_col}{r}))" if m["k"] == "rebateAmount"
+                 else f"=SUM(C{r}:{last_col}{r})") if is_input else formula_for(m["k"], "B", row_of, operating)
+        cb = ws.cell(r, 2, total)
         num_cell(cb, m)
         for d in range(1, days + 1):
             col = get_column_letter(2 + d)
             if is_input:
                 day = days_data[d - 1]
                 v = day.get(m["k"]) if day.get("has") else None
+                if m["k"] == "rebateAmount" and v is not None:
+                    v = -abs(v)
                 cell = ws.cell(r, 2 + d, None if v is None else v)
             else:
                 cell = ws.cell(r, 2 + d, formula_for(m["k"], col, row_of, operating))
@@ -288,7 +293,7 @@ def write_summary(ws, tree, chans, chans_by_id, meta, row_of, first_row):
         got = sum(1 for c in node["_leaves"] if chans_by_id[c["id"]]["filled"] > 0)
         cell = ws.cell(r_info, 2 + node["_idx"], f"{got}/{len(node['_leaves'])}")
         cell.font = Font(name=FONT, size=9, color=C_SUB); cell.alignment = Alignment(horizontal="center"); cell.border = BORDER
-    note(ws, f"A{r_info + 2}", "口径：销售收入=零售收入+退货金额+退款金额；毛利=销售收入-销售成本；边际毛利=毛利-运营费-直接管理费；净利润=边际毛利-间接管理费+返利收入；销售回款仅记录，不计入收入或利润。管理费按自然日分摊，费率类科目按参数页比例派生。")
+    note(ws, f"A{r_info + 2}", "口径：销售收入=零售收入+退货金额+退款金额-返款金额绝对值；返款与客户退款独立保存，均扣减收入。毛利=销售收入-销售成本；边际毛利=毛利-运营费-直接管理费；净利润=边际毛利-间接管理费+历史返利收入；历史销售回款仅记录，不计入收入或利润。平台扣点采用系统按销售收入派生的金额，管理费按自然日分摊。")
     ws.column_dimensions["A"].width = 22
     for i in range(len(nodes)):
         ws.column_dimensions[get_column_letter(2 + i)].width = 16
@@ -358,7 +363,8 @@ def main(inp, outp):
             if not day.get("has"):
                 continue
             for k in data["inputKeys"]:
-                tot[k] = tot.get(k, 0) + (day.get(k) or 0)
+                value = day.get(k) or 0
+                tot[k] = tot.get(k, 0) + (-abs(value) if k == "rebateAmount" else value)
         d = derive(tot, operating_keys(data))
         sysm = data.get("monthByCh", {}).get(ch["id"], {})
         for k in ["salesIncome", "grossProfit", "operating", "netProfit"]:
