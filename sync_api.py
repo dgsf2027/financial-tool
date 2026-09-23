@@ -68,12 +68,14 @@ def valid_path(path):
         return False
     # Channel overrides are an ordered array. Treat the array as a single CAS
     # value; object-style writes beneath it would replace it with a dictionary.
-    if path[0] == 'channels':
+    if path[0] in ('channels', 'expenseItems'):
         return len(path) == 1
     if len(path) < 2:
         return False
     if path[0] == 'periodLocks':
         return len(path) == 2 and bool(PERIOD_RE.fullmatch(path[1]))
+    if path[0] == 'importHistory':
+        return 2 <= len(path) <= 3 and bool(re.fullmatch(r'import_[a-zA-Z0-9_\-]{1,100}', path[1]))
     if path[0] in ('periods', 'cfgByPeriod'):
         return bool(PERIOD_RE.fullmatch(path[1]))
     return path[0] == 'cfg'
@@ -81,7 +83,7 @@ def valid_path(path):
 def validate_document(doc):
     if not isinstance(doc.get('channels', []), list):
         raise ValueError('channels must be an array')
-    for field in ('periods', 'cfg', 'periodLocks', 'cfgByPeriod'):
+    for field in ('periods', 'cfg', 'periodLocks', 'cfgByPeriod', 'importHistory'):
         if not isinstance(doc.get(field, {}), dict):
             raise ValueError(field + ' must be an object')
     for field in ('periods', 'periodLocks', 'cfgByPeriod'):
@@ -91,6 +93,40 @@ def validate_document(doc):
         raise ValueError('periodLocks values must be booleans')
     if any(not isinstance(cfg, dict) for cfg in doc.get('cfgByPeriod', {}).values()):
         raise ValueError('cfgByPeriod values must be objects')
+    items = doc.get('expenseItems', [])
+    if not isinstance(items, list) or len(items) > 100:
+        raise ValueError('expenseItems must be an array of at most 100 items')
+    keys, names = set(), set()
+    for item in items:
+        if not isinstance(item, dict): raise ValueError('invalid expense item')
+        key, name = item.get('k'), item.get('n')
+        if not isinstance(key, str) or not re.fullmatch(r'expense_[a-z0-9_]{1,64}', key) or key in keys:
+            raise ValueError('invalid or duplicate expense key')
+        if not isinstance(name, str) or not 1 <= len(name.strip()) <= 40 or re.search(r'[\x00-\x1f\x7f<>]', name) or name.strip() in names:
+            raise ValueError('invalid or duplicate expense name')
+        keys.add(key); names.add(name.strip())
+    for key, record in doc.get('importHistory', {}).items():
+        if not re.fullmatch(r'import_[a-zA-Z0-9_\-]{1,100}', key) or not isinstance(record, dict) or record.get('id') != key:
+            raise ValueError('invalid import history id')
+        if not PERIOD_RE.fullmatch(str(record.get('period', ''))): raise ValueError('invalid import period')
+        for field, limit in [('fileName', 512), ('at', 64), ('actor', 128), ('scope', 120)]:
+            if not isinstance(record.get(field), str) or not 1 <= len(record[field]) <= limit:
+                raise ValueError('invalid import history ' + field)
+        if record.get('mode') not in ('file', 'range'): raise ValueError('invalid import history mode')
+        for field in ('used', 'skipped'):
+            if isinstance(record.get(field), bool) or not isinstance(record.get(field), int) or record[field] < 0:
+                raise ValueError('invalid import history count')
+        for field in ('dates', 'channels', 'issues'):
+            if not isinstance(record.get(field), list) or any(not isinstance(v, str) for v in record[field]):
+                raise ValueError('invalid import history ' + field)
+        if not record['dates'] or len(record['dates']) > 31 or not record['channels'] or len(record['channels']) > 10000:
+            raise ValueError('invalid import history range')
+        for date in [record.get('from'), record.get('to'), *record['dates']]:
+            if not isinstance(date, str) or not re.fullmatch(r'20\d{2}-\d{2}-\d{2}', date) or not date.startswith(record['period'] + '-'):
+                raise ValueError('invalid import history date')
+            try: datetime.strptime(date, '%Y-%m-%d')
+            except ValueError: raise ValueError('invalid import history date')
+        if record['from'] > record['to']: raise ValueError('invalid import history range')
 
 def protected_period_changes(current, next_doc):
     # Check the persisted lock state, never an unlock in the candidate write.
@@ -184,8 +220,9 @@ class Handler(BaseHTTPRequestHandler):
                     next_doc = document
                     # Older clients do not know about lock overrides. A full
                     # save from one must not discard the persisted decisions.
-                    if 'periodLocks' not in next_doc and 'periodLocks' in current:
-                        next_doc['periodLocks'] = current['periodLocks']
+                    for field in ('periodLocks', 'importHistory', 'expenseItems'):
+                        if field not in next_doc and field in current:
+                            next_doc[field] = current[field]
                 else:
                     base_document = current
                     if base < current_version:
@@ -216,6 +253,15 @@ class Handler(BaseHTTPRequestHandler):
                         conflicts.append({'path':path,'current':old if old_exists else None,'currentExists':old_exists})
                     if conflicts: c.execute('ROLLBACK'); return reply(self,409,{'ok':False,'error':'field_conflict','version':current_version,'conflicts':conflicts[:100]})
                 validate_document(next_doc)
+                # Import records are append-only and the authenticated proxy
+                # identity owns the audit stamp, not a browser-supplied name.
+                old_history = current.get('importHistory', {})
+                history = next_doc.get('importHistory', {})
+                if any(history.get(key) != record for key, record in old_history.items()):
+                    raise ValueError('import history is append-only')
+                for key in history.keys() - old_history.keys():
+                    history[key]['actor'] = user
+                    history[key]['at'] = datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
                 protected = protected_period_changes(current, next_doc)
                 if protected:
                     c.execute('ROLLBACK')

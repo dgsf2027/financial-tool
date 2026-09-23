@@ -297,3 +297,40 @@ test('flexible channel uploads persist new field pages for another client withou
   assert.equal(b.run("T4_CHM[t4ResolveChannel('同步新增店')].bu"), 'ecom');
   assert.deepEqual(copy(b.run("t4ChFieldRows('负责人').map(r=>[r.source,r.value])")), [['同步新增店', '张三']]);
 });
+
+test('combined day import commits both partitions and an audit record in one CAS and survives reload', async t => {
+  const initial = workspace({ _fileParts: { summaryIncome: { retailIncome: 80 }, summaryCost: { retailCost: 40 } } });
+  initial.periods[PERIOD].tmall['2099-12-02'] = { _fileParts: { summaryIncome: { retailIncome: 90 }, summaryCost: { retailCost: 50 } } };
+  const server = await service(t, initial), a = client(server, true);
+  await a.run('t4LoadServer()');
+  a.run(`T4.sumScope='both';T4.imp={mode:'summary',fileK:'summaryDaily',fileName:'combined.xlsx',headRow:0,
+    map:{channel:0,date:1,retailIncome:2,retailCost:3},rows:[[],['天猫-澳乐旗舰店','${DAY}',110,55]]}`);
+  await a.run('t4SummaryImpRun()');
+  const writes = a.requests.filter(x => x.method === 'PUT');
+  assert.equal(writes.length, 1);
+  assert.ok(writes[0].body.changes.some(x => x.path[0] === 'importHistory'));
+  assert.ok(writes[0].body.changes.some(x => x.path.includes('summaryIncome')));
+  assert.ok(writes[0].body.changes.some(x => x.path.includes('summaryCost')));
+  const saved = (await server.request()).document;
+  assert.equal(saved.periods[PERIOD].tmall['2099-12-02']._fileParts.summaryIncome.retailIncome, 90);
+  assert.equal(saved.periods[PERIOD].tmall[DAY]._fileParts.summaryCost.retailCost, 55);
+  assert.equal(Object.values(saved.importHistory)[0].fileName, 'combined.xlsx');
+  const b = client(server, true); await b.run('t4LoadServer()');
+  assert.equal(b.run('Object.values(T4.importHistory)[0].used'), 1);
+  assert.equal(b.run(`t4InputValue(T4.data.tmall['${DAY}'],'retailIncome')`), 110);
+});
+
+test('conflicting combined import persists neither its new cost nor success record', async t => {
+  const initial = workspace({ _fileParts: { summaryIncome: { retailIncome: 80 }, summaryCost: { retailCost: 40 } } });
+  const server = await service(t, initial), a = client(server, true), b = client(server, true);
+  await Promise.all([a.run('t4LoadServer()'), b.run('t4LoadServer()')]);
+  const make = income => `T4.sumScope='both';T4.imp={mode:'summary',fileK:'summaryDaily',fileName:'combined.xlsx',headRow:0,
+    map:{channel:0,date:1,retailIncome:2,retailCost:3},rows:[[],['天猫-澳乐旗舰店','${DAY}',${income},55]]};t4SummaryImpRun()`;
+  await a.run(make(110)); await b.run(make(120));
+  const saved = (await server.request()).document;
+  assert.equal(Object.keys(saved.importHistory).length, 1);
+  assert.equal(saved.periods[PERIOD].tmall[DAY]._fileParts.summaryIncome.retailIncome, 110);
+  assert.equal(b.run('Object.keys(T4.importHistory).length'), 0);
+  assert.equal(b.run(`t4InputValue(T4.data.tmall['${DAY}'],'retailCost')`), 40);
+  assert.match(b.run('T4.importFeedback.message'), /未同步/);
+});

@@ -8,6 +8,7 @@ const T4_KEY = 'fsc_t4_data_v2';
 const T4_CFG_KEY = 'fsc_t4_cfg_v1';
 const T4_PERIOD_CFG_KEY = 'fsc_t4_cfg_periods_v1';
 const T4_LOCK_KEY = 'fsc_t4_period_locks_v1';
+const T4_IMPORT_HISTORY_KEY = 'fsc_t4_import_history_v1';
 const T4_PENDING_DRAFT_KEY = 'fsc_t4_pending_migration_v1';
 const T4_DAILY_FILE = { k: 'daily', n: '标准日损益明细', hint: '按日期映射收入、成本、费用和管理费用等完整科目' };
 
@@ -363,7 +364,7 @@ function t4SanePeriodLocks(locks) {
   });
   return { clean, dropped };
 }
-const T4 = { period: new Date().toISOString().slice(0, 7), data: {}, cfg: {}, editCh: 'tmall', imp: null, sumDate: '', sumScope: 'income', viewFrom: '', viewTo: '', mgmtFrom: '', mgmtTo: '', sheetMode: 'tree', treeCollapsed: {}, projFilter: 'all', dayCh: 'tmall',
+const T4 = { period: new Date().toISOString().slice(0, 7), data: {}, cfg: {}, editCh: 'tmall', imp: null, sumDate: '', sumTo: '', manFrom: '', manTo: '', sumScope: 'both', importHistory: {}, importFeedback: null, viewFrom: '', viewTo: '', mgmtFrom: '', mgmtTo: '', sheetMode: 'tree', treeCollapsed: {}, projFilter: 'all', dayCh: 'tmall',
   mail: { list: [], status: null, loaded: false, loading: false, result: null, subject: '', body: '' } };
 
 // 项目筛选：全部 / 澳乐（大电商+拼多多+经销）/ 瑞眠
@@ -372,12 +373,13 @@ const t4InProj = bu => T4.projFilter === 'all' || t4ProjectId(bu) === T4.projFil
 const t4ProjCH = () => T4_CH.filter(c => t4InProj(c.bu));
 const t4ProjSelect = view => `<label class="sel">项目 <select id="t4ProjSel" data-view="${view}">${T4_PROJ_OPTS.map(([v, n]) => `<option value="${v}" ${T4.projFilter === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>`;
 
-/* 汇总导入/录入按科目拆分：销售收入与销售成本各走各的入口，数据源独立、互不覆盖 */
+/* 合并入口保留收入/成本两个来源分区，旧导入与单科目文件继续兼容。 */
 const T4_SUM_SCOPES = {
+  both: { n: '收入与成本', fileK: 'summaryDaily', keys: ['retailIncome', 'returnAmount', 'refundAmount', 'retailCost', 'returnCost'] },
   income: { n: '销售收入', fileK: 'summaryIncome', keys: ['retailIncome', 'returnAmount', 'refundAmount'] },
   cost: { n: '销售成本', fileK: 'summaryCost', keys: ['retailCost', 'returnCost'] },
 };
-const t4SumScope = () => T4_SUM_SCOPES[T4.sumScope] || T4_SUM_SCOPES.income;
+const t4SumScope = () => T4_SUM_SCOPES[T4.sumScope] || T4_SUM_SCOPES.both;
 
 function t4Clone(x) { return JSON.parse(JSON.stringify(x)); }
 let T4_SERVER_VERSION = null;
@@ -433,6 +435,7 @@ function t4ApplyPeriod(doc) {
   T4.data = t4Clone((doc.periods || {})[T4.period] || {});
   T4.cfg = t4ConfigForPeriod(doc, T4.period);
   T4.periodLocks = t4Clone(doc.periodLocks || {});
+  T4.importHistory = t4Clone(doc.importHistory || {});
   T4_CH.forEach(c => { if (!T4.data[c.id]) T4.data[c.id] = {}; });
   t4MigrateFileParts();
   T4_LOADED_PERIOD = T4.period;
@@ -452,6 +455,7 @@ function t4ViewDocument(source = T4_SERVER_DOCUMENT) {
   }
   doc.periodLocks = t4Clone(locks.clean);
   doc.channels = t4ChOverrides();
+  doc.importHistory = t4Clone(T4.importHistory || {});
   return doc;
 }
 function t4EntityKey() {
@@ -480,6 +484,7 @@ async function t4LoadServer() {
       migrated.cfgByPeriod = { [T4.period]: window.T4Shared.clone(T4.cfg || {}) };
       migrated.periodLocks = t4Clone(T4.periodLocks || {});
       migrated.channels = t4ChOverrides();
+      migrated.importHistory = t4Clone(T4.importHistory || {});
       const cloudLocks = T4_SERVER_DOCUMENT.periodLocks || {};
       const locked = typeof cloudLocks[T4.period] === 'boolean' ? cloudLocks[T4.period] : T4.period < t4CurrentMonth();
       if (locked) {
@@ -518,8 +523,10 @@ async function t4SaveServer(lockOnly = false) {
   const baseline = lockOnly ? window.T4Shared.clone(T4_SERVER_DOCUMENT) : T4_SERVER_BASELINE;
   doc.periodLocks = t4Clone(T4.periodLocks || {});
   doc.channels = t4ChOverrides();
+  doc.importHistory = t4Clone(T4.importHistory || {});
   const pendingBase = lockOnly ? t4Clone(T4_SERVER_BASELINE) : t4Clone(doc);
   pendingBase.periodLocks = t4Clone(doc.periodLocks); pendingBase.channels = t4Clone(doc.channels);
+  pendingBase.importHistory = t4Clone(doc.importHistory);
   const controls = [...document.querySelectorAll('[data-t4cfg], [data-t4mgmt], [data-t4cell], [data-t4sumcell], #t4Period')]
     .map(input => ({ input, disabled: input.disabled }));
   controls.forEach(({ input }) => { input.disabled = true; });
@@ -538,6 +545,7 @@ async function t4SaveServer(lockOnly = false) {
       const pending = window.T4Shared.reapply(pendingBase, pendingView, T4_SERVER_BASELINE);
       T4.data = pending.periods[T4.period]; T4.cfg = pending.cfgByPeriod[T4.period];
       T4.periodLocks = pending.periodLocks;
+      T4.importHistory = pending.importHistory || {};
       t4SaveChOverrides(pending.channels); t4RebuildChannels();
     }
     const all = t4Stored(T4_KEY, {}); all[T4.period] = T4.data;
@@ -545,6 +553,7 @@ async function t4SaveServer(lockOnly = false) {
     const cfgs = t4Stored(T4_PERIOD_CFG_KEY, {}); cfgs[T4.period] = T4.cfg;
     localStorage.setItem(T4_PERIOD_CFG_KEY, JSON.stringify(cfgs));
     localStorage.setItem(T4_LOCK_KEY, JSON.stringify(T4.periodLocks));
+    localStorage.setItem(T4_IMPORT_HISTORY_KEY, JSON.stringify(T4.importHistory));
     T4_SERVER_ERROR = null;
     return x;
   } catch (err) {
@@ -587,6 +596,7 @@ function t4Load() {
     T4.cfg = t4ConfigForPeriod({ cfg: t4Stored(T4_CFG_KEY, {}), cfgByPeriod: t4Stored(T4_PERIOD_CFG_KEY, {}) }, T4.period);
   } catch (e) { T4.cfg = t4Clone(T4_CFG_DEFAULT); }
   T4.periodLocks = t4Stored(T4_LOCK_KEY, {});
+  T4.importHistory = t4Stored(T4_IMPORT_HISTORY_KEY, {});
   T4_LOADED_PERIOD = T4.period;
   t4MigrateV1();
   t4MigrateFileParts();
@@ -623,6 +633,7 @@ async function t4Save() {
     all = JSON.parse(localStorage.getItem(T4_KEY) || '{}');
     all[T4.period] = T4.data;
     localStorage.setItem(T4_KEY, JSON.stringify(all));
+    localStorage.setItem(T4_IMPORT_HISTORY_KEY, JSON.stringify(T4.importHistory || {}));
   } catch (e) { throw new Error('保存失败：浏览器存储空间不足'); }
   if (T4_SERVER_READY) return t4SaveServer();
   return { ok: true, localOnly: true };
@@ -645,8 +656,9 @@ async function t4SetPeriodLock(locked) {
   } catch (e) { T4.periodLocks = before; throw e; }
 }
 
-async function t4ClearPeriodData(project, scope) {
+async function t4ClearPeriodData(project, scope, from = t4Date(1), to = t4Date(t4Days())) {
   t4AssertEditable();
+  t4ValidateRange(from, to);
   const keys = scope === 'all' ? T4_INPUT_KEYS : scope === 'income' ? T4_SUM_SCOPES.income.keys
     : scope === 'cost' ? T4_SUM_SCOPES.cost.keys : scope === 'expenses'
       ? T4_INPUTS.filter(f => f.g === '运营费用').map(f => f.k) : [];
@@ -654,6 +666,7 @@ async function t4ClearPeriodData(project, scope) {
   const previous = t4Clone(T4.data);
   T4_CH.filter(c => project === 'all' || t4ProjectId(c.bu) === project).forEach(c => {
     Object.entries(T4.data[c.id] || {}).forEach(([dt, raw]) => {
+      if (dt < from || dt > to) return;
       keys.forEach(k => delete raw[k]);
       Object.values(raw._fileParts || {}).forEach(part => keys.forEach(k => delete part[k]));
       if (!t4HasInputs(raw)) delete T4.data[c.id][dt];
@@ -664,6 +677,102 @@ async function t4ClearPeriodData(project, scope) {
 
 const t4Days = () => { const [y, m] = T4.period.split('-').map(Number); return new Date(y, m, 0).getDate(); };
 const t4Date = d => `${T4.period}-${String(d).padStart(2, '0')}`;
+function t4ValidDate(date) {
+  if (!/^20\d{2}-\d{2}-\d{2}$/.test(date || '')) return false;
+  const parsed = new Date(date + 'T00:00:00Z');
+  return !isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
+}
+function t4ValidateRange(from, to) {
+  if (!t4ValidDate(from) || !t4ValidDate(to) || !from.startsWith(T4.period + '-') || !to.startsWith(T4.period + '-'))
+    throw new Error('起止日期必须是当前月份内的有效日期');
+  if (from > to) throw new Error('结束日期不能早于开始日期');
+  return Array.from({ length: Number(to.slice(-2)) - Number(from.slice(-2)) + 1 }, (_, i) => t4Date(Number(from.slice(-2)) + i));
+}
+function t4ImportRange(imp) {
+  return imp.rangeMode === 'range' ? t4ValidateRange(imp.from, imp.to) : null;
+}
+function t4ImportRangeControls(imp) {
+  const range = imp.rangeMode === 'range';
+  return cardp('导入日期范围', `<div class="frow"><label>替换范围 <select id="t4ImportRangeMode"><option value="file" ${range ? '' : 'selected'}>文件覆盖日期</option><option value="range" ${range ? 'selected' : ''}>指定起止日期</option></select></label>
+    ${range ? `<label>起 <input id="t4ImportFrom" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${H(imp.from ?? t4Date(1))}"></label><label>止 <input id="t4ImportTo" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${H(imp.to ?? t4Date(t4Days()))}"></label>` : ''}</div><p class="mut">${range ? '只读取所选区间。成功导入的渠道在所选区间内替换同类来源，区间内未出现在文件中的旧值会清除。起止相同表示一天。' : '按渠道保留文件未覆盖日期。文件内同渠道同日多行先合计，再替换该日同类来源。'} 未匹配渠道和无有效金额的文件不会清空旧数据。</p>`);
+}
+function t4ImportFeedback() {
+  const feedback = T4.importFeedback;
+  if (!feedback) return '';
+  return cardp(feedback.ok ? '导入已保存' : '导入未写入', `<p>${H(feedback.message)}</p>${feedback.issues?.length ? `<ul>${feedback.issues.map(x => `<li>${H(x)}</li>`).join('')}</ul>` : ''}`);
+}
+function t4RejectImport(message, issues = []) {
+  T4.importFeedback = { ok: false, message, issues };
+  toast(message, 6000);
+  t4Go(T4.imp?.mode === 'summary' ? 'sumimp' : 'imp');
+}
+// Call before the same data save. Callers must restore their history snapshot
+// together with their data snapshot if that save fails.
+function t4AddImportHistory(info) {
+  const id = `import_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+  const dates = [...new Set(info.dates || [t4Date(1)])].sort();
+  const record = { id, period: T4.period, fileName: String(info.fileName || '导入文件').slice(0, 512), at: new Date().toISOString(),
+    actor: (typeof CUR_USER === 'string' && CUR_USER) || 'portal-user', scope: info.scope || '数据导入',
+    mode: info.mode || 'file', from: info.from || dates[0], to: info.to || dates[dates.length - 1],
+    dates, channels: [...new Set(info.channels || [])], used: info.used || 0, skipped: info.skipped || 0, issues: info.issues || [] };
+  T4.importHistory = { ...(T4.importHistory || {}), [id]: record };
+  return record;
+}
+async function t4CommitImport(imp, pending, used, skipped, issues, range) {
+  const before = t4Clone(T4.data), history = t4Clone(T4.importHistory || {});
+  const targets = new Map();
+  pending.forEach(x => {
+    const key = `${x.ch}:${x.source}`;
+    if (!targets.has(key)) targets.set(key, { ch: x.ch, source: x.source, dates: new Set(range || []), keys: new Set(), dateKeys: new Map() });
+    const target = targets.get(key);
+    if (!range) target.dates.add(x.dt);
+    if (!target.dateKeys.has(x.dt)) target.dateKeys.set(x.dt, new Set());
+    const keys = target.dateKeys.get(x.dt);
+    keys.add(x.key);
+    // Sales rows may become returns after type mapping. Clear the paired old
+    // metric too so a corrected order type cannot leave both amounts behind.
+    if (imp.fileK === 'sales' || imp.mode === 'summary') {
+      if (['retailIncome', 'returnAmount'].includes(x.key) && (imp.map.retailIncome != null || imp.map.amount != null)) {
+        keys.add('retailIncome'); keys.add('returnAmount');
+      }
+      if (['retailCost', 'returnCost'].includes(x.key) && (imp.map.retailCost != null || imp.map.cost != null)) {
+        keys.add('retailCost'); keys.add('returnCost');
+      }
+    }
+    keys.forEach(k => target.keys.add(k));
+  });
+  let record;
+  try {
+    targets.forEach(x => {
+      if (range) t4ClearSource(x.ch, x.source, x.dates, x.keys);
+      else x.dateKeys.forEach((keys, dt) => t4ClearSource(x.ch, x.source, new Set([dt]), keys));
+    });
+    pending.forEach(x => t4Add(x.ch, x.dt, x.key, x.num, x.source));
+    record = t4AddImportHistory({ fileName: imp.fileName || imp.fileN, scope: imp.mode === 'summary' ? t4SumScope().n : (imp.fileN || imp.fileK),
+      mode: range ? 'range' : 'file', from: range?.[0], to: range?.[range.length - 1], dates: pending.map(x => x.dt), channels: pending.map(x => x.ch), used, skipped, issues });
+    await t4Save();
+  } catch (e) {
+    T4.importHistory = history;
+    t4RestorePeriodData(before);
+    localStorage.setItem(T4_IMPORT_HISTORY_KEY, JSON.stringify(history));
+    throw e;
+  }
+  T4.importFeedback = { ok: true, message: `${record.scope}：${record.channels.length} 个渠道、${record.dates.length} 个日期、有效 ${used} 行、跳过 ${skipped} 行。`, issues };
+  T4.imp = null;
+  t4Go('history');
+  toast('导入数据与记录已保存', 4200);
+  return record;
+}
+S['t4-history'] = () => {
+  t4Load();
+  const records = Object.values(T4.importHistory || {}).filter(r => r.period === T4.period).sort((a, b) => b.at.localeCompare(a.at));
+  return head('T4 导入记录', '成功记录与业务数据一起保存；失败导入保留原数据，并在导入页显示原因。', '工具箱 · T4',
+    t4PeriodControl('<button class="btn" data-t4go="overview">← 返回</button>')) + t4ImportFeedback()
+    + card(`本月导入（${records.length} 次）`, records.length ? table([{t:'时间 / 操作人'},{t:'文件 / 范围'},{t:'日期'},{t:'渠道'},{t:'有效 / 跳过'},{t:'反馈'}],
+      records.map(r => [H(`${r.at} / ${r.actor}`), `${H(r.fileName)}<br>${H(r.scope)}`, `${H(r.from)} ～ ${H(r.to)}<br>${r.mode === 'range' ? '指定区间' : '文件覆盖日期'}`,
+        H(r.channels.map(id => T4_CHM[id]?.n || id).join('、')), `${r.used} / ${r.skipped}`,
+        r.issues.length ? `<details><summary>${r.issues.length} 条原因</summary>${r.issues.map(H).join('<br>')}</details>` : '全部通过'])) : '<p class="mut" style="padding:14px">本月尚无导入记录。启用记录前的历史导入无法补溯。</p>');
+};
 const t4Num = v => { const n = Number(String(v == null ? '' : v).replace(/[,，\s¥￥]/g, '')); return Number.isFinite(n) ? n : 0; };
 function t4ImportAmount(value) {
   const text = String(value == null ? '' : value).trim().replace(/，/g, ',').replace(/^[¥￥$]\s*/, '');
@@ -848,9 +957,9 @@ function t4PeriodControl(extra) {
 }
 S['t4-clear'] = () => {
   t4Load();
-  return head('清空本期数据', '选择本月要清空的项目与数据板块，其他月份不受影响。', '工具箱 · T4',
+  return head('清空本期数据', '选择本月内的日期范围、项目与板块。起止相同表示只清空一天。', '工具箱 · T4',
     t4PeriodControl('<button class="btn" data-t4go="overview">返回</button>'))
-    + cardp('清空范围', `<div class="frow"><label>项目 <select id="t4ClearProject">${T4_PROJ_OPTS.map(([id,n]) => `<option value="${id}" ${id === T4.projFilter ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+    + cardp('清空范围', `<div class="frow"><label>起 <input id="t4ClearFrom" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${t4Date(1)}"></label><label>止 <input id="t4ClearTo" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${t4Date(t4Days())}"></label><label>项目 <select id="t4ClearProject">${T4_PROJ_OPTS.map(([id,n]) => `<option value="${id}" ${id === T4.projFilter ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
       <label>板块 <select id="t4ClearScope"><option value="income">销售收入</option><option value="cost">销售成本</option><option value="expenses">运营费用</option><option value="all">全部录入与导入数据</option></select></label>
       <button class="btn" data-t4act="clearSelected" ${t4IsPeriodLocked() ? 'disabled' : ''}>清空所选板块</button></div>`)
     + `<div class="note ${t4IsPeriodLocked() ? 'w' : ''}">${t4IsPeriodLocked() ? `${T4.period} 已锁定。往期月份默认受保护，需主动解锁才能清空。` : '清空前需输入期间号确认。'} 参数与月度工资/费用分摊保留；由参数推算的费用仍会显示。</div>`;
@@ -886,7 +995,7 @@ S.t4 = () => {
        <button class="btn sm" data-t4go="man:${c.id}">录入</button>`];
   });
   return head('T4　日损益表', `按底稿完整科目重算 ${T4_CH.length} 个渠道，并分别归集到大电商、拼多多、瑞眠、橘农和经销事业部。`, '工具箱 · 已更新',
-    t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="overview" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="当前月默认截至今天；选择月末可看整月" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="overview" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label>${t4ProjSelect('overview')}<button class="btn" data-t4go="sumimp:income">收入导入</button><button class="btn" data-t4go="sumimp:cost">成本导入</button><button class="btn" data-t4go="summan:income">收入录入</button><button class="btn" data-t4go="summan:cost">成本录入</button><button class="btn" data-t4go="returns">瑞眠 / 橘农返款</button><button class="btn" data-t4go="channels">渠道列表</button><button class="btn" data-t4go="rules">取数口径</button><button class="btn" data-t4go="mgmt">工资 / 费用分摊</button><button class="btn" data-t4go="cfg">参数</button><button class="btn" data-t4act="wipePeriod" title="清空当前期间全部渠道的收入/成本/费用数据；参数、管理费分摊和渠道列表不受影响">清空本期</button><button class="btn pri" data-t4go="sheet">看损益表</button>`))
+    t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="overview" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="当前月默认截至今天；选择月末可看整月" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="overview" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label>${t4ProjSelect('overview')}<button class="btn" data-t4go="sumimp:both">收入成本导入</button><button class="btn" data-t4go="summan:both">收入成本录入</button><button class="btn" data-t4go="history">导入记录</button><button class="btn" data-t4go="returns">瑞眠 / 橘农返款</button><button class="btn" data-t4go="channels">渠道列表</button><button class="btn" data-t4go="rules">取数口径</button><button class="btn" data-t4go="mgmt">工资 / 费用分摊</button><button class="btn" data-t4go="cfg">参数</button><button class="btn" data-t4act="wipePeriod" title="清空当前期间全部渠道的收入/成本/费用数据；参数、管理费分摊和渠道列表不受影响">清空本期</button><button class="btn pri" data-t4go="sheet">看损益表</button>`))
     + kpis([
       { k: '渠道', v: String(T4_CH.length), u: '个' },
       { k: '大电商', v: String(T4_BIG_ECOM.length), u: '个渠道' },
@@ -917,8 +1026,8 @@ S.t4 = () => {
 
 function t4EntryTable(ch, group) {
   const fs = T4_INPUTS.filter(f => f.g === group), rows = [];
-  for (let d = 1; d <= t4Days(); d++) {
-    const dt = t4Date(d), raw = t4Raw(ch, dt) || {}, r = t4Row(ch, dt);
+  for (const dt of t4EntryRange(false)) {
+    const d = Number(dt.slice(-2)), raw = t4Raw(ch, dt) || {}, r = t4Row(ch, dt);
     rows.push([`<b class="mono">${d}</b>`, ...fs.map(f => { const value = t4InputValue(raw, f.k), v = value != null ? value : ''; return `<input type="number" step="0.01" class="t4in" data-t4cell="${dt}:${f.k}" data-t4orig="${v}" value="${v}" placeholder="—">`; }),
       r ? `<b class="${r.netProfit >= 0 ? 'grn' : 'red'}">${money(r.netProfit)}</b>` : '—']);
   }
@@ -927,30 +1036,70 @@ function t4EntryTable(ch, group) {
 S['t4-man'] = () => {
   t4Load(); const c = T4_CHM[T4.editCh];
   return head(`录入　${c.n}`, '留空表示没有数据；填 0 表示当日确认为零。退货金额、退款金额和退货成本请按负数录入。', '工具箱 · T4',
-    t4PeriodControl(`<select id="t4chSel">${T4_CH.map(x => `<option value="${x.id}" ${x.id === c.id ? 'selected' : ''}>${x.n}</option>`).join('')}</select><button class="btn" data-t4go="overview">← 返回</button><button class="btn pri" data-t4act="saveMan">保存</button>`))
+    t4PeriodControl(`${t4EntryRangeControls(false)}<select id="t4chSel">${T4_CH.map(x => `<option value="${x.id}" ${x.id === c.id ? 'selected' : ''}>${x.n}</option>`).join('')}</select><button class="btn" data-t4go="overview">← 返回</button><button class="btn pri" data-t4act="saveMan">保存</button>`))
     + `<div class="note"><b>当前收入取数 ${t4Filled(c.id)} / ${t4Days()} 天。</b>浅色空格会由参数页中的比例或月度分摊值计算；在这里填值可覆盖该参数。</div>`
     + t4EntryTable(c.id, '销售与成本') + t4EntryTable(c.id, '运营费用')
     + t4EntryTable(c.id, '直接管理费用') + t4EntryTable(c.id, '间接管理费用');
 };
 
-function t4SummaryEntryTable(group, dt, keys, title) {
+function t4EntryRange(summary) {
+  const from = summary ? T4.sumDate : T4.manFrom, to = summary ? T4.sumTo : T4.manTo;
+  const start = t4ValidDate(from) && from.startsWith(T4.period + '-') ? from : t4Date(1);
+  const end = t4ValidDate(to) && to.startsWith(T4.period + '-') ? to : (summary ? start : t4Date(t4Days()));
+  return t4ValidateRange(start, end < start ? start : end);
+}
+function t4EntryRangeControls(summary) {
+  const dates = t4EntryRange(summary), prefix = summary ? 't4Sum' : 't4Man';
+  return `<label class="sel">起 <input id="${prefix}From" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${dates[0]}"></label><label class="sel">止 <input id="${prefix}To" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${dates[dates.length - 1]}"></label>`;
+}
+function t4SummaryEntryTable(group, dates, keys, title) {
   const fs = T4_INPUTS.filter(f => f.g === group && (!keys || keys.includes(f.k)));
-  const rows = T4_CH.map(c => {
+  const rows = dates.flatMap(dt => T4_CH.map(c => {
     const raw = t4Raw(c.id, dt) || {}, r = t4Row(c.id, dt);
-    return [t4BuPill(c.bu), `<b>${H(c.n)}</b>`,
-      ...fs.map(f => { const value = t4InputValue(raw, f.k), v = value != null ? value : ''; return `<input type="number" step="0.01" class="t4in" data-t4sumcell="${c.id}:${f.k}" data-t4orig="${v}" value="${v}" placeholder="—">`; }),
+    return [H(dt), t4BuPill(c.bu), `<b>${H(c.n)}</b>`,
+      ...fs.map(f => { const value = t4InputValue(raw, f.k), v = value != null ? value : ''; return `<input type="number" step="0.01" class="t4in" data-t4sumcell="${dt}:${c.id}:${f.k}" data-t4orig="${v}" value="${v}" aria-label="${H(dt + ' ' + c.n + ' ' + f.n)}" placeholder="—">`; }),
       r ? `<b class="${r.netProfit >= 0 ? 'grn' : 'red'}">${money(r.netProfit)}</b>` : '—'];
-  });
-  return card(title || group, table([{t:'归属事业部'},{t:'渠道'}, ...fs.map(f => ({t:f.n,n:1})), {t:'当日净利润',n:1}], rows));
+  }));
+  return card(title || group, table([{t:'日期'},{t:'归属事业部'},{t:'渠道'}, ...fs.map(f => ({t:f.n,n:1})), {t:'当日净利润',n:1}], rows));
 }
 S['t4-summan'] = () => {
-  t4Load(); const sc = t4SumScope();
-  if (!T4.sumDate || !T4.sumDate.startsWith(T4.period + '-')) T4.sumDate = t4Date(1);
-  return head(`汇总录入 · ${sc.n}`, `选择一个日期，在同一页面录入全部渠道的${sc.n}；各渠道原有录入入口继续保留。`, '工具箱 · T4',
-    t4PeriodControl(`<label class="sel">日期 <input id="t4SumDate" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${T4.sumDate}" style="width:132px"></label><button class="btn" data-t4go="overview">← 返回</button><button class="btn pri" data-t4act="sumManSave">保存全部渠道</button>`))
-    + `<div class="note"><b>只保存发生变化的格子。</b>留空表示删除该日该科目的录入值；填 0 表示当日确认为零。${sc.n === '销售收入' ? '退货金额、退款金额请按负数录入。' : '退货成本请按负数录入。'}</div>`
-    + t4SummaryEntryTable('销售与成本', T4.sumDate, sc.keys, `${sc.n} · ${T4.sumDate}`);
+  t4Load(); const sc = t4SumScope(), dates = t4EntryRange(true);
+  T4.sumDate = dates[0]; T4.sumTo = dates[dates.length - 1];
+  return head(`汇总录入 · ${sc.n}`, '选择起止日期，每个日期分别填写各渠道收入与成本。一个格子只对应一天，不会复制到其他日期。', '工具箱 · T4',
+    t4PeriodControl(`${t4EntryRangeControls(true)}<button class="btn" data-t4go="overview">← 返回</button><button class="btn pri" data-t4act="sumManSave">保存全部渠道</button>`))
+    + `<div class="note"><b>只保存发生变化的格子。</b>留空删除该格的人工录入值；文件值或参数仍可继续生效。填 0 表示当日确认为零。退货金额、退款金额和退货成本按负数录入。切换日期前请保存本页变更。</div>`
+    + t4SummaryEntryTable('销售与成本', dates, sc.keys, `${sc.n} · ${dates[0]} ～ ${dates[dates.length - 1]}`);
 };
+function t4EntryDirty() {
+  return [...document.querySelectorAll('[data-t4cell], [data-t4sumcell]')].some(inp => inp.value.trim() !== String(inp.dataset.t4orig ?? ''));
+}
+async function t4SaveEntries(summary) {
+  t4AssertEditable();
+  const changes = [];
+  document.querySelectorAll(summary ? '[data-t4sumcell]' : '[data-t4cell]').forEach(inp => {
+    const parts = String(summary ? inp.dataset.t4sumcell : inp.dataset.t4cell).split(':');
+    const [dt, ch, key] = summary ? (parts.length === 3 ? parts : [T4.sumDate, ...parts]) : [parts[0], T4.editCh, parts[1]];
+    if (inp.validity?.badInput) throw new Error(`${dt} 金额格式无效`);
+    const value = inp.value.trim();
+    if (value === String(inp.dataset.t4orig ?? '')) return;
+    t4ValidateRange(dt, dt);
+    if (!T4_CHM[ch] || !T4_INPUT_KEYS.includes(key)) throw new Error('录入渠道或科目无效');
+    const num = value === '' ? null : t4ImportAmount(value);
+    if (num !== null && !Number.isFinite(num)) throw new Error(`${dt} ${T4_CHM[ch].n} 金额无效`);
+    changes.push({ dt, ch, key, num });
+  });
+  if (!changes.length) return 0;
+  const before = t4Clone(T4.data);
+  try {
+    changes.forEach(({ dt, ch, key, num }) => {
+      const raw = T4.data[ch][dt] || { _src: 'manual', _fileParts: {} };
+      if (num === null) delete raw[key]; else { raw[key] = num; raw._src = 'manual'; }
+      if (t4HasInputs(raw)) T4.data[ch][dt] = raw; else delete T4.data[ch][dt];
+    });
+    await t4Save();
+  } catch (e) { t4RestorePeriodData(before); throw e; }
+  return changes.length;
+}
 
 function t4FindHead(rows, def) {
   let best = 0, score = -1;
@@ -981,7 +1130,7 @@ function t4DateNorm(v) {
   let m = /(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})/.exec(s);
   if (m) return `${m[1]}-${String(+m[2]).padStart(2,'0')}-${String(+m[3]).padStart(2,'0')}`;
   m = /^(\d{1,2})[-/.月](\d{1,2})/.exec(s);
-  if (m) return `${T4.period}-${String(+m[1]).padStart(2,'0')}-${String(+m[2]).padStart(2,'0')}`;
+  if (m) return `${T4.period.slice(0, 4)}-${String(+m[1]).padStart(2,'0')}-${String(+m[2]).padStart(2,'0')}`;
   const d = new Date(s); return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
 }
 function t4Add(ch, dt, key, value, fileK) {
@@ -992,10 +1141,14 @@ function t4Add(ch, dt, key, value, fileK) {
   part[key] = (part[key] || 0) + value; raw._src = 'file';
   T4.data[ch][dt] = raw;
 }
-function t4ClearSource(ch, fileK) {
+function t4ClearSource(ch, fileK, dates = null, keys = null) {
   Object.keys(T4.data[ch] || {}).forEach(dt => {
+    if (dates && !dates.has(dt)) return;
     const r = T4.data[ch][dt];
-    if (r._fileParts) delete r._fileParts[fileK];
+    if (r._fileParts && r._fileParts[fileK]) {
+      if (keys) keys.forEach(key => delete r._fileParts[fileK][key]);
+      else delete r._fileParts[fileK];
+    }
     if (!t4HasInputs(r)) delete T4.data[ch][dt];
   });
 }
@@ -1029,14 +1182,14 @@ S['t4-sumimp'] = () => {
   const imp = T4.imp && T4.imp.mode === 'summary' ? T4.imp : null;
   if (!imp) return head(`汇总导入 · ${sc.n}`, `一个文件内按“归属事业部 + 渠道 + 日期”导入全部渠道的${sc.n}；各渠道原有导入入口继续保留。`, '工具箱 · T4',
     t4PeriodControl('<button class="btn" data-t4act="sumTemplate">下载模板</button><button class="btn" data-t4go="overview">← 返回</button><button class="btn pri" data-t4act="sumPick">选择汇总文件</button>'))
-    + `<div class="note g"><b>模板就是吉客云导出的「销售单明细账」原版（28 列一列不少）。</b>吉客云导出的文件不用改一个字、直接选进来；从其他系统来的数据按模板列序套进去再导也一样。收入导入与成本导入用<b>同一份模板、同一份文件</b>：分摊后金额＝零售收入，货品成本＝零售成本，其余列自动忽略。</div>`
+    + `<div class="note g"><b>模板就是吉客云导出的「销售单明细账」原版（28 列一列不少）。</b>吉客云导出的文件不用改一个字、直接选进来；从其他系统来的数据按模板列序套进去再导也一样。收入与成本使用<b>同一份模板，一次导入</b>：分摊后金额＝零售收入，货品成本＝零售成本，其余列自动忽略。</div>`
     + card('汇总文件要求（吉客云销售单明细账直接导入）', table([{t:'字段'},{t:'要求'}], [
       ['渠道 / 销售渠道', `必填；支持渠道名或店铺全名：${T4_CH.map(c => c.n).join('、')}、天猫-澳乐旗舰店、京东-澳乐官方旗舰店、快手-澳乐母婴品牌店`],
       ['日期 / 发货时间', '必填；只导入当前期间的数据，同渠道同日多行自动累加'],
-      [`${sc.n}科目`, `${sc.fileK === 'summaryIncome' ? '分摊后金额（即销售收入）' : '货品成本（即销售成本）'}；也认${scItems.map(x => x.n).join('、')}列名。空白不覆盖，明确的 0 会导入`],
+      [`${sc.n}科目`, `${sc.fileK === 'summaryIncome' ? '分摊后金额（即零售收入）' : sc.fileK === 'summaryCost' ? '货品成本（即零售成本）' : '分摊后金额＝零售收入，货品成本＝零售成本'}；也认${scItems.map(x => x.n).join('、')}列名。空白不覆盖，明确的 0 会导入`],
       ['订单类型', '选填；「退货」行自动按负数计入退货科目；「售后发货」按源表实际金额计入收入/成本，包括明确的 0'],
     ]))
-    + `<div class="note"><b>支持 .xlsx、.xls、.csv、.tsv。</b>本入口只写${sc.n}科目；与${sc.n === '销售收入' ? '成本' : '收入'}导入、各渠道专用文件导入互不覆盖，重复导入不会重复累计。</div>`;
+    + `<div class="note"><b>支持 .xlsx、.xls、.csv、.tsv。</b>默认只替换文件覆盖日期的${sc.n}来源数据，其他日期及其他来源保留。也可指定本月内起止日期；收入与成本一次验证、一次保存，未提供的科目分区保留。</div>`;
   const def = T4_FILE_DEFS.summaryDaily, hdr = imp.rows[imp.headRow] || [];
   const fields = def.fields.filter(([k]) => ['date','bu','channel','type','product'].includes(k) || sc.keys.includes(k));
   const options = k => hdr.map((x, i) => `<option value="${i}" ${imp.map[k] === i ? 'selected' : ''}>${H(String(x || '(空)').slice(0,30))}</option>`).join('');
@@ -1044,6 +1197,8 @@ S['t4-sumimp'] = () => {
     + `<div class="frow" style="margin-bottom:13px"><span class="fi">✓</span><span><span class="fn">${H(imp.fileName)}</span><br><span class="fm">${imp.rows.length} 行</span></span></div>`
     + cardp('表头行', `<select id="t4head">${imp.rows.slice(0,15).map((r,i) => `<option value="${i}" ${i===imp.headRow?'selected':''}>第 ${i+1} 行：${H(r.filter(Boolean).slice(0,6).join(' | ').slice(0,80))}</option>`).join('')}</select>`)
     + card('列对应', table([{t:'目标字段'},{t:'文件字段'}], fields.map(([k,n]) => [`${H(n)}${def.required.includes(k) ? ' <span class="red">*</span>' : ''}`, `<select data-t4map="${k}"><option value="">— 不使用 —</option>${options(k)}</select>`])))
+    + t4ImportRangeControls(imp)
+    + t4ImportFeedback()
     + t4ChannelReview(imp)
     + `<div style="display:flex;justify-content:flex-end"><button class="btn pri" data-t4act="sumImpRun" ${t4SummaryReady(imp) && !t4IsPeriodLocked() ? '' : 'disabled'}>导入全部渠道</button></div>`;
 };
@@ -1055,6 +1210,7 @@ async function t4PickSummaryFile() {
     try {
       const rows = await XLSXLite.readTable(file), def = T4_FILE_DEFS.summaryDaily;
       const headRow = t4FindHead(rows, def);
+      T4.importFeedback = null;
       T4.imp = { mode: 'summary', fileK: 'summaryDaily', fileName: file.name, rows, headRow, map: t4AutoMap(rows[headRow] || [], def) };
       t4Go('sumimp');
     } catch (e) { toast(`读取失败：${e.message || e}`, 5000); }
@@ -1077,47 +1233,44 @@ function t4ChannelReview(imp) {
       `<select aria-label="第 ${index + 1} 行目标渠道" data-t4rowchannel="${index}">${T4_CH.map(c => `<option value="${c.id}" ${ch === c.id ? 'selected' : ''}>${H(c.n)}</option>`).join('')}</select>`]);
   });
   return rows.length ? card('有赞明细渠道调整', table([{t:'源行'},{t:'原渠道'},{t:'货品名称'},{t:'提示'},{t:'本次入账渠道'}], rows))
-    + '<div class="note">有赞枕头可在这里手动调至对应 zzzrest 渠道。收入和成本分开导入时，请确认两次选择一致。</div>' : '';
+    + '<div class="note">有赞枕头可在这里手动调至对应 zzzrest 渠道。收入与成本使用同一行的渠道调整。</div>' : '';
 }
 
 async function t4SummaryImpRun() {
   const imp = T4.imp;
   if (!imp || imp.mode !== 'summary' || !t4SummaryReady(imp)) return;
-  try { t4AssertEditable(); } catch (e) { toast(e.message); return; }
-  const sc = t4SumScope();
-  const pending = [], errors = [];
-  let used = 0, skipped = 0; const seen = new Set(), channels = new Set(), unknown = new Set();
+  let range;
+  try { t4AssertEditable(); range = t4ImportRange(imp); } catch (e) { t4RejectImport(e.message); return; }
+  const sc = t4SumScope(), pending = [], errors = [], issues = [];
+  let used = 0, skipped = 0;
   imp.rows.slice(imp.headRow + 1).forEach((row, i) => {
-    const get = k => imp.map[k] == null ? '' : row[imp.map[k]];
+    if (!row.some(v => v != null && String(v).trim())) return;
+    const line = imp.headRow + i + 2, get = k => imp.map[k] == null ? '' : row[imp.map[k]];
+    const skip = reason => { skipped++; issues.push(`第 ${line} 行：${reason}`); };
     const ch = t4ImportChannel(imp, row, imp.headRow + 1 + i), dt = t4DateNorm(get('date'));
-    if (!ch) { const name = String(get('channel') || '').trim(); if (name) unknown.add(name); skipped++; return; }
-    if (!dt || !dt.startsWith(T4.period + '-')) { skipped++; return; }
-    // 售后发货保留源表实际收入/成本；退货行转入退货科目并保证负数。
-    const typ = imp.map.type != null ? String(get('type')).trim() : '';
-    const isReturn = /退货/.test(typ);
+    if (!ch) { skip(`未识别渠道「${String(get('channel') || '').slice(0, 80)}」`); return; }
+    if (!t4ValidDate(dt)) { skip('日期无效'); return; }
+    if (!dt.startsWith(T4.period + '-') || (range && !range.includes(dt))) { skip('日期不在本次导入范围'); return; }
+    const isReturn = /退货/.test(String(get('type')).trim());
     let wrote = false;
     sc.keys.forEach(k => {
       if (imp.map[k] == null) return;
       const value = get(k);
       if (value == null || String(value).trim() === '') return;
       let key = k, num = t4ImportAmount(value);
-      if (!Number.isFinite(num)) { errors.push(`第 ${imp.headRow + i + 2} 行 ${k} 金额无效`); return; }
-      if (isReturn && k === 'retailIncome') { key = 'returnAmount'; num = num > 0 ? -num : num; }
-      else if (isReturn && k === 'retailCost') { key = 'returnCost'; num = num > 0 ? -num : num; }
-      pending.push({ ch, dt, key, num }); wrote = true;
+      if (!Number.isFinite(num)) { errors.push(`第 ${line} 行 ${(T4_INPUTS.find(f => f.k === k) || {}).n || k}金额无效`); return; }
+      if (isReturn && k === 'retailIncome') { key = 'returnAmount'; num = -Math.abs(num); }
+      else if (isReturn && k === 'retailCost') { key = 'returnCost'; num = -Math.abs(num); }
+      const source = T4_SUM_SCOPES.cost.keys.includes(k) ? 'summaryCost' : 'summaryIncome';
+      pending.push({ ch, dt, key, num, source }); wrote = true;
     });
-    if (!wrote) { skipped++; return; }
-    seen.add(`${ch}:${dt}`); channels.add(ch); used++;
+    if (!wrote) { skip('未提供本次科目的金额'); return; }
+    used++;
   });
-  if (errors.length) { toast(`${errors.slice(0, 3).join('；')}。原数据已保留，请修正文件。`, 5200); return; }
-  if (!pending.length) { toast('没有可导入的当前月份明细，原数据已保留。请核对渠道、日期及金额列。', 5200); return; }
-  const before = t4Clone(T4.data);
-  channels.forEach(ch => t4ClearSource(ch, sc.fileK));
-  pending.forEach(({ch, dt, key, num}) => t4Add(ch, dt, key, num, sc.fileK));
-  try { await t4Save(); } catch (e) { t4RestorePeriodData(before); toast(`导入未同步：${e.message}`, 5200); return; }
-  T4.imp = null; t4Go('overview');
-  const bad = unknown.size ? `；未识别渠道：${[...unknown].slice(0,5).join('、')}` : '';
-  toast(`${sc.n}汇总导入 ${channels.size} 个渠道、${seen.size} 个渠道日、${used} 行${skipped ? `，跳过 ${skipped} 行` : ''}${bad}`, 5200);
+  if (errors.length) { t4RejectImport('金额校验未通过，收入与成本均未写入，原数据已保留。', errors.concat(issues)); return; }
+  if (!pending.length) { t4RejectImport('没有可导入的当前范围明细，原数据已保留。', issues); return; }
+  try { await t4CommitImport(imp, pending, used, skipped, issues, range); }
+  catch (e) { t4RejectImport(`导入未同步：${e.message}；原数据与记录已恢复。`, issues); }
 }
 
 async function t4SummaryTemplate() {
@@ -1405,7 +1558,7 @@ S['t4-imp'] = () => {
   t4Load(); const c = T4_CHM[T4.editCh], imp = T4.imp;
   if (!c.files.length) return head(`导入　${c.n}`, '该渠道没有标准源文件，请人工录入。', '工具箱 · T4', '<button class="btn" data-t4go="overview">← 返回</button>')
     + '<div class="note w">本渠道当前采用人工录入；录入值和文件导入值使用同一套损益计算。</div>';
-  if (!imp) return head(`导入　${c.n}`, '选择源文件；同一种文件再次导入会替换上次结果，不会重复累计。', '工具箱 · T4', t4PeriodControl('<button class="btn" data-t4go="overview">← 返回</button>'))
+  if (!imp) return head(`导入　${c.n}`, '选择源文件；默认只替换该文件覆盖的日期，其他日期保留，不会重复累计。', '工具箱 · T4', t4PeriodControl('<button class="btn" data-t4go="overview">← 返回</button>'))
     + card('源文件', table([{t:'文件'},{t:'取数口径'},{t:''}], c.files.map(f => [`<b>${H(f.n)}</b>`, H(f.hint), `<button class="btn sm" data-t4file="${f.k}">选择文件</button>`])))
     + '<div class="note"><b>支持 .xlsx、.xls、.csv、.tsv。</b>旧版天猫导出文件无需再另存格式。</div>';
   const def = T4_FILE_DEFS[imp.fileK], hdr = imp.rows[imp.headRow] || [];
@@ -1416,6 +1569,7 @@ S['t4-imp'] = () => {
     + `<div class="frow" style="margin-bottom:13px"><span class="fi">✓</span><span><span class="fn">${H(imp.fileName)}</span><br><span class="fm">${imp.rows.length} 行</span></span></div>`
     + cardp('表头行', `<select id="t4head">${imp.rows.slice(0,15).map((r,i) => `<option value="${i}" ${i===imp.headRow?'selected':''}>第 ${i+1} 行：${H(r.filter(Boolean).slice(0,5).join(' | ').slice(0,70))}</option>`).join('')}</select>`)
     + card('列对应', table([{t:'目标字段'},{t:'文件字段'}], def.fields.map(([k,n]) => [`${H(n)}${def.required.includes(k) ? ' <span class="red">*</span>' : ''}`, `<select data-t4map="${k}"><option value="">— 不使用 —</option>${options(k)}</select>`])))
+    + t4ImportRangeControls(imp) + t4ImportFeedback()
     + `<div style="display:flex;justify-content:flex-end"><button class="btn pri" data-t4act="impRun" ${ready?'':'disabled'}>执行导入</button></div>`;
 };
 
@@ -1427,6 +1581,7 @@ async function t4PickFile(fileK) {
     try {
       const rows = await XLSXLite.readTable(file), def = T4_FILE_DEFS[fileK];
       const headRow = t4FindHead(rows, def);
+      T4.importFeedback = null;
       T4.imp = { mode: 'channel', fileK, fileN: f.n, fileName: file.name, rows, headRow, map: t4AutoMap(rows[headRow] || [], def) };
       t4Go('imp');
     } catch (e) { toast(`读取失败：${e.message || e}`, 5000); }
@@ -1435,58 +1590,53 @@ async function t4PickFile(fileK) {
 }
 
 async function t4ImpRun() {
-  try { t4AssertEditable(); } catch (e) { toast(e.message); return; }
+  let range;
+  try { t4AssertEditable(); range = t4ImportRange(T4.imp || {}); } catch (e) { t4RejectImport(e.message); return; }
   const imp = T4.imp, ch = T4.editCh, def = imp && T4_FILE_DEFS[imp.fileK];
   if (!imp || !def || !def.required.every(k => imp.map[k] != null)
     || (imp.fileK === 'daily' && !T4_INPUT_KEYS.some(k => imp.map[k] != null))) return;
-  const pending = [], errors = [];
-  const add = (channel, date, key, amount, source) => pending.push({ channel, date, key, amount, source });
-  let used = 0, skipped = 0; const seen = new Set();
+  const pending = [], errors = [], issues = [];
+  const add = (dt, key, num) => pending.push({ ch, dt, key, num, source: imp.fileK });
+  let used = 0, skipped = 0;
   imp.rows.slice(imp.headRow + 1).forEach((row, index) => {
-    const get = k => imp.map[k] == null ? '' : row[imp.map[k]];
+    if (!row.some(v => v != null && String(v).trim())) return;
+    const line = imp.headRow + index + 2, get = k => imp.map[k] == null ? '' : row[imp.map[k]];
+    const skip = reason => { skipped++; issues.push(`第 ${line} 行：${reason}`); };
     const numeric = key => {
       const n = t4ImportAmount(get(key));
-      if (Number.isNaN(n)) errors.push(`第 ${imp.headRow + index + 2} 行金额无效`);
-      return n == null ? 0 : n;
+      if (Number.isNaN(n)) errors.push(`第 ${line} 行 ${key}金额无效`);
+      return n;
     };
     const dt = t4DateNorm(get('date'));
-    if (!dt || !dt.startsWith(T4.period + '-')) { skipped++; return; }
+    if (!t4ValidDate(dt)) { skip('日期无效'); return; }
+    if (!dt.startsWith(T4.period + '-') || (range && !range.includes(dt))) { skip('日期不在本次导入范围'); return; }
+    const start = pending.length;
     if (imp.fileK === 'daily') {
-      let wrote = false;
       T4_INPUT_KEYS.forEach(k => {
-        if (imp.map[k] == null) return;
-        const value = get(k);
-        if (value == null || String(value).trim() === '') return;
-        add(ch, dt, k, numeric(k), imp.fileK); wrote = true;
+        if (imp.map[k] == null || get(k) == null || String(get(k)).trim() === '') return;
+        add(dt, k, numeric(k));
       });
-      if (!wrote) { skipped++; return; }
     } else if (imp.fileK === 'sales') {
-      if (t4ResolveChannel(get('channel')) !== ch) { skipped++; return; }
-      const typ = String(get('type')).trim(), amount = numeric('amount'), cost = numeric('cost'), postage = numeric('postage');
-      if (/退货/.test(typ)) {
-        add(ch, dt, 'returnAmount', amount > 0 ? -amount : amount, imp.fileK);
-        add(ch, dt, 'returnCost', cost > 0 ? -cost : cost, imp.fileK);
-      } else {
-        add(ch, dt, 'retailIncome', amount, imp.fileK); add(ch, dt, 'retailCost', Math.abs(cost), imp.fileK);
+      if (t4ResolveChannel(get('channel')) !== ch) { skip('渠道与当前渠道不符'); return; }
+      const isReturn = /退货/.test(String(get('type')).trim()), amount = numeric('amount'), cost = numeric('cost');
+      if (amount != null) add(dt, isReturn ? 'returnAmount' : 'retailIncome', isReturn ? -Math.abs(amount) : amount);
+      if (cost != null) add(dt, isReturn ? 'returnCost' : 'retailCost', isReturn ? -Math.abs(cost) : Math.abs(cost));
+      if (imp.map.research != null && get('research') != null && String(get('research')).trim()) add(dt, 'research', Math.abs(numeric('research')));
+    } else {
+      if (imp.fileK === 'ztc' && ((String(get('direction')) && !/支出/.test(String(get('direction')))) || /充值/.test(String(get('type'))))) { skip('非支出或充值行'); return; }
+      const amount = numeric('amount');
+      if (amount != null) {
+        const key = { ztc: 'ztc', cps: 'cps', jzt: 'promotion', jdIncome: 'retailIncome' }[imp.fileK];
+        if (key) add(dt, key, imp.fileK === 'jdIncome' ? amount : Math.abs(amount));
       }
-      if (imp.map.research != null) add(ch, dt, 'research', Math.abs(numeric('research')), imp.fileK);
-    } else if (imp.fileK === 'ztc') {
-      const direction = String(get('direction')), typ = String(get('type'));
-      if ((direction && !/支出/.test(direction)) || /充值/.test(typ)) { skipped++; return; }
-      add(ch, dt, 'ztc', Math.abs(numeric('amount')), imp.fileK);
-    } else if (imp.fileK === 'cps') add(ch, dt, 'cps', Math.abs(numeric('amount')), imp.fileK);
-    else if (imp.fileK === 'jzt') add(ch, dt, 'promotion', Math.abs(numeric('amount')), imp.fileK);
-    else if (imp.fileK === 'jdIncome') add(ch, dt, 'retailIncome', numeric('amount'), imp.fileK);
-    seen.add(dt); used++;
+    }
+    if (pending.length === start) { skip('未提供金额'); return; }
+    used++;
   });
-  if (errors.length) { toast(`${errors.slice(0,3).join('；')}。原数据已保留。`, 5200); return; }
-  if (!pending.length) { toast('没有可导入的当前月份明细，原数据已保留。', 5200); return; }
-  const before = t4Clone(T4.data);
-  t4ClearSource(ch, imp.fileK);
-  pending.forEach(x => t4Add(x.channel, x.date, x.key, x.amount, x.source));
-  try { await t4Save(); } catch (e) { t4RestorePeriodData(before); toast(`导入未同步：${e.message}`, 5200); return; }
-  T4.imp = null; t4Go('overview');
-  toast(`已导入 ${seen.size} 天、${used} 行${skipped ? `，跳过 ${skipped} 行` : ''}`, 4200);
+  if (errors.length) { t4RejectImport('金额校验未通过，原数据已保留。', errors.concat(issues)); return; }
+  if (!pending.length) { t4RejectImport('没有可导入的当前范围明细，原数据已保留。', issues); return; }
+  try { await t4CommitImport(imp, pending, used, skipped, issues, range); }
+  catch (e) { t4RejectImport(`导入未同步：${e.message}；原数据与记录已恢复。`, issues); }
 }
 
 // 损益树的列：一条从销售收入到净利润的「层层递减」链
@@ -1904,7 +2054,7 @@ S['t4-rules'] = () => head('T4 取数口径', '以下规则来自用户提供的
     ['京东自营','零售成本','零售收入 × 45%'], ['京东自营','退货金额','零售收入 × -16%'], ['京东自营','退货成本','零售成本 × -16%'],
     ['天猫-澳乐旗舰店','平台/售后/物流/仓储/税费','按收入比例计算，比例见参数页'], ['各渠道','管理费用','月度设定值 ÷ 当月自然日'],
   ]))
-  + '<div class="note"><b>重复导入是幂等的：</b>每次先清除该文件类型上次写入的字段，再写入本次结果；不同来源不会互相覆盖。</div>';
+  + '<div class="note"><b>重复导入是幂等的：</b>默认只替换文件覆盖日期的同类来源字段；指定区间时只替换所选区间，其他日期与其他来源保留。</div>';
 
 // 套表数据包：按当前项目筛选裁剪（全部/澳乐/瑞眠），交给服务端 Python 生成多 Sheet 工作簿
 function t4SuitePayload(options = {}) {
@@ -2257,30 +2407,9 @@ document.addEventListener('click', async e => {
     if (locked && !confirm(`解锁 ${T4.period} 后可修改、导入及清空该月份。确认解锁？`)) return;
     try { await t4SetPeriodLock(!locked); toast(locked ? '本月已解锁，处理完成后可重新锁定' : '本月已锁定，数据受保护'); t4Go('overview'); }
     catch (err) { toast(`锁定状态保存失败：${err.message}`, 5200); }
-  } else if (a.dataset.t4act === 'saveMan') {
-    let changed = 0;
-    document.querySelectorAll('[data-t4cell]').forEach(inp => {
-      const [dt,k] = inp.dataset.t4cell.split(':'), val = inp.value.trim();
-      if (val === String(inp.dataset.t4orig == null ? '' : inp.dataset.t4orig)) return;
-      const raw = T4.data[T4.editCh][dt] || { _src: 'manual', _fileParts: {} };
-      if (val === '') delete raw[k]; else { raw[k] = Number(val) || 0; raw._src = 'manual'; }
-      changed++;
-      if (t4HasInputs(raw)) T4.data[T4.editCh][dt] = raw; else delete T4.data[T4.editCh][dt];
-    });
-    try { await t4Save(); toast(`已保存 ${changed} 个变更`); t4Go('overview'); }
-    catch (err) { toast(`共享保存失败：${err.message || err}；本页数据未标记为成功`, 5200); }
-  } else if (a.dataset.t4act === 'sumManSave') {
-    let changed = 0; const dt = T4.sumDate;
-    document.querySelectorAll('[data-t4sumcell]').forEach(inp => {
-      const [ch,k] = inp.dataset.t4sumcell.split(':'), val = inp.value.trim();
-      if (val === String(inp.dataset.t4orig == null ? '' : inp.dataset.t4orig)) return;
-      const raw = T4.data[ch][dt] || { _src: 'manual', _fileParts: {} };
-      if (val === '') delete raw[k]; else { raw[k] = Number(val) || 0; raw._src = 'manual'; }
-      changed++;
-      if (t4HasInputs(raw)) T4.data[ch][dt] = raw; else delete T4.data[ch][dt];
-    });
-    try { await t4Save(); toast(`已保存全部渠道，共 ${changed} 个变更`); t4Go('overview'); }
-    catch (err) { toast(`共享保存失败：${err.message || err}；本页数据未标记为成功`, 5200); }
+  } else if (a.dataset.t4act === 'saveMan' || a.dataset.t4act === 'sumManSave') {
+    try { const changed = await t4SaveEntries(a.dataset.t4act === 'sumManSave'); toast(`已保存 ${changed} 个变更`); t4Go('overview'); }
+    catch (err) { toast(`保存失败，原数据已恢复：${err.message}；本页输入可继续核对`, 6000); }
   } else if (a.dataset.t4act === 'impCancel') { T4.imp = null; t4Go('imp'); }
   else if (a.dataset.t4act === 'impRun') t4ImpRun();
   else if (a.dataset.t4act === 'sumPick') t4PickSummaryFile();
@@ -2344,10 +2473,12 @@ document.addEventListener('click', async e => {
     const project = document.getElementById('t4ClearProject').value, scope = document.getElementById('t4ClearScope').value;
     const projectName = T4_PROJ_OPTS.find(([id]) => id === project)[1];
     const scopeName = { income: '销售收入', cost: '销售成本', expenses: '运营费用', all: '全部录入与导入数据' }[scope];
-    const typed = prompt(`将清空 ${projectName} 在 ${T4.period} 的${scopeName}。此操作不可恢复。\n请输入期间「${T4.period}」确认：`);
+    const from = document.getElementById('t4ClearFrom').value, to = document.getElementById('t4ClearTo').value;
+    try { t4ValidateRange(from, to); } catch (err) { toast(err.message); return; }
+    const typed = prompt(`将清空 ${projectName} 在 ${from} ～ ${to} 的${scopeName}。此操作不可恢复。\n请输入期间「${T4.period}」确认：`);
     if (typed == null) { toast('已取消清空'); return; }
     if (String(typed).trim() !== T4.period) { toast(`输入「${String(typed).trim()}」与当前期间不一致，已取消清空`, 4200); return; }
-    try { await t4ClearPeriodData(project, scope); toast(`已清空 ${T4.period} · ${projectName} · ${scopeName}`); t4Go('overview'); }
+    try { await t4ClearPeriodData(project, scope, from, to); toast(`已清空 ${from} ～ ${to} · ${projectName} · ${scopeName}`); t4Go('overview'); }
     catch (err) { toast(`清空失败，原数据已保留：${err.message}`, 5200); }
   }
 });
@@ -2356,7 +2487,25 @@ document.addEventListener('change', e => {
     if (T4_SERVER_LOADING || T4_SERVER_SAVING) { e.target.value = T4.period; toast('正在同步，请稍后切换月份'); return; }
     const picked = e.target.value || T4.period;
     if (!t4ValidPeriod(picked)) { e.target.value = T4.period; toast('期间需在 2000-01 至 2099-12 之间，请重新选择月份', 4200); return; }
-    T4.period = picked; T4.imp = null; T4.allocImport = null; T4.viewFrom = ''; T4.viewTo = ''; T4.mgmtFrom = ''; T4.mgmtTo = ''; t4Go('overview');
+    T4.period = picked; T4.sumDate = ''; T4.sumTo = ''; T4.manFrom = ''; T4.manTo = ''; T4.imp = null; T4.allocImport = null; T4.viewFrom = ''; T4.viewTo = ''; T4.mgmtFrom = ''; T4.mgmtTo = ''; t4Go('overview');
+  }
+  else if (['t4ImportRangeMode', 't4ImportFrom', 't4ImportTo'].includes(e.target.id) && T4.imp) {
+    if (T4_SERVER_LOADING || T4_SERVER_SAVING) return;
+    const imp = T4.imp;
+    if (e.target.id === 't4ImportRangeMode') {
+      imp.rangeMode = e.target.value;
+      imp.from ||= t4Date(1); imp.to ||= t4Date(t4Days());
+    } else imp[e.target.id === 't4ImportFrom' ? 'from' : 'to'] = e.target.value;
+    t4Go(imp.mode === 'summary' ? 'sumimp' : 'imp');
+  }
+  else if (['t4SumFrom', 't4SumTo', 't4ManFrom', 't4ManTo'].includes(e.target.id)) {
+    const summary = e.target.id.startsWith('t4Sum'), from = e.target.id.endsWith('From');
+    const dates = t4EntryRange(summary), restore = () => { e.target.value = from ? dates[0] : dates[dates.length - 1]; };
+    if (T4_SERVER_LOADING || T4_SERVER_SAVING || t4EntryDirty()) { restore(); toast('请先保存本页变更并等待同步完成，再切换日期'); return; }
+    const start = from ? e.target.value : dates[0], end = from ? (e.target.value > dates[dates.length - 1] ? e.target.value : dates[dates.length - 1]) : e.target.value;
+    try { t4ValidateRange(start, end); } catch (err) { restore(); toast(err.message); return; }
+    if (summary) { T4.sumDate = start; T4.sumTo = end; } else { T4.manFrom = start; T4.manTo = end; }
+    t4Go(summary ? 'summan' : 'man');
   }
   else if (e.target.dataset && e.target.dataset.t4rowchannel) {
     if (T4.imp) { T4.imp.channelOverrides ||= {}; T4.imp.channelOverrides[e.target.dataset.t4rowchannel] = e.target.value; }

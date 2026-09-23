@@ -6,7 +6,7 @@
   const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
   const unsafe = key => ['__proto__', 'constructor', 'prototype'].includes(key);
   let loading = null;
-  function empty() { return { periods: {}, cfg: {}, channels: [] }; }
+  function empty() { return { periods: {}, cfg: {}, channels: [], importHistory: {}, expenseItems: [] }; }
   function equal(a, b) {
     if (a === b) return true;
     if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((v, i) => equal(v, b[i]));
