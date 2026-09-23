@@ -265,3 +265,68 @@ test('production metadata opens on all 79 registered sales rows without duplicat
   assert.deepEqual(api.document, original);
   assert.equal(api.puts, 0, 'read-only production fixture validation sends no writes');
 });
+
+test('alternate roster headers and added parameter cards stay consistent across desktop and mobile clients', { skip: !chromium }, async t => {
+  const api = shared(), financial = structuredClone(api.document.periods);
+  const desktop = await openClient(t, api);
+  const mobile = await openClient(t, api, { width: 390, height: 844 });
+  await importWorkbook(desktop, await workbook(desktop, [
+    ['销售渠道', '渠道汇总', '归属事业部', '编号', '预算'],
+    ['参数验收甲店', '分销-澳乐礼品单', '经销', '0001', 0],
+    ['参数验收乙店', '分销-澳乐礼品单', '经销', '0002', 20],
+    ['参数验收新店', '参数验收新归集', '橘农', '0003', 30],
+  ]));
+  const channel = await desktop.evaluate(() => t4ResolveChannel('参数验收新店'));
+  await importWorkbook(desktop, await workbook(desktop, [['渠道名称', '编号'], ['参数验收甲店', '0101']]));
+  assert.equal(await desktop.evaluate(() => T4_CHM.gift.n), '分销-澳乐礼品单', 'a supported source heading must not rename the whole group');
+  await mobile.getByRole('button', { name: '更新共享数据', exact: true }).click();
+  await mobile.waitForFunction(version => T4_SERVER_VERSION === version && !T4_SERVER_REFRESHING, api.version, { timeout: 22000 });
+  await sourceButton(mobile, '参数验收新店').waitFor();
+  assert.deepEqual(await sourceRows(mobile), await sourceRows(desktop));
+  for (const [name, page] of [['desktop', desktop], ['mobile', mobile]]) {
+    await page.getByRole('button', { name: '预算', exact: true }).click();
+    assert.match(await page.locator('#view tbody').innerText(), /参数验收新店/);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    if (outputDir) await page.screenshot({ path: path.join(outputDir, `channel-fields-${name}.png`), fullPage: false });
+    await page.evaluate(() => go('t4-cfg'));
+    assert.equal(await page.locator(`[data-view-key="t4-cfg:${channel}"]`).count(), 1, 'the new aggregate has a parameter card');
+  }
+  const card = page => page.locator(`[data-view-key="t4-cfg:${channel}"]`);
+  const field = page => page.locator(`[data-t4cfg="${channel}:shippingInsuranceRate"]`);
+  const updateMobile = async () => {
+    await mobile.getByRole('button', { name: '更新共享数据', exact: true }).click();
+    // Window focus can already have fetched this version; wait for the actual
+    // shared fixture version rather than requiring one more change afterward.
+    await mobile.waitForFunction(version => T4_SERVER_VERSION === version && !T4_SERVER_REFRESHING, api.version, { timeout: 22000 });
+  };
+  await card(desktop).locator('.t4addsel').selectOption('shippingInsuranceRate');
+  await card(desktop).getByRole('button', { name: '添加', exact: true }).click();
+  await field(desktop).waitFor();
+  await updateMobile();
+  assert.equal(await field(mobile).inputValue(), '0', 'the added zero rule is loaded on the second client');
+  await field(desktop).fill('1.25');
+  await card(desktop).getByRole('button', { name: '保存参数', exact: true }).click();
+  await desktop.waitForFunction(ch => !T4_SERVER_SAVING && T4_SERVER_DOCUMENT.cfgByPeriod['2026-09'][ch].shippingInsuranceRate === 0.0125, channel);
+  await updateMobile();
+  assert.equal(await field(mobile).inputValue(), '1.25');
+  for (const [name, page] of [['desktop', desktop], ['mobile', mobile]]) {
+    await card(page).scrollIntoViewIfNeeded();
+    if (outputDir) await card(page).screenshot({ path: path.join(outputDir, `parameters-shared-${name}.png`) });
+  }
+  await card(desktop).locator(`[data-t4cfgdel="${channel}:shippingInsuranceRate"]`).click();
+  await field(desktop).waitFor({ state: 'detached' });
+  await updateMobile();
+  assert.equal(await field(mobile).count(), 0);
+  await desktop.locator('[data-t4cfgdel="tmall:platformFeeRate"]').click();
+  await desktop.locator('[data-t4cfg="tmall:platformFeeRate"]').waitFor({ state: 'detached' });
+  await updateMobile();
+  assert.equal(await mobile.locator('[data-t4cfg="tmall:platformFeeRate"]').count(), 0, 'a deleted built-in rule also stays absent');
+  for (const page of [desktop, mobile]) {
+    await reloadChannels(page);
+    await page.evaluate(() => go('t4-cfg'));
+    assert.equal(await field(page).count(), 0);
+    assert.equal(await page.locator('[data-t4cfg="tmall:platformFeeRate"]').count(), 0);
+    assert.equal(await card(page).locator('.t4addsel option[value="shippingInsuranceRate"]').count(), 1);
+  }
+  assert.deepEqual(api.document.periods, financial, 'catalog and parameter changes leave imported financial history intact');
+});

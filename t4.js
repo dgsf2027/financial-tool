@@ -156,16 +156,32 @@ const T4_CHLIST_KEY = 'fsc_t4_channels_v2';
 const T4_EXPENSE_ITEMS_KEY = 'fsc_t4_expense_items_v1';
 let T4_CH = [], T4_CHM = {}, T4_TMAI = [], T4_BIG_ECOM = [], T4_PDD = [], T4_RUIMIAN = [], T4_ORANGE = [], T4_DEALER = [], T4_ALL = [];
 let T4_CH_OVERRIDES = null;
+let T4_CACHE_ERROR = false;
+function t4CacheWrite(key, value) {
+  try { localStorage.setItem(key, value); return true; }
+  catch (_) { T4_CACHE_ERROR = true; return false; }
+}
 function t4ChOverrides() {
   // localStorage is shared by browser tabs. Once this page has loaded a catalog,
   // another tab's cache write must not become an unsaved edit on this page.
   if (T4_CH_OVERRIDES !== null) return JSON.parse(JSON.stringify(T4_CH_OVERRIDES));
-  try { const v = JSON.parse(localStorage.getItem(T4_CHLIST_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; }
+  try {
+    const v = JSON.parse(localStorage.getItem(T4_CHLIST_KEY) || '[]');
+    const record = x => x && typeof x === 'object' && !Array.isArray(x);
+    const strings = x => x == null || (Array.isArray(x) && x.every(s => typeof s === 'string'));
+    const details = x => x == null || (Array.isArray(x) && x.every(d => record(d) && typeof d.source === 'string' &&
+      strings(d.aliases) && (d.fields == null || (Array.isArray(d.fields) && d.fields.every(f => record(f) && typeof f.name === 'string')))));
+    // Old or damaged local records must not abort script initialization before
+    // shared loading can run. Keep usable rows; leave the original cache intact.
+    return Array.isArray(v) ? v.filter(c => record(c) && typeof c.id === 'string' &&
+      (c.n == null || typeof c.n === 'string') && (c.bu == null || typeof c.bu === 'string') &&
+      strings(c.aliases) && details(c.details)) : [];
+  } catch (e) { return []; }
 }
 function t4SaveChOverrides(list) {
   const serialized = JSON.stringify(list);
-  localStorage.setItem(T4_CHLIST_KEY, serialized);
   T4_CH_OVERRIDES = JSON.parse(serialized);
+  t4CacheWrite(T4_CHLIST_KEY, serialized);
 }
 function t4ChannelList(overrides) {
   const base = T4_CH_BASE.map(c => ({ ...c }));
@@ -471,7 +487,8 @@ function t4SyncStatusContent() {
     if (T4_SERVER_REFRESHING) return pill('正在更新共享数据…', 'mu');
     const resume = T4_REFRESH_DEFERRED && T4_REFRESH_DRAFT_ROUTE && CURS !== `t4-${T4_REFRESH_DRAFT_ROUTE}`
       ? '<button class="btn sm" data-t4act="resumeSyncDraft">返回未完成编辑</button>' : '';
-    return pill(T4_REFRESH_DEFERRED ? H(T4_REFRESH_REASON) : '已连接财务中心 · 每15秒自动更新', T4_REFRESH_DEFERRED ? 'wa' : 'ok') + resume + refresh;
+    const cache = T4_CACHE_ERROR ? pill('本机缓存不可用，关闭页面前请保存', 'wa') : '';
+    return pill(T4_REFRESH_DEFERRED ? H(T4_REFRESH_REASON) : '已连接财务中心 · 每15秒自动更新', T4_REFRESH_DEFERRED ? 'wa' : 'ok') + cache + resume + refresh;
   }
   const retry = T4_SERVER_LAST_KEY.startsWith('error:')
     ? '<button class="btn sm" data-t4act="retrySync">重新连接</button>' : '';
@@ -546,8 +563,8 @@ async function t4RefreshServer(manual = false) {
       if (manual) toast(`连接已恢复，${changedDuringRead}`, 4200); return false;
     }
     if (!Number.isInteger(snapshot.version) || snapshot.version < version) return false;
-    // Cache writes can fail (for example storage quota); do them before
-    // acknowledging the response so a failure retains the previous baseline.
+    // The server is authoritative; a full/disabled browser cache must not block
+    // accepting shared channels or parameters.
     if (snapshot.version !== version) t4SaveChOverrides(t4Clone(snapshot.document.channels || []));
     if (!window.T4Shared.acceptRefresh(snapshot, version)) return false;
     T4_SERVER_ERROR = null; T4_SERVER_LAST_KEY = '';
@@ -632,7 +649,7 @@ async function t4LoadServer() {
     if (pending && pending.period && pending.data && pending.cfg) {
       const cloudData = (T4_SERVER_DOCUMENT.periods || {})[pending.period] || {};
       if (!Object.values(cloudData).some(days => Object.keys(days || {}).length)) T4_PENDING_DRAFT = pending;
-      else { T4_PENDING_DRAFT = null; localStorage.setItem(T4_PENDING_DRAFT_KEY, 'null'); }
+      else { T4_PENDING_DRAFT = null; t4CacheWrite(T4_PENDING_DRAFT_KEY, 'null'); }
     }
     // 首次切到服务端时，把当前门户用户此前的本机草稿迁入空工作区。
     // 只在 found=false/version=0 时执行，已有共享数据绝不被本机草稿覆盖。
@@ -650,7 +667,7 @@ async function t4LoadServer() {
       const locked = typeof cloudLocks[T4.period] === 'boolean' ? cloudLocks[T4.period] : T4.period < t4CurrentMonth();
       if (locked) {
         T4_PENDING_DRAFT = { period: T4.period, data: t4Clone(T4.data), cfg: t4Clone(T4.cfg) };
-        localStorage.setItem(T4_PENDING_DRAFT_KEY, JSON.stringify(T4_PENDING_DRAFT));
+        t4CacheWrite(T4_PENDING_DRAFT_KEY, JSON.stringify(T4_PENDING_DRAFT));
         toast('本机往期草稿已保留。请先解锁，再点“导入本机草稿”写入共享工作区。', 6000);
       } else {
         const saved = await window.T4Shared.save(migrated, (typeof CUR_USER === 'string' && CUR_USER) || 'portal-user');
@@ -676,6 +693,7 @@ async function t4LoadServer() {
     if (typeof CURS === 'string' && CURS.startsWith('t4') && (T4_SERVER_READY || CURS === 't4-channels')) go(CURS);
     const picker = document.getElementById('t4Period');
     if (picker) picker.disabled = T4_SERVER_SAVING;
+    t4UpdateSyncStatus();
   }
 }
 async function t4SaveServer(lockOnly = false) {
@@ -715,15 +733,16 @@ async function t4SaveServer(lockOnly = false) {
       t4ApplyExpenseItems(pending.expenseItems || []);
     }
     const all = t4Stored(T4_KEY, {}); all[T4.period] = T4.data;
-    localStorage.setItem(T4_KEY, JSON.stringify(all));
+    t4CacheWrite(T4_KEY, JSON.stringify(all));
     const cfgs = t4Stored(T4_PERIOD_CFG_KEY, {}); cfgs[T4.period] = T4.cfg;
-    localStorage.setItem(T4_PERIOD_CFG_KEY, JSON.stringify(cfgs));
-    localStorage.setItem(T4_LOCK_KEY, JSON.stringify(T4.periodLocks));
-    localStorage.setItem(T4_IMPORT_HISTORY_KEY, JSON.stringify(T4.importHistory));
-    localStorage.setItem(T4_EXPENSE_ITEMS_KEY, JSON.stringify(T4.expenseItems));
+    t4CacheWrite(T4_PERIOD_CFG_KEY, JSON.stringify(cfgs));
+    t4CacheWrite(T4_LOCK_KEY, JSON.stringify(T4.periodLocks));
+    t4CacheWrite(T4_IMPORT_HISTORY_KEY, JSON.stringify(T4.importHistory));
+    t4CacheWrite(T4_EXPENSE_ITEMS_KEY, JSON.stringify(T4.expenseItems));
     T4_SERVER_ERROR = null;
     return x;
   } catch (err) {
+    if (!err.status || err.status === 401 || err.status >= 500 || err.code === 'invalid_response') T4_SERVER_ERROR = err;
     if (err.status === 401) {
       // Keep the loaded document and in-memory edits when the session expires.
       // Reloading local storage here would discard drafts that have not been saved yet.
@@ -746,6 +765,7 @@ async function t4SaveServer(lockOnly = false) {
     T4_SERVER_SAVING = false;
     controls.forEach(({ input, disabled }) => { input.disabled = disabled; });
     if (T4_SERVER_ERROR && T4_SERVER_ERROR.status === 401 && typeof CURS === 'string' && CURS === 't4-channels') go(CURS);
+    t4UpdateSyncStatus();
   }
 }
 function t4Load() {
@@ -776,7 +796,7 @@ function t4Load() {
 async function t4SaveCatalog(field, value, importInfo = null) {
   t4RequireServerReady();
   if (!['channels', 'expenseItems'].includes(field)) throw new Error('不支持的目录');
-  const pendingView = t4ViewDocument(), before = t4Clone(T4_SERVER_BASELINE);
+  const before = t4Clone(T4_SERVER_BASELINE);
   const candidate = t4Clone(T4_SERVER_DOCUMENT);
   candidate[field] = t4Clone(value);
   if (importInfo) {
@@ -793,6 +813,7 @@ async function t4SaveCatalog(field, value, importInfo = null) {
   T4_SERVER_SAVING = true;
   try {
     const saved = await window.T4Shared.save(candidate, (typeof CUR_USER === 'string' && CUR_USER) || 'portal-user', T4_SERVER_DOCUMENT);
+    const pendingView = t4ViewDocument();
     T4_SERVER_VERSION = saved.version;
     T4_SERVER_DOCUMENT = saved.document || candidate;
     t4SaveChOverrides(t4Clone(T4_SERVER_DOCUMENT.channels || [])); t4RebuildChannels();
@@ -803,16 +824,17 @@ async function t4SaveCatalog(field, value, importInfo = null) {
       T4.periodLocks = pending.periodLocks;
       T4.importHistory = pending.importHistory || {};
     }
-    localStorage.setItem(T4_EXPENSE_ITEMS_KEY, JSON.stringify(T4.expenseItems));
-    localStorage.setItem(T4_IMPORT_HISTORY_KEY, JSON.stringify(T4.importHistory || {}));
+    t4CacheWrite(T4_EXPENSE_ITEMS_KEY, JSON.stringify(T4.expenseItems));
+    t4CacheWrite(T4_IMPORT_HISTORY_KEY, JSON.stringify(T4.importHistory || {}));
     T4_SERVER_ERROR = null;
     return saved;
   } catch (err) {
-    if (err.status === 401) T4_SERVER_ERROR = err;
+    if (!err.status || err.status === 401 || err.status >= 500 || err.code === 'invalid_response') T4_SERVER_ERROR = err;
     throw err;
   } finally {
     T4_SERVER_SAVING = false;
     controls.forEach(({ input, disabled }) => { input.disabled = disabled; });
+    t4UpdateSyncStatus();
   }
 }
 function t4CatalogName(value, what, limit) {
@@ -1064,9 +1086,9 @@ async function t4Save() {
   try {
     all = JSON.parse(localStorage.getItem(T4_KEY) || '{}');
     all[T4.period] = T4.data;
-    localStorage.setItem(T4_KEY, JSON.stringify(all));
-    localStorage.setItem(T4_IMPORT_HISTORY_KEY, JSON.stringify(T4.importHistory || {}));
-  } catch (e) { throw new Error('保存失败：浏览器存储空间不足'); }
+    t4CacheWrite(T4_KEY, JSON.stringify(all));
+    t4CacheWrite(T4_IMPORT_HISTORY_KEY, JSON.stringify(T4.importHistory || {}));
+  } catch (_) { T4_CACHE_ERROR = true; }
   return t4SaveServer();
 }
 async function t4SaveCfg() {
@@ -1074,7 +1096,7 @@ async function t4SaveCfg() {
   t4AssertEditable();
   const all = t4Stored(T4_PERIOD_CFG_KEY, {});
   all[T4.period] = t4Clone(T4.cfg);
-  localStorage.setItem(T4_PERIOD_CFG_KEY, JSON.stringify(all));
+  t4CacheWrite(T4_PERIOD_CFG_KEY, JSON.stringify(all));
   return t4SaveServer();
 }
 
@@ -1085,7 +1107,7 @@ async function t4SetPeriodLock(locked) {
   T4.periodLocks = { ...before, [T4.period]: locked };
   try {
     if (T4_SERVER_READY) await t4SaveServer(true);
-    localStorage.setItem(T4_LOCK_KEY, JSON.stringify(T4.periodLocks));
+    t4CacheWrite(T4_LOCK_KEY, JSON.stringify(T4.periodLocks));
   } catch (e) { T4.periodLocks = before; throw e; }
 }
 
@@ -1930,11 +1952,15 @@ function t4ChApplySheets(sheets) {
     const bu = Object.prototype.hasOwnProperty.call(T4_BU_ALIAS, buKey) ? T4_BU_ALIAS[buKey] : '';
     if (buRaw && !bu) { bad.push(`${name}（事业部「${buRaw}」不识别）`); return; }
     const idRaw = get('id');
+    const registeredSource = channels.find(c => (c.details || []).some(detail =>
+      [detail.source, ...(detail.aliases || [])].some(alias => t4ChNorm(alias) === t4ChNorm(source))));
     let target = (map.target < 0 && idRaw && channels.find(c => c.id === idRaw)) || resolve(name, !get('target'));
     if (target) {
       const entry = { id: target.id };
       // 映射表以渠道汇总为准，旧 ID 不能把调整归集误当成改名。
-      if (name !== target.n && map.target < 0 && (idRaw || renameByName)) {
+      // “渠道名称 / 渠道”也是销售渠道表头的别称。更新门店编号等资料时，
+      // 不能把该店所属的整组改成门店名；归集改名须明确给出 ID 和新名称。
+      if (name !== target.n && map.target < 0 && idRaw && renameByName && !registeredSource) {
         entry.n = name; entry.aliases = [...new Set([...(ov.find(o => o.id === target.id)?.aliases || []), target.n])]; renamed++;
       }
       if (bu && bu !== target.bu) { entry.bu = bu; moved++; }
@@ -3032,7 +3058,7 @@ document.addEventListener('click', async e => {
       t4AssertEditable();
       if (!T4_PENDING_DRAFT || T4_PENDING_DRAFT.period !== T4.period) return;
       T4.data = t4Clone(T4_PENDING_DRAFT.data); T4.cfg = t4Clone(T4_PENDING_DRAFT.cfg);
-      await t4SaveCfg(); await t4Save(); T4_PENDING_DRAFT = null; localStorage.setItem(T4_PENDING_DRAFT_KEY, 'null');
+      await t4SaveCfg(); await t4Save(); T4_PENDING_DRAFT = null; t4CacheWrite(T4_PENDING_DRAFT_KEY, 'null');
       toast('本机草稿已导入共享工作区'); t4Go('overview');
     } catch (err) { toast(`草稿未同步：${err.message}`, 5200); }
   }

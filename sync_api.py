@@ -83,6 +83,35 @@ def valid_path(path):
 def validate_document(doc):
     if not isinstance(doc.get('channels', []), list):
         raise ValueError('channels must be an array')
+    for channel in doc.get('channels', []):
+        # Early documents used an ID-only roster; keep that harmless legacy
+        # representation, but do not persist entries that crash the renderer.
+        if isinstance(channel, str) and channel:
+            continue
+        if not isinstance(channel, dict):
+            raise ValueError('channel entries must be objects')
+        if not isinstance(channel.get('id'), str) or not channel['id']:
+            raise ValueError('channel id must be a non-empty string')
+        for field in ('n', 'bu'):
+            if channel.get(field) is not None and not isinstance(channel[field], str):
+                raise ValueError('channel ' + field + ' must be a string')
+        validate_string_list(channel.get('aliases'), 'channel aliases')
+        details = channel.get('details')
+        if details is not None:
+            if not isinstance(details, list):
+                raise ValueError('channel details must be an array')
+            for detail in details:
+                if not isinstance(detail, dict):
+                    raise ValueError('channel detail entries must be objects')
+                if detail.get('source') is not None and not isinstance(detail['source'], str):
+                    raise ValueError('channel detail source must be a string')
+                validate_string_list(detail.get('aliases'), 'channel detail aliases')
+                fields = detail.get('fields')
+                if fields is not None:
+                    if not isinstance(fields, list) or any(not isinstance(field, dict) for field in fields):
+                        raise ValueError('channel detail fields must be an array of objects')
+                    if any(not isinstance(field.get('name'), str) for field in fields):
+                        raise ValueError('channel detail field name must be a string')
     for field in ('periods', 'cfg', 'periodLocks', 'cfgByPeriod', 'importHistory'):
         if not isinstance(doc.get(field, {}), dict):
             raise ValueError(field + ' must be an object')
@@ -93,6 +122,23 @@ def validate_document(doc):
         raise ValueError('periodLocks values must be booleans')
     if any(not isinstance(cfg, dict) for cfg in doc.get('cfgByPeriod', {}).values()):
         raise ValueError('cfgByPeriod values must be objects')
+    for configs in [doc.get('cfg', {}), *doc.get('cfgByPeriod', {}).values()]:
+        if any(config is not None and not isinstance(config, dict) for config in configs.values()):
+            raise ValueError('channel configuration must be an object')
+    for channels in doc.get('periods', {}).values():
+        if not isinstance(channels, dict):
+            raise ValueError('period data must be an object')
+        for dates in channels.values():
+            if not isinstance(dates, dict):
+                raise ValueError('channel daily data must be an object')
+            for raw in dates.values():
+                if not isinstance(raw, dict):
+                    raise ValueError('daily entries must be objects')
+                for field in ('_fileParts', '_srcs', '_manualFields'):
+                    if raw.get(field) is not None and not isinstance(raw[field], dict):
+                        raise ValueError(field + ' must be an object')
+                if any(not isinstance(fields, dict) for fields in (raw.get('_fileParts') or {}).values()):
+                    raise ValueError('file source entries must be objects')
     items = doc.get('expenseItems', [])
     if not isinstance(items, list) or len(items) > 100:
         raise ValueError('expenseItems must be an array of at most 100 items')
@@ -127,6 +173,10 @@ def validate_document(doc):
             try: datetime.strptime(date, '%Y-%m-%d')
             except ValueError: raise ValueError('invalid import history date')
         if record['from'] > record['to']: raise ValueError('invalid import history range')
+
+def validate_string_list(value, label):
+    if value is not None and (not isinstance(value, list) or any(not isinstance(item, str) for item in value)):
+        raise ValueError(label + ' must be an array of strings')
 
 def input_number(value):
     # Match the browser's numeric file-field coercion (+value || 0).

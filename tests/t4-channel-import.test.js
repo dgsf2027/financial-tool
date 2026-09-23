@@ -8,7 +8,7 @@ function app(seed = {}) {
   const storage = new Map(Object.entries(seed).map(([k, v]) => [k, JSON.stringify(v)]));
   const context = vm.createContext({
     console, localStorage: { getItem: k => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, v) },
-    document: { addEventListener() {}, getElementById() { return null; } }, window: {}, S: {},
+    document: { addEventListener() {}, getElementById() { return null; }, querySelectorAll() { return []; } }, window: {}, S: {},
   });
   const helpers = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8').split('/* ============ 系统结构')[0];
   vm.runInContext(helpers, context);
@@ -302,4 +302,33 @@ test('a business-unit-first table below a title is not mistaken for a transposed
   assert.equal(a.apply([['销售渠道'],['归属事业部','销售渠道','负责人'],['大电商','新店','甲']]).added, 1);
   assert.equal(a.run("T4_CHM[t4ResolveChannel('新店')].bu"), 'ecom');
   assert.deepEqual(a.json('t4ChExtraFields()'), ['负责人']);
+});
+
+test('source-name header aliases update registered shops without renaming their aggregate group', () => {
+  for (const heading of ['销售渠道', '渠道名称', '渠道']) {
+    for (const withId of [false, true]) {
+      const a = app();
+      a.apply([['销售渠道', '渠道汇总', '编号'], ['礼品甲店', '分销-澳乐礼品单', '0001'], ['礼品乙店', '分销-澳乐礼品单', '0002']]);
+      const beforeGroups = a.json('T4_CH.map(c => [c.id,c.n,c.bu])');
+      const rows = [[heading, '编号'], ['礼品甲店', '0101']];
+      if (withId) { rows[0].unshift('渠道ID'); rows[1].unshift('gift'); }
+      assert.equal(a.apply(rows).renamed, 0, `${heading}, ID=${withId}`);
+      assert.deepEqual(a.json('T4_CH.map(c => [c.id,c.n,c.bu])'), beforeGroups);
+      assert.deepEqual(a.json("t4ChFieldRows('编号').map(r => [r.channel,r.source,r.value])"), [
+        ['gift', '礼品乙店', '0002'], ['gift', '礼品甲店', '0101'],
+      ]);
+    }
+  }
+});
+
+test('built-in source aliases keep their aggregate name while explicit ID plus a new name still renames it', () => {
+  const a = app();
+  a.apply([['渠道名称', '编号'], ['分销-礼品启尚', '0001']]);
+  assert.equal(a.run('T4_CHM.gift.n'), '分销-澳乐礼品单');
+  assert.equal(a.run("t4ResolveChannel('分销-礼品启尚')"), 'gift');
+  const result = a.apply([['渠道ID', '渠道名称'], ['gift', '礼品事业归集']]);
+  assert.equal(result.renamed, 1);
+  assert.equal(a.run('T4_CHM.gift.n'), '礼品事业归集');
+  assert.equal(a.run("t4ResolveChannel('分销-礼品启尚')"), 'gift');
+  assert.equal(a.run("t4ResolveChannel('分销-澳乐礼品单')"), 'gift');
 });

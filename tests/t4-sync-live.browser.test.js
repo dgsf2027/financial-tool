@@ -102,6 +102,28 @@ test('refresh cannot replace a focused input before its change event is committe
   assert.equal(await b.evaluate(() => T4_SERVER_VERSION), 1);
 });
 
+test('navigation waits for a pending save so its completion cannot discard a new form', { skip: !chromium }, async t => {
+  const { a } = await clients(t);
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  await a.route('**/api/t4/workspace', async route => {
+    if (route.request().method() === 'PUT') await gate;
+    await route.fallback();
+  });
+  try {
+    await a.locator('[data-t4cfg="tmall:platformFeeRate"]').fill('8');
+    await a.locator('.phead [data-t4act="cfgSave"]').click();
+    await a.waitForFunction(() => T4_SERVER_SAVING && window.T4Shared.state.saving);
+    await a.locator('[data-t4go="overview"]').click();
+    assert.equal(await a.evaluate(() => CURS), 't4-cfg');
+    assert.match(await a.locator('#toast').textContent(), /正在保存共享数据/);
+  } finally { release(); }
+  await a.waitForFunction(() => !T4_SERVER_SAVING && T4_SERVER_VERSION === 2);
+  assert.equal(await a.locator('[data-t4cfg="tmall:platformFeeRate"]').inputValue(), '8');
+  await a.locator('[data-t4go="overview"]').click();
+  assert.equal(await a.evaluate(() => CURS), 't4');
+});
+
 for (const leavePage of ['', 'another page', 'another month']) {
   test(`prefilled return amount cannot overwrite a colleague after refresh${leavePage ? ' on ' + leavePage : ''}`, { skip: !chromium }, async t => {
     const { a, b } = await clients(t);

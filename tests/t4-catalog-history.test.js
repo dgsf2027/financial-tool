@@ -68,7 +68,8 @@ test('channel template and import record use one CAS, and unchanged reimports al
   const rows = [['渠道ID','销售渠道','归属事业部'],['tmall','新的天猫店','大电商']];
   await pickChannels(a, rows);
   assert.equal(a.puts(), 1);
-  assert.equal(a.remote().channels[0].n, '新的天猫店');
+  assert.equal(a.remote().channels[0].details[0].source, '新的天猫店');
+  assert.equal(a.run('T4_CHM.tmall.n'), '天猫-澳乐旗舰店', 'a sales row must not rename the entire aggregate');
   const record = history(a)[0];
   assert.equal(record.fileName, '渠道模板.xlsx');
   assert.equal(record.scope, '渠道列表');

@@ -1561,6 +1561,10 @@ window.addEventListener('pointerup', releaseViewPointer, true);
 window.addEventListener('pointercancel', releaseViewPointer, true);
 window.addEventListener('blur', releaseViewPointer);
 function go(id, options = {}) {
+  if (window.T4Shared?.state.saving) {
+    toast('正在保存共享数据，请完成后再切换页面', 4200);
+    return;
+  }
   clearTimeout(viewRefreshTimer);
   viewPending = null;
   if (id === CURS && (viewPointerDown || (viewChangeEvent && viewChangeEvent.eventPhase !== 0))) {

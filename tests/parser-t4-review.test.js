@@ -103,7 +103,7 @@ test('T4 stores a detail row when an imported alias has no extra columns and lab
   const context = vm.createContext({
     console,
     localStorage: { getItem: k => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, v) },
-    document: { addEventListener() {}, getElementById() { return null; } }, window: {}, S: {},
+    document: { addEventListener() {}, getElementById() { return null; }, querySelectorAll() { return []; } }, window: {}, S: {},
   });
   const helpers = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8').split('/* ============ 系统结构')[0];
   vm.runInContext(helpers, context); vm.runInContext('toast = () => {};', context);
