@@ -162,6 +162,13 @@ tfoot td{background:var(--surface-2);font-weight:600;border-top:2px solid var(--
 .note.w{border-left-color:var(--warn);background:var(--warn-soft)}
 .note.g{border-left-color:var(--good);background:var(--good-soft)}
 .note b{font-weight:700}
+.t4-source-hint{display:block;max-width:24ch;margin-top:5px;white-space:normal;font-size:12px;line-height:1.5;color:var(--text-2)}
+.t4-source-override{color:var(--text);background:var(--warn-soft);padding:4px 6px;border-radius:4px}
+.t4-override-note{border:1px solid var(--border-2);border-radius:7px;overflow-wrap:anywhere}
+.t4-override-note summary{cursor:pointer;margin-top:6px}
+.t4-override-note li+li{margin-top:10px}
+.t4-override-note button{margin-top:4px}
+.t4-override-note summary:focus-visible,.t4-override-note button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 
 /* 工具卡 */
 .tgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(296px,1fr));gap:10px}

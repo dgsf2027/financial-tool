@@ -934,6 +934,24 @@ async function t4CommitImport(imp, pending, used, skipped, issues, range) {
       x.dateKeys.forEach((keys, dt) => t4ClearSource(x.ch, x.source, new Set([dt]), keys));
     });
     pending.forEach(x => t4Add(x.ch, x.dt, x.key, x.num, x.source));
+    const touched = new Map(), shadowed = new Map();
+    pending.forEach(({ ch, dt, key }) => {
+      const raw = t4Raw(ch, dt);
+      touched.set(`${ch}:${dt}`, { ch, dt, raw });
+      if (t4ManualKeys(raw).includes(key)) shadowed.set(`${ch}:${dt}:${key}`,
+        `${dt} ${T4_CHM[ch]?.n || ch} · ${T4_INPUTS.find(f => f.k === key)?.n || key}：导入后文件值 ${money(t4FileInputValue(raw, key))}，人工覆盖仍生效，按 ${money(raw[key])} 计算。`);
+    });
+    touched.forEach(({ ch, dt, raw }) => t4AssertIncomeOverride(before[ch]?.[dt], raw, ch, dt));
+    if (shadowed.size) {
+      const warnings = [...shadowed.values()];
+      const accepted = confirm(`有 ${warnings.length} 项导入金额被人工值覆盖。\n${warnings.slice(0, 8).join('\n')}${warnings.length > 8 ? `\n另有 ${warnings.length - 8} 项，完整明细将保存在导入记录中。` : ''}\n\n确定：保留人工值并导入；取消：返回核对。要使用文件金额，请在录入页将相应格子留空并保存。`);
+      if (!accepted) {
+        T4.data = before;
+        t4RejectImport('已取消导入，原数据和本次文件已保留。请先核对人工覆盖。', warnings);
+        return null;
+      }
+      issues = [...issues, ...warnings];
+    }
     record = t4AddImportHistory({ fileName: imp.fileName || imp.fileN, scope: imp.mode === 'summary' ? t4SumScope().n : (imp.fileN || imp.fileK),
       mode: range ? 'range' : 'file', from: range?.[0], to: range?.[range.length - 1], dates: pending.map(x => x.dt), channels: pending.map(x => x.ch), used, skipped, issues });
     await t4Save();
@@ -975,6 +993,10 @@ const t4Raw = (ch, dt) => (T4.data[ch] || {})[dt] || null;
 function t4InputValue(raw, key) {
   if (!raw) return null;
   if (raw[key] != null) return +raw[key] || 0;
+  return t4FileInputValue(raw, key);
+}
+function t4FileInputValue(raw, key) {
+  if (!raw) return null;
   const parts = raw._fileParts || {};
   for (const source of ['summaryIncome','summaryCost','summaryDaily','daily']) {
     if (parts[source] && parts[source][key] != null) return +parts[source][key] || 0;
@@ -985,6 +1007,57 @@ function t4InputValue(raw, key) {
     value += +fields[key] || 0; found = true;
   });
   return found ? value : null;
+}
+function t4ManualKeys(raw) {
+  if (!raw) return [];
+  return T4_INPUT_KEYS.filter(k => raw[k] != null &&
+    (raw._manualFields?.[k] || raw._fileParts || raw._src !== 'file') &&
+    (!raw._srcs?.[k] || raw._srcs[k] === 'manual'));
+}
+function t4SourceLabel(raw) {
+  if (!raw) return '分摊';
+  const manual = t4ManualKeys(raw), file = T4_INPUT_KEYS.some(k => t4FileInputValue(raw, k) != null ||
+    (raw[k] != null && ((raw._src === 'file' && !raw._fileParts && !raw._manualFields?.[k]) ||
+      (raw._srcs?.[k] && raw._srcs[k] !== 'manual'))));
+  if (manual.length && file) return manual.some(k => t4FileInputValue(raw, k) != null) ? '文件 + 人工覆盖' : '文件 + 人工';
+  return manual.length ? '人工' : file || raw._src === 'file' ? '文件' : '人工';
+}
+// A negative daily result can be legitimate. Only flag the precise case where
+// a manual gross-income field equals the imported net amount, to the cent.
+function t4IncomeOverrideRisk(raw) {
+  if (!raw?._fileParts || raw.retailIncome == null) return null;
+  const fileIncome = t4FileInputValue(raw, 'retailIncome');
+  if (fileIncome == null) return null;
+  const manualIncome = +raw.retailIncome;
+  const deductions = (t4InputValue(raw, 'returnAmount') || 0) + (t4InputValue(raw, 'refundAmount') || 0)
+    - Math.abs(t4InputValue(raw, 'rebateAmount') || 0);
+  const netIncome = fileIncome + deductions, cents = n => Math.round(n * 100);
+  return deductions < -0.005 && cents(manualIncome) !== cents(fileIncome) && cents(manualIncome) === cents(netIncome)
+    ? { fileIncome, manualIncome, deductions, netIncome } : null;
+}
+function t4AssertIncomeOverride(before, after, ch, dt) {
+  const risk = t4IncomeOverrideRisk(after);
+  if (!risk || JSON.stringify(risk) === JSON.stringify(t4IncomeOverrideRisk(before))) return;
+  throw new Error(`${dt} ${T4_CHM[ch]?.n || ch}：疑似重复扣退。录入的零售收入 ${money(risk.manualIncome)} 已等于导入销售额 ${money(risk.fileIncome)} 扣退后的净额；退货、退款及返款还会另行扣减。请填写扣退前销售额，或将零售收入留空以恢复导入值。`);
+}
+function t4OverrideHint(raw, key, id) {
+  if (!t4ManualKeys(raw).includes(key)) return '';
+  const file = t4FileInputValue(raw, key);
+  if (file == null) return `<small id="${id}" class="t4-source-hint">人工录入</small>`;
+  return `<small id="${id}" class="t4-source-hint t4-source-override">人工覆盖 · 导入 ${money(file)}<br>留空并保存可恢复导入值</small>`;
+}
+function t4OverrideNotice(channels, dates = null) {
+  const selected = dates && new Set(dates), entries = [];
+  channels.forEach(ch => Object.entries(T4.data[ch] || {}).forEach(([dt, raw]) => {
+    if (selected && !selected.has(dt)) return;
+    const keys = t4ManualKeys(raw).filter(k => t4FileInputValue(raw, k) != null);
+    if (keys.length) entries.push({ ch, dt, raw, keys, risk: t4IncomeOverrideRisk(raw) });
+  }));
+  if (!entries.length) return '';
+  entries.sort((a, b) => Number(!!b.risk) - Number(!!a.risk) || a.dt.localeCompare(b.dt));
+  const risks = entries.filter(x => x.risk).length;
+  const rows = entries.map(({ ch, dt, raw, keys, risk }) => `<li><b>${H(dt)} · ${H(T4_CHM[ch]?.n || ch)}</b>：${keys.map(k => `${H(T4_INPUTS.find(f => f.k === k)?.n || k)}，人工 ${money(raw[k])} / 导入 ${money(t4FileInputValue(raw, k))}`).join('；')}${risk ? `<br><strong>疑似重复扣退：</strong>人工收入已是导入销售额扣退后的净额，当前仍会另扣 ${money(-risk.deductions)}。` : ''} <button class="btn sm" data-t4review="${H(ch)}:${H(dt)}">核对录入</button></li>`).join('');
+  return `<div class="note w t4-override-note" role="status"><b>${risks ? `有 ${risks} 个日期疑似重复扣退，请先核对收入。` : `有 ${entries.length} 个日期使用人工覆盖。`}</b> 手工值优先于导入值，重新导入不会自动取消覆盖。<details ${risks ? 'open' : ''}><summary>查看金额来源与处理入口</summary><ul>${rows}</ul></details></div>`;
 }
 const t4HasInputs = raw => T4_INPUT_KEYS.some(k => t4InputValue(raw, k) != null);
 const t4Filled = ch => Object.keys(T4.data[ch] || {}).filter(dt => t4InputValue(t4Raw(ch, dt), 'retailIncome') != null).length;
@@ -1209,6 +1282,7 @@ S.t4 = () => {
     + (vr ? '' : ok ? `<div class="note g"><b>各事业部取数天数已对齐。</b>大电商、拼多多、瑞眠、橘农、经销和全部汇总均可用。</div>`
       : g.max === 0 ? '<div class="note"><b>本期尚无数据。</b>先导入平台文件或逐日录入；已设置的管理费分摊会随有收入数据的日子自动计入损益。</div>'
       : `<div class="note c"><b>部分汇总不可用。</b>大电商事业部：${ecomOK ? '可用' : '禁用'}；拼多多事业部：${pddOK ? '可用' : '禁用'}；瑞眠事业部：${rmOK ? '可用' : '禁用'}；经销事业部：${dealerOK ? '可用' : '禁用'}；全部汇总：禁用。请补齐对应事业部的渠道数据。</div>`)
+    + t4OverrideNotice(shownCH.map(c => c.id), vr ? t4RangeDates(vr.from, vr.to) : null)
     + card((T4.projFilter === 'all' ? '' : T4_PROJ_OPTS.find(o => o[0] === T4.projFilter)[1] + ' · ') + (vr ? `${shownCH.length} 渠道 · ${vr.from} ～ ${vr.to} 区间损益` : `${shownCH.length} 渠道取数进度`), table(
       [{t:'项目'},{t:'归属事业部'},{t:'渠道汇总'},{t:'取数天数',n:1},{t:`日历（1—${t4Days()}）`},{t:'方式'},{t:'销售收入',n:1},{t:'净利润',n:1},{t:'净利率'},{t:'状态'},{t:''}], rows))
     + '<div class="t4lg"><span><em class="f"></em>实填</span><span><em class="h"></em>含参数/硬推</span><span><em class="n"></em>无收入数据</span></div>';
@@ -1218,7 +1292,7 @@ function t4EntryTable(ch, group) {
   const fs = T4_INPUTS.filter(f => f.g === group), rows = [];
   for (const dt of t4EntryRange(false)) {
     const d = Number(dt.slice(-2)), raw = t4Raw(ch, dt) || {}, r = t4Row(ch, dt);
-    rows.push([`<b class="mono">${d}</b>`, ...fs.map(f => { const value = t4InputValue(raw, f.k), v = value != null ? value : ''; return `<input type="number" step="0.01" class="t4in" data-t4cell="${dt}:${f.k}" data-t4orig="${v}" value="${v}" placeholder="—">`; }),
+    rows.push([`<b class="mono">${d}</b>`, ...fs.map(f => { const value = t4InputValue(raw, f.k), v = value != null ? value : '', id = `t4hint-${ch}-${dt}-${f.k}`, hint = t4OverrideHint(raw, f.k, id); return `<input type="number" step="0.01" class="t4in" data-t4cell="${dt}:${f.k}" data-t4orig="${v}" value="${v}" aria-label="${H(dt + ' ' + T4_CHM[ch].n + ' ' + f.n)}" ${hint ? `aria-describedby="${id}"` : ''} placeholder="—">${hint}`; }),
       r ? `<b class="${r.netProfit >= 0 ? 'grn' : 'red'}">${money(r.netProfit)}</b>` : '—']);
   }
   return card(`${group} · ${T4_CHM[ch].n}`, table([{t:'日'}, ...fs.map(f => ({t:f.n,n:1})), {t:'当日净利润',n:1}], rows));
@@ -1227,7 +1301,9 @@ S['t4-man'] = () => {
   t4Load(); const c = T4_CHM[T4.editCh];
   return head(`录入　${c.n}`, '留空表示没有数据；填 0 表示当日确认为零。退货金额、退款金额和退货成本请按负数录入；返款填正数，系统自动扣减收入。', '工具箱 · T4',
     t4PeriodControl(`${t4EntryRangeControls(false)}<select id="t4chSel">${T4_CH.map(x => `<option value="${x.id}" ${x.id === c.id ? 'selected' : ''}>${x.n}</option>`).join('')}</select><button class="btn" data-t4go="overview">← 返回</button><button class="btn pri" data-t4act="saveMan">保存</button>`))
-    + `<div class="note"><b>当前收入取数 ${t4Filled(c.id)} / ${t4Days()} 天。</b>浅色空格会由参数页中的比例或月度分摊值计算；在这里填值可覆盖该参数。</div>`
+    + `<div class="note"><b>当前收入取数 ${t4Filled(c.id)} / ${t4Days()} 天。</b>零售收入填写扣退前销售额，退货、退款及返款单独扣减。人工值优先；将格子留空并保存可取消覆盖，恢复导入值或参数计算。</div>`
+    + '<div id="t4EntryError" class="note c" role="alert" hidden></div>'
+    + t4OverrideNotice([c.id], t4EntryRange(false))
     + t4EntryTable(c.id, '销售与成本') + t4EntryTable(c.id, '运营费用')
     + t4EntryTable(c.id, '直接管理费用') + t4EntryTable(c.id, '间接管理费用');
 };
@@ -1247,7 +1323,7 @@ function t4SummaryEntryTable(group, dates, keys, title) {
   const rows = dates.flatMap(dt => T4_CH.map(c => {
     const raw = t4Raw(c.id, dt) || {}, r = t4Row(c.id, dt);
     return [H(dt), t4BuPill(c.bu), `<b>${H(c.n)}</b>`,
-      ...fs.map(f => { const value = t4InputValue(raw, f.k), v = value != null ? value : ''; return `<input type="number" step="0.01" class="t4in" data-t4sumcell="${dt}:${c.id}:${f.k}" data-t4orig="${v}" value="${v}" aria-label="${H(dt + ' ' + c.n + ' ' + f.n)}" placeholder="—">`; }),
+      ...fs.map(f => { const value = t4InputValue(raw, f.k), v = value != null ? value : '', id = `t4hint-${c.id}-${dt}-${f.k}`, hint = t4OverrideHint(raw, f.k, id); return `<input type="number" step="0.01" class="t4in" data-t4sumcell="${dt}:${c.id}:${f.k}" data-t4orig="${v}" value="${v}" aria-label="${H(dt + ' ' + c.n + ' ' + f.n)}" ${hint ? `aria-describedby="${id}"` : ''} placeholder="—">${hint}`; }),
       r ? `<b class="${r.netProfit >= 0 ? 'grn' : 'red'}">${money(r.netProfit)}</b>` : '—'];
   }));
   return card(title || group, table([{t:'日期'},{t:'归属事业部'},{t:'渠道'}, ...fs.map(f => ({t:f.n,n:1})), {t:'当日净利润',n:1}], rows));
@@ -1257,7 +1333,9 @@ S['t4-summan'] = () => {
   T4.sumDate = dates[0]; T4.sumTo = dates[dates.length - 1];
   return head(`汇总录入 · ${sc.n}`, '选择起止日期，每个日期分别填写各渠道收入与成本。一个格子只对应一天，不会复制到其他日期。', '工具箱 · T4',
     t4PeriodControl(`${t4EntryRangeControls(true)}<button class="btn" data-t4go="overview">← 返回</button><button class="btn pri" data-t4act="sumManSave">保存全部渠道</button>`))
-    + `<div class="note"><b>只保存发生变化的格子。</b>留空删除该格的人工录入值；文件值或参数仍可继续生效。填 0 表示当日确认为零。退货金额、退款金额和退货成本按负数录入；返款填正数，系统自动扣减收入。切换日期前请保存本页变更。</div>`
+    + `<div class="note"><b>只保存发生变化的格子。</b>零售收入填写扣退前销售额，退货、退款及返款单独扣减。留空并保存取消人工覆盖，恢复文件值或参数。填 0 表示当日确认为零。退货金额、退款金额和退货成本按负数录入；返款填正数。切换日期前请保存本页变更。</div>`
+    + '<div id="t4EntryError" class="note c" role="alert" hidden></div>'
+    + t4OverrideNotice(T4_CH.map(c => c.id), dates)
     + t4SummaryEntryTable('销售与成本', dates, sc.keys, `${sc.n} · ${dates[0]} ～ ${dates[dates.length - 1]}`);
 };
 function t4EntryDirty() {
@@ -1293,6 +1371,7 @@ async function t4SaveEntries(summary) {
       } else { raw[key] = num; raw._src = 'manual'; }
       if (t4HasInputs(raw)) T4.data[ch][dt] = raw; else delete T4.data[ch][dt];
     });
+    changes.forEach(({ ch, dt }) => t4AssertIncomeOverride(before[ch]?.[dt], t4Raw(ch, dt), ch, dt));
     await t4Save();
   } catch (e) { t4RestorePeriodData(before); throw e; }
   return changes.length;
@@ -1902,6 +1981,7 @@ S['t4-sheet'] = () => {
   const ctrl = t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="sheet" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="当前月默认截至今天；选择月末可看整月" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="sheet" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label>${t4ProjSelect('sheet')}<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="sheetMode">${T4.sheetMode === 'tree' ? '切换明细表' : '切换树视图'}</button><button class="btn" data-t4go="chday">每日明细</button><button class="btn" data-t4act="export">导出本表</button><button class="btn" data-t4act="rawExport" title="按当前项目和日期，导出按日归集的原始输入及来源">导出录入/导入数据</button><button class="btn" data-t4go="contacts">通讯录</button><button class="btn" data-t4go="mail">邮件发送</button><button class="btn pri" data-t4act="exportSuite">导出套表</button>`);
   const desc = vr ? `${vr.from} ～ ${vr.to}（${vr.n} 天）区间损益。` : '渠道月累计损益。';
   const title = vr ? `${vr.from} ～ ${vr.to} 区间损益（${vr.n} 天）` : '月累计损益';
+  const overrides = t4OverrideNotice(t4ProjCH().map(c => c.id), vr ? t4RangeDates(vr.from, vr.to) : null);
 
   if (T4.sheetMode === 'tree') {
     // 展平树为行，尊重折叠状态
@@ -1924,6 +2004,7 @@ S['t4-sheet'] = () => {
     roots.forEach(n => walk(n, []));
     const headers = [{ t: '项目 / 事业部 / 渠道' }, ...T4_TREE_COLS.map(c => ({ t: c[1], n: 1 }))];
     return head('渠道事业部日损益表', desc + '按 项目→事业部→渠道 逐层汇总，父级为子级之和；点名称前的三角可折叠。', '工具箱 · T4', ctrl)
+      + overrides
       + card(title + ' · 树视图', t4PinnedTable(headers, rows))
       + `<div class="note c"><b>红线口径：</b>京东自营零售成本、退货金额和退货成本来自底稿设定比例；管理费为直接+间接合计。比例与分摊可在「参数」「管理费分摊」中修改。</div>`;
   }
@@ -1938,6 +2019,7 @@ S['t4-sheet'] = () => {
     return [name, ...vals];
   });
   return head('渠道事业部日损益表', desc + '按渠道逐列展开损益科目；事业部与全部汇总见「树视图」。', '工具箱 · T4', ctrl)
+    + overrides
     + card(title, t4PinnedTable(headers, rows))
     + `<div class="note c"><b>红线口径：</b>京东自营零售成本、退货金额和退货成本仍来自底稿设定比例，不是平台原始数据；所有比例与月度分摊可在「参数」中审阅和修改。</div>`;
 };
@@ -1974,6 +2056,7 @@ S['t4-chday'] = () => {
   });
   return head(`每日明细 · ${c.n}`, `${T4.period} 逐日损益表（利润表格式）：损益科目竖排，每天一列，末列为当月合计。空白日仅计管理费日摊。`, '工具箱 · T4',
     t4PeriodControl(`${sel}<button class="btn" data-t4go="sheet">← 返回损益表</button><button class="btn pri" data-t4act="dayExport">导出 CSV</button>`))
+    + t4OverrideNotice([c.id])
     + card(`${c.n} · ${T4.period} 每日损益表（实取 ${t4Filled(c.id)}/${days} 天）`, table(headers, rows));
 };
 
@@ -2536,7 +2619,7 @@ function t4Export() {
       const r = raw || t4DayData(c.id, dt);
       rows.push([T4.period,c.n,t4BuName(c.bu),dt, ...T4_METRICS.map(x => x.pct ? `${(r[x.k]*100).toFixed(2)}%` : (r[x.k] || 0).toFixed(2)),
         raw ? (r._hard.length ? `参数/硬推:${r._hard.join('/')}` : '实填') : '管理费分摊（无收入数据日）',
-        raw ? (r._src === 'file' ? '文件' : '人工') : '分摊']);
+        raw ? t4SourceLabel(t4Raw(c.id, dt)) : '分摊']);
     });
   });
   rows.push([]);
@@ -2560,6 +2643,14 @@ function t4Export() {
 function t4Go(v, options) { go(v === 'overview' ? 't4' : `t4-${v}`, options); }
 
 document.addEventListener('click', async e => {
+  const review = e.target.closest('[data-t4review]');
+  if (review) {
+    if (t4EntryDirty() && !confirm('本页有未保存的输入。离开后将放弃这些输入，继续核对？')) return;
+    const [ch, dt] = review.dataset.t4review.split(':');
+    if (!T4_CHM[ch] || !t4ValidDate(dt)) return;
+    T4.editCh = ch; T4.manFrom = dt; T4.manTo = dt;
+    t4Go('man', { resetScroll: true }); return;
+  }
   const write = e.target.closest('[data-t4act], [data-t4cfgadd], [data-t4cfgdel]');
   const writeActions = ['saveMan','sumManSave','impRun','sumImpRun','cfgSave','cfgReset','mgmtSave','allocationApply','clearSelected'];
   if (write && (writeActions.includes(write.dataset.t4act) || write.dataset.t4cfgadd || write.dataset.t4cfgdel)) {
@@ -2661,8 +2752,13 @@ document.addEventListener('click', async e => {
     try { await t4SetPeriodLock(!locked); toast(locked ? '本月已解锁，处理完成后可重新锁定' : '本月已锁定，数据受保护'); t4Go('overview'); }
     catch (err) { toast(`锁定状态保存失败：${err.message}`, 5200); }
   } else if (a.dataset.t4act === 'saveMan' || a.dataset.t4act === 'sumManSave') {
+    const errorBox = document.getElementById('t4EntryError');
+    if (errorBox) { errorBox.hidden = true; errorBox.textContent = ''; }
     try { const changed = await t4SaveEntries(a.dataset.t4act === 'sumManSave'); toast(`已保存 ${changed} 个变更`); t4Go('overview'); }
-    catch (err) { toast(`保存失败，原数据已恢复：${err.message}；本页输入可继续核对`, 6000); }
+    catch (err) {
+      if (errorBox) { errorBox.textContent = `未保存：${err.message} 本页输入已保留。`; errorBox.hidden = false; }
+      toast(`保存失败，原数据已恢复：${err.message}；本页输入可继续核对`, 6000);
+    }
   } else if (a.dataset.t4act === 'impCancel') { T4.imp = null; t4Go('imp'); }
   else if (a.dataset.t4act === 'impRun') t4ImpRun();
   else if (a.dataset.t4act === 'sumPick') t4PickSummaryFile();

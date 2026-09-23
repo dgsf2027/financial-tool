@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Dependency-free T4 shared workspace service with CAS patches."""
-import hashlib, hmac, json, os, re, sqlite3, time
+import hashlib, hmac, json, math, os, re, sqlite3, time
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
@@ -127,6 +127,71 @@ def validate_document(doc):
             try: datetime.strptime(date, '%Y-%m-%d')
             except ValueError: raise ValueError('invalid import history date')
         if record['from'] > record['to']: raise ValueError('invalid import history range')
+
+def input_number(value):
+    # Match the browser's numeric file-field coercion (+value || 0).
+    try:
+        number = float(value)
+        return number if math.isfinite(number) else 0
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+def file_input_value(raw, key):
+    parts = raw.get('_fileParts')
+    if not isinstance(parts, dict): return None
+    priority = ('summaryIncome', 'summaryCost', 'summaryDaily', 'daily')
+    for source in priority:
+        fields = parts.get(source)
+        if isinstance(fields, dict) and fields.get(key) is not None:
+            return input_number(fields[key])
+    value, found = 0, False
+    for source, fields in parts.items():
+        if source not in priority and isinstance(fields, dict) and fields.get(key) is not None:
+            value += input_number(fields[key]); found = True
+    return value if found else None
+
+def input_value(raw, key):
+    return input_number(raw[key]) if raw.get(key) is not None else file_input_value(raw, key)
+
+def income_override_risk(raw):
+    # A negative daily result alone is valid. We need both a distinct imported
+    # gross amount and a top-level override equal to its explicitly deducted net.
+    # Legacy file rows without _fileParts have no independent gross evidence.
+    if not isinstance(raw, dict) or not isinstance(raw.get('_fileParts'), dict) or raw.get('retailIncome') is None:
+        return None
+    file_income = file_input_value(raw, 'retailIncome')
+    if file_income is None: return None
+    try: manual_income = float(raw['retailIncome'].strip() or '0') if isinstance(raw['retailIncome'], str) else float(raw['retailIncome'])
+    except (TypeError, ValueError, OverflowError): return None
+    deductions = ((input_value(raw, 'returnAmount') or 0) + (input_value(raw, 'refundAmount') or 0)
+                  - abs(input_value(raw, 'rebateAmount') or 0))
+    net_income = file_income + deductions
+    if not all(math.isfinite(n) and math.isfinite(n * 100) for n in (file_income, manual_income, deductions, net_income)):
+        return None
+    # Python round uses ties-to-even; the browser uses Math.round.
+    cents = lambda n: math.floor(n * 100 + 0.5)
+    if deductions < -0.005 and cents(manual_income) != cents(file_income) and cents(manual_income) == cents(net_income):
+        return (file_income, manual_income, deductions, net_income)
+    return None
+
+def validate_income_overrides(current, next_doc):
+    old_periods = current.get('periods', {})
+    names = {channel.get('id'): channel.get('n') for channel in next_doc.get('channels', [])
+             if isinstance(channel, dict) and isinstance(channel.get('id'), str) and isinstance(channel.get('n'), str)}
+    for period, channels in next_doc.get('periods', {}).items():
+        if not isinstance(channels, dict): continue
+        old_channels = old_periods.get(period, {})
+        for channel, dates in channels.items():
+            if not isinstance(dates, dict): continue
+            old_dates = old_channels.get(channel, {}) if isinstance(old_channels, dict) else {}
+            for date, raw in dates.items():
+                risk = income_override_risk(raw)
+                old_raw = old_dates.get(date) if isinstance(old_dates, dict) else None
+                # Existing anomalies must not prevent unrelated edits. A changed
+                # signature still needs correction, including after a CAS merge.
+                if risk is None or risk == income_override_risk(old_raw): continue
+                raise ValueError('%s 渠道 %s：疑似重复扣退，手工零售收入已等于导入销售额扣退后的净额，退货、退款及返款仍会另行扣减。请填写扣退前销售额，或清除零售收入覆盖以恢复导入值。'
+                                 % (date, names.get(channel) or channel))
 
 def protected_period_changes(current, next_doc):
     # Check the persisted lock state, never an unlock in the candidate write.
@@ -266,6 +331,7 @@ class Handler(BaseHTTPRequestHandler):
                 if protected:
                     c.execute('ROLLBACK')
                     return reply(self,409,{'ok':False,'error':'period_locked','version':current_version,'periods':protected})
+                validate_income_overrides(current, next_doc)
                 encoded=json.dumps(next_doc,ensure_ascii=False,separators=(',',':'),allow_nan=False); next_version=current_version+1
                 c.execute('''INSERT INTO t4_workspaces(workspace,document_json,version,updated_at,updated_by) VALUES(?,?,?,?,?)
                   ON CONFLICT(workspace) DO UPDATE SET document_json=excluded.document_json,version=excluded.version,updated_at=excluded.updated_at,updated_by=excluded.updated_by''',(WORKSPACE,encoded,next_version,now,user))
