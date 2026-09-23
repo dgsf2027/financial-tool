@@ -24,7 +24,7 @@ C_TEXT = C_SUB = C_LINK = "000000"
 FMT_AMT = '#,##0.00;-#,##0.00;"-"'
 FMT_PCT = '0.0%;-0.0%;"-"'
 KEY_ROWS = {"grossProfit", "contribution", "netProfit"}          # 关键小计：加粗 + 上划线
-OPERATING = ["platformFee", "platformOther", "promotion", "ztc", "cps", "research", "aftersales", "logistics", "warehouse", "tax"]
+OPERATING = ["platformFee", "platformOther", "promotion", "ztc", "cps", "research", "aftersales", "logistics", "shippingInsurance", "warehouse", "tax"]
 DIRECT = ["directLabor", "directRent", "directOther"]
 INDIRECT = ["sharedLabor", "sharedRent", "sharedOther"]
 SUMMARY_KEYS = ["salesIncome", "salesCost", "grossProfit", "grossMargin", "operating", "direct",

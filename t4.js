@@ -215,6 +215,7 @@ const T4_INPUTS = [
   { k: 'research', n: '数研', g: '运营费用' },
   { k: 'aftersales', n: '售后费用', g: '运营费用' },
   { k: 'logistics', n: '快递物流', g: '运营费用' },
+  { k: 'shippingInsurance', n: '运费险', g: '运营费用' },
   { k: 'warehouse', n: '仓储费用', g: '运营费用' },
   { k: 'tax', n: '税费', g: '运营费用' },
   { k: 'directLabor', n: '直接人工', g: '直接管理费用' },
@@ -246,6 +247,7 @@ const T4_METRICS = [
   { k: 'research', n: '　数研', lvl: 1 },
   { k: 'aftersales', n: '　售后费用', lvl: 1 },
   { k: 'logistics', n: '　快递物流', lvl: 1 },
+  { k: 'shippingInsurance', n: '　运费险', lvl: 1 },
   { k: 'warehouse', n: '　仓储费用', lvl: 1 },
   { k: 'tax', n: '　税费', lvl: 1 },
   { k: 'direct', n: '直接管理费用合计', lvl: 0 },
@@ -317,6 +319,7 @@ const T4_CFG_FIELDS = [
   ['retailCostRate', '零售成本率', 'rate'], ['returnRate', '退货率', 'rate'], ['returnCostRate', '退货成本率', 'rate'],
   ['platformFeeRate', '平台扣点率', 'rate'], ['platformOtherRate', '平台其他率', 'rate'],
   ['aftersalesRate', '售后费用率', 'rate'], ['logisticsRate', '快递物流率', 'rate'],
+  ['shippingInsuranceRate', '运费险', 'rate'],
   ['warehouseRate', '仓储费率', 'rate'], ['taxRate', '税率', 'rate'],
   ['logisticsMonth', '快递物流/月', 'money'],
 ];
@@ -336,6 +339,7 @@ const T4_FILE_DEFS = {
     ['platformOther', '平台其他', ['平台其他']], ['promotion', '推广费用', ['推广费用', '推广费']],
     ['ztc', '直通车', ['直通车']], ['cps', 'CPS', ['CPS']], ['research', '数研', ['数研']],
     ['aftersales', '售后费用', ['售后费用']], ['logistics', '快递物流', ['快递物流', '快递费', '物流费']],
+    ['shippingInsurance', '运费险', ['运费险', '运费险费用', '退换货运费险']],
     ['warehouse', '仓储费用', ['仓储费用', '仓储费']], ['tax', '税费', ['税费']],
     ['directLabor', '直接人工', ['直接人工']], ['directRent', '直接租金物业', ['直接租金物业']],
     ['directOther', '直接其他管理', ['直接其他管理']], ['sharedLabor', '人力公摊', ['人力公摊']],
@@ -988,7 +992,7 @@ const t4Filled = ch => Object.keys(T4.data[ch] || {}).filter(dt => t4InputValue(
 function t4Assumed(ch, key, base, hard) {
   const cfg = T4.cfg[ch] || {}, days = t4Days();
   const rateMap = { platformFee: 'platformFeeRate', platformOther: 'platformOtherRate', aftersales: 'aftersalesRate',
-    logistics: 'logisticsRate', warehouse: 'warehouseRate', tax: 'taxRate' };
+    logistics: 'logisticsRate', shippingInsurance: 'shippingInsuranceRate', warehouse: 'warehouseRate', tax: 'taxRate' };
   const monthMap = { logistics: 'logisticsMonth', directLabor: 'directLaborMonth', directRent: 'directRentMonth',
     directOther: 'directOtherMonth', sharedLabor: 'sharedLaborMonth', sharedRent: 'sharedRentMonth', sharedOther: 'sharedOtherMonth' };
   if (rateMap[key] && cfg[rateMap[key]] != null) { hard.push(key); return base * cfg[rateMap[key]]; }
@@ -1009,7 +1013,7 @@ function t4Row(ch, dt) {
   ['returnAmount','refundAmount','retailCost','returnCost','promotion','ztc','cps','research','rebateIncome','salesReceipt'].forEach(k => { if (r[k] == null) r[k] = 0; });
   r.rebateAmount = -Math.abs(r.rebateAmount || 0) || 0;
   r.salesIncome = r.retailIncome + r.returnAmount + r.refundAmount + r.rebateAmount;
-  ['platformFee','platformOther','aftersales','logistics','warehouse','tax','directLabor','directRent','directOther','sharedLabor','sharedRent','sharedOther'].forEach(k => {
+  ['platformFee','platformOther','aftersales','logistics','shippingInsurance','warehouse','tax','directLabor','directRent','directOther','sharedLabor','sharedRent','sharedOther'].forEach(k => {
     // Only platform commission uses net sales; the other agreed rates retain
     // their retail-income base. Explicit imported/manual amounts still win.
     if (r[k] == null) r[k] = t4Assumed(ch, k, k === 'platformFee' ? r.salesIncome : r.retailIncome, hard);
@@ -2194,7 +2198,7 @@ S['t4-cfg'] = () => {
         : '<div class="mut" style="padding:14px 14px 0">暂无费用规则；用下方「添加费用规则」为本渠道设置分摊。</div>')
       + `<div style="padding:11px 14px;display:flex;gap:7px;align-items:center;flex-wrap:wrap">${addCtrl}<span style="flex:1"></span><button class="btn sm pri" data-t4act="cfgSave">保存参数</button></div>`, '', `t4-cfg:${c.id}`);
   }).join('');
-  return head('T4 参数', '平台扣点按每日销售收入（零售收入加退货、退款及返款的负数金额）计算；其他费率仍按零售收入。月度金额按当月自然日平均分摊；直接/间接管理费用在「工资 / 费用分摊」页维护。', '工具箱 · T4',
+  return head('T4 参数', '平台扣点按每日销售收入（零售收入加退货、退款及返款的负数金额）计算；运费险等其他费率按每日零售收入计算。月度金额按当月自然日平均分摊；直接/间接管理费用在「工资 / 费用分摊」页维护。', '工具箱 · T4',
     `<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="cfgReset">恢复底稿值</button><button class="btn pri" data-t4act="cfgSave">保存参数</button>`)
     + '<div class="note w"><b>修改会影响所有对应日期的派生结果。</b>人工录入的同名科目优先于参数值。添加规则后填入数值并「保存参数」生效。</div>' + blocks;
 };

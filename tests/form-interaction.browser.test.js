@@ -61,6 +61,45 @@ async function openPage(t, viewport) {
   return page;
 }
 
+for (const width of [1440, 390]) {
+  test(`Douyin shipping insurance can be added, saved, reloaded and removed at ${width}px`, { skip: !chromium }, async t => {
+    const page = await openPage(t, { width, height: 900 });
+    const card = page.locator('#view .card').filter({ has: page.locator('[data-t4cfgadd="dycreator"]') });
+    const select = card.locator('.t4addsel');
+    const field = card.locator('[data-t4cfg="dycreator:shippingInsuranceRate"]');
+    for (const channel of ['dycreator', 'dy_zzzrest', 'dy_orange']) {
+      assert.equal(await page.locator(`.t4addsel[data-ch="${channel}"] option[value="shippingInsuranceRate"]`).textContent(), '运费险（%）');
+    }
+    assert.equal(await field.count(), 0, 'insurance must stay opt-in');
+    await select.selectOption('shippingInsuranceRate');
+    await card.locator('[data-t4cfgadd]').click();
+    await field.waitFor();
+    await field.fill('1.25');
+    await card.locator('[data-t4act="cfgSave"]').click();
+    await page.waitForFunction(() => !T4_SERVER_SAVING && T4_SERVER_DOCUMENT.cfgByPeriod['2026-09'].dycreator.shippingInsuranceRate === 0.0125);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.evaluate(() => { T4.period = '2026-09'; go('t4-cfg'); });
+    await page.waitForFunction(() => T4_SERVER_READY && !T4_SERVER_LOADING);
+    assert.equal(await field.inputValue(), '1.25');
+    const result = await page.evaluate(() => {
+      T4.data.dycreator['2026-09-01'] = { retailIncome: 1000, retailCost: 400, refundAmount: -100 };
+      const r = t4Row('dycreator', '2026-09-01');
+      delete T4.data.dycreator['2026-09-01'];
+      return { insurance: r.shippingInsurance, operating: r.operating, netProfit: r.netProfit };
+    });
+    assert.deepEqual(result, { insurance: 12.5, operating: 12.5, netProfit: 487.5 });
+    await card.scrollIntoViewIfNeeded();
+    await card.screenshot({ path: `/tmp/finance-shipping-insurance-${width}.png` });
+    await card.locator('[data-t4cfgdel="dycreator:shippingInsuranceRate"]').click();
+    await field.waitFor({ state: 'detached' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.evaluate(() => { T4.period = '2026-09'; go('t4-cfg'); });
+    await page.waitForFunction(() => T4_SERVER_READY && !T4_SERVER_LOADING);
+    assert.equal(await field.count(), 0, 'deleted insurance rule must stay deleted after reload');
+    assert.equal(await select.locator('option[value="shippingInsuranceRate"]').count(), 1);
+  });
+}
+
 test('direct visitors see a usable login link after a workspace 401', { skip: !chromium }, async t => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   t.after(() => page.close());
