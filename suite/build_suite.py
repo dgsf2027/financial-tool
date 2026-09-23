@@ -140,7 +140,7 @@ def write_channel(wb, ch, days_data, meta, row_of, first_row):
     ws = wb.create_sheet(ch["sheet"])
     days, metrics, inputs = meta["days"], meta["metrics"], set(meta["inputKeys"])
     last_col = get_column_letter(2 + days)
-    title(ws, f"{ch['name']} · {meta['period']} 每日利润表", 2 + days)
+    title(ws, f"{ch['name']} · {meta.get('rangeLabel', meta['period'])} 每日利润表", 2 + days)
     note(ws, "A2", f"{ch['project']} / {ch['buName']}　实取 {ch['filled']}/{days} 天　　小计与比率为公式；每日数据来自系统取数（含费率/分摊派生）")
     link(ws, "A3", "← 返回总表", "#'总表'!A1")
     link(ws, "B3", f"{ch.get('buName', '事业部')} →", f"#{q(ch.get('bu_sheet', '总表'))}!A1")
@@ -148,7 +148,7 @@ def write_channel(wb, ch, days_data, meta, row_of, first_row):
     h = first_row - 1
     ws.cell(h, 1, "损益项目"); ws.cell(h, 2, "合计")
     for d in range(1, days + 1):
-        ws.cell(h, 2 + d, f"{d}日")
+        ws.cell(h, 2 + d, (meta.get("dates") or [])[d - 1] if meta.get("dates") else f"{d}日")
     for c in range(1, 3 + days):
         hdr(ws.cell(h, c))
     ws.row_dimensions[h].height = 20
@@ -181,7 +181,7 @@ def write_channel(wb, ch, days_data, meta, row_of, first_row):
 def write_bu(ws, bu_name, chans, meta, row_of, first_row):
     metrics, inputs = meta["metrics"], set(meta["inputKeys"])
     n = len(chans)
-    title(ws, f"{bu_name} · 渠道对比 · {meta['period']}", 2 + n)
+    title(ws, f"{bu_name} · 渠道对比 · {meta.get('rangeLabel', meta['period'])}", 2 + n)
     note(ws, "A2", f"{bu_name}合计 = 本页各渠道之和（公式）；渠道名与数字可点击跳转到该渠道逐日明细对应行")
     link(ws, "A3", "← 返回总表", "#'总表'!A1")
     h = first_row - 1
@@ -233,7 +233,7 @@ def write_summary(ws, tree, chans, chans_by_id, meta, row_of, first_row):
 
     title(ws, f"财务中心 · T4 日损益套表（{meta['scopeName']}）", 1 + len(nodes))
     filled_n = sum(1 for c in chans if c["filled"] > 0)
-    note(ws, "A2", f"期间 {meta['period']}　生成 {meta['generated']}　渠道 {len(chans)} 个（实取 {filled_n} 个）")
+    note(ws, "A2", f"日期 {meta.get('rangeLabel', meta['period'])}　生成 {meta['generated']}　渠道 {len(chans)} 个（实取 {filled_n} 个）")
     note(ws, "A3", "竖式利润表：科目竖排，列为 全部→项目→事业部 逐级汇总（均为公式，可点格核对）。事业部表头与数字可点击跳到该事业部页同一科目行，再点渠道跳到逐日明细。一级科目加粗，二级科目缩进。")
     # 表头一行（第 5 行）：名称按层级配色，事业部带 └ 标识并可点击；第 4 行留作间隔
     ws.cell(5, 1, "损益项目"); hdr(ws.cell(5, 1))

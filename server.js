@@ -132,6 +132,32 @@ const readJsonFile = (file, fallback) => { try { return JSON.parse(fs.readFileSy
 const runPy = (script, args) => execFileP(PY, [path.join(SUITE, script), ...args],
   { timeout: 180000, env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, maxBuffer: 10 * 1024 * 1024 });
 const T4_MAIL_SCOPES = new Set(['all', 'aole', 'ruimian', 'orange']);
+function normalizeRecipients(list) {
+  if (!Array.isArray(list) || list.length > 1000) throw new Error('通讯录需为列表，最多保存 1000 位联系人');
+  const seen = new Set();
+  return list.map((r, i) => {
+    if (!r || typeof r !== 'object' || Array.isArray(r)) throw new Error(`第 ${i + 1} 位联系人格式错误`);
+    const name = typeof r.name === 'string' ? r.name.trim() : '';
+    const email = typeof r.email === 'string' ? r.email.trim() : '';
+    const scope = r.scope == null ? 'all' : String(r.scope).trim();
+    if (name.length > 100) throw new Error(`第 ${i + 1} 位联系人姓名不能超过 100 个字符`);
+    if (email.length > 254 || !/^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$/.test(email)) throw new Error(`第 ${i + 1} 位联系人邮箱无效`);
+    if (!T4_MAIL_SCOPES.has(scope)) throw new Error(`第 ${i + 1} 位联系人报表范围无效`);
+    const key = email.toLowerCase();
+    if (seen.has(key)) throw new Error(`邮箱重复：${email}，请合并或删除重复联系人`);
+    seen.add(key);
+    return { name, email, scope, enabled: r.enabled !== false };
+  });
+}
+function saveRecipientsAtomic(list) {
+  fs.mkdirSync(CFG, { recursive: true });
+  const target = path.join(CFG, 'recipients.json');
+  const temp = path.join(CFG, `.recipients-${crypto.randomBytes(12).toString('hex')}.tmp`);
+  try {
+    fs.writeFileSync(temp, JSON.stringify(list, null, 2), { flag: 'wx', mode: 0o600 });
+    fs.renameSync(temp, target);
+  } finally { if (fs.existsSync(temp)) fs.unlinkSync(temp); }
+}
 function tempDir(tag) {
   fs.mkdirSync(OUT, { recursive: true });
   const safeTag = String(tag || 'job').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 48) || 'job';
@@ -205,11 +231,11 @@ async function handleApi(req, res, urlPath) {
   }
   if (urlPath === '/api/t4/recipients' && req.method === 'GET') return sendJson(res, 200, readJsonFile(path.join(CFG, 'recipients.json'), []));
   if (urlPath === '/api/t4/recipients' && req.method === 'POST') {
-    const list = JSON.parse((await readBody(req)).toString('utf-8') || '[]');
-    if (!Array.isArray(list)) return sendText(res, 400, '格式错误');
-    fs.mkdirSync(CFG, { recursive: true });
-    fs.writeFileSync(path.join(CFG, 'recipients.json'), JSON.stringify(list, null, 2));
-    return sendJson(res, 200, { ok: true, count: list.length });
+    let list;
+    try { list = normalizeRecipients(JSON.parse((await readBody(req, 1024 * 1024)).toString('utf-8') || '[]')); }
+    catch (e) { return sendJson(res, 400, { ok: false, error: e instanceof SyntaxError ? '通讯录 JSON 格式错误' : e.message }); }
+    saveRecipientsAtomic(list);
+    return sendJson(res, 200, { ok: true, count: list.length, recipients: list });
   }
   if (urlPath === '/api/t4/mail/status' && req.method === 'GET') return sendJson(res, 200, mailStatus());
   // 保存发件配置：授权码由用户在页面输入，只落服务器本地文件；留空则沿用已保存的授权码

@@ -1530,7 +1530,7 @@ S['t4-sheet'] = () => {
   t4Load();
   const vr = t4ViewRange();
   const grpOf = ids => vr ? t4GroupRange(ids, vr.from, vr.to) : t4Group(ids);
-  const ctrl = t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="sheet" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="当前月默认截至今天；选择月末可看整月" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="sheet" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label>${t4ProjSelect('sheet')}<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="sheetMode">${T4.sheetMode === 'tree' ? '切换明细表' : '切换树视图'}</button><button class="btn" data-t4go="chday">每日明细</button><button class="btn" data-t4act="export">导出本表</button><button class="btn" data-t4go="mail">邮件发送</button><button class="btn pri" data-t4act="exportSuite">导出套表</button>`);
+  const ctrl = t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="sheet" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="当前月默认截至今天；选择月末可看整月" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="sheet" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label>${t4ProjSelect('sheet')}<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="sheetMode">${T4.sheetMode === 'tree' ? '切换明细表' : '切换树视图'}</button><button class="btn" data-t4go="chday">每日明细</button><button class="btn" data-t4act="export">导出本表</button><button class="btn" data-t4act="rawExport" title="按当前项目和日期，导出按日归集的原始输入及来源">导出录入/导入数据</button><button class="btn" data-t4go="contacts">通讯录</button><button class="btn" data-t4go="mail">邮件发送</button><button class="btn pri" data-t4act="exportSuite">导出套表</button>`);
   const desc = vr ? `${vr.from} ～ ${vr.to}（${vr.n} 天）区间损益。` : '渠道月累计损益。';
   const title = vr ? `${vr.from} ～ ${vr.to} 区间损益（${vr.n} 天）` : '月累计损益';
 
@@ -1609,7 +1609,21 @@ S['t4-chday'] = () => {
 };
 
 // ---------- 邮件发送：收件人清单（服务端保存，多端共用）+ 按各自范围生成套表并逐人发送 ----------
-const T4_EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const T4_EMAIL_RE = /^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$/;
+function t4ValidateContacts(list) {
+  if (!Array.isArray(list) || list.length > 1000) throw new Error('通讯录最多保存 1000 位联系人');
+  const seen = new Set();
+  return list.map((r, i) => {
+    const name = String(r.name || '').trim(), email = String(r.email || '').trim(), scope = r.scope || 'all';
+    if (name.length > 100) throw new Error(`第 ${i + 1} 位联系人姓名不能超过 100 个字符`);
+    if (email.length > 254 || !T4_EMAIL_RE.test(email)) throw new Error(`第 ${i + 1} 位联系人邮箱无效`);
+    if (!T4_PROJ_OPTS.some(([k]) => k === scope)) throw new Error(`第 ${i + 1} 位联系人报表范围无效`);
+    if (seen.has(email.toLowerCase())) throw new Error(`邮箱重复：${email}，请合并或删除重复联系人`);
+    seen.add(email.toLowerCase());
+    return { name, email, scope, enabled: r.enabled !== false };
+  });
+}
+const t4ContactView = () => typeof CURS !== 'undefined' && CURS === 't4-contacts' ? 'contacts' : 'mail';
 // 常见服务商 SMTP 预设（授权码获取方式见 tip）
 const T4_SMTP_PRESETS = {
   dingtalk: { n: '钉钉邮箱（@dingtalk.com）', host: 'smtp.aliyun.com', port: 465, secure: 'ssl', tip: '钉钉邮箱由阿里邮箱托管，SMTP 服务器为 smtp.aliyun.com。网页版邮箱 → 设置 → 账户 → 开启 IMAP/SMTP 服务；若提供「客户端授权码/安全密码」则填它，否则填邮箱登录密码' },
@@ -1681,24 +1695,78 @@ async function t4MailLoad() {
       return r.json();
     };
     const [list, status] = await Promise.all([read('/api/t4/recipients'), read('/api/t4/mail/status')]);
-    st.list = Array.isArray(list) ? list : []; st.status = status;
+    if (!st.dirty) st.list = Array.isArray(list) ? list : [];
+    st.status = status;
   } catch (e) { st.status = null; st.error = String(e.message || e); }
   st.loaded = true; st.loading = false;
-  if (document.getElementById('t4MailSubject')) t4Go('mail');   // 仍在本页才刷新
+  if (document.getElementById('t4ContactSearch')) t4Go(t4ContactView());
 }
 // 把页面上的收件人表格与主题/附言读回状态
 function t4MailReadForm() {
   const names = document.querySelectorAll('[data-t4mailname]');
-  if (names.length) {
-    const val = (sel, i) => { const el = document.querySelector(`[${sel}="${i}"]`); return el ? el : {}; };
-    T4.mail.list = [...names].map(inp => { const i = inp.dataset.t4mailname; return {
-      name: inp.value.trim(), email: String(val('data-t4mailaddr', i).value || '').trim(),
-      scope: val('data-t4mailscope', i).value || 'all', enabled: !!val('data-t4mailon', i).checked }; });
-  }
+  const before = JSON.stringify(T4.mail.list);
+  const val = (sel, i) => document.querySelector(`[${sel}="${i}"]`) || {};
+  // 搜索仅显示部分联系人；按原索引更新，不能用过滤后的表格替换整个通讯录。
+  [...names].forEach(inp => { const i = +inp.dataset.t4mailname;
+    if (!T4.mail.list[i]) return;
+    T4.mail.list[i] = { name: inp.value.trim(), email: String(val('data-t4mailaddr', i).value || '').trim(),
+      scope: val('data-t4mailscope', i).value || 'all', enabled: !!val('data-t4mailon', i).checked };
+  });
+  if (before !== JSON.stringify(T4.mail.list)) T4.mail.dirty = true;
+  const newName = document.getElementById('t4MailNewName');
+  if (newName) T4.mail.newContact = { name: newName.value, email: (document.getElementById('t4MailNewAddr') || {}).value || '',
+    scope: (document.getElementById('t4MailNewScope') || {}).value || 'all' };
   const s = document.getElementById('t4MailSubject'); if (s) T4.mail.subject = s.value.trim();
   const b = document.getElementById('t4MailBody'); if (b) T4.mail.body = b.value.trim();
 }
-const t4MailSaveList = () => fetch('/api/t4/recipients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(T4.mail.list) });
+async function t4MailSaveList() {
+  const recipients = t4ValidateContacts(T4.mail.list);
+  const snapshot = JSON.stringify(T4.mail.list);
+  const response = await fetch('/api/t4/recipients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(recipients) });
+  const message = await response.text();
+  let result;
+  try { result = JSON.parse(message); } catch (_) { result = {}; }
+  if (!response.ok || result.ok !== true) throw new Error(result.error || message || `保存失败（${response.status}）`);
+  // 保存期间若有新编辑，保留本地草稿，不让较早的响应覆盖。
+  if (snapshot === JSON.stringify(T4.mail.list)) {
+    T4.mail.list = recipients; T4.mail.dirty = false;
+  }
+  return result;
+}
+async function t4SaveContacts() {
+  if (T4.mail.saving) return;
+  if (T4.mail.loading || !T4.mail.loaded || T4.mail.error) { toast('请先读取通讯录，再保存修改'); return; }
+  t4MailReadForm(); T4.mail.saving = true; T4.mail.saveError = '';
+  t4Go(t4ContactView());
+  try { await t4MailSaveList(); toast('通讯录已保存（多端共用）'); }
+  catch (e) { T4.mail.saveError = String(e.message || e); toast(`保存失败：${T4.mail.saveError}。编辑草稿已保留`, 6000); }
+  finally { T4.mail.saving = false; t4Go(t4ContactView()); }
+}
+function t4ContactsCard() {
+  const st = T4.mail, query = String(st.search || '').trim().toLowerCase(), draft = st.newContact || {};
+  const disabled = st.loading || !st.loaded || st.saving ? 'disabled' : '';
+  const opts = (v, attr) => `<select ${attr} ${disabled}>${T4_PROJ_OPTS.map(([k, n]) => `<option value="${k}" ${v === k ? 'selected' : ''}>${n}</option>`).join('')}</select>`;
+  const entries = st.list.map((r, i) => ({ r, i })).filter(({ r }) => !query || `${r.name || ''} ${r.email || ''}`.toLowerCase().includes(query));
+  const rows = entries.map(({ r, i }) => [
+    `<input type="checkbox" aria-label="启用联系人 ${i + 1}" data-t4mailon="${i}" ${r.enabled !== false ? 'checked' : ''} ${disabled}>`,
+    `<input type="text" aria-label="联系人 ${i + 1} 姓名" data-t4mailname="${i}" value="${H(r.name || '')}" maxlength="100" style="width:110px" ${disabled}>`,
+    `<input type="email" aria-label="联系人 ${i + 1} 邮箱" data-t4mailaddr="${i}" value="${H(r.email || '')}" maxlength="254" style="width:230px" ${disabled}>`,
+    opts(r.scope || 'all', `aria-label="联系人 ${i + 1} 报表范围" data-t4mailscope="${i}"`),
+    `<button class="btn sm" data-t4maildel="${i}" ${disabled}>删除</button>`]);
+  return '<div class="t4-contacts">' + cardp('查找联系人', `<label class="sel">姓名或邮箱 <input id="t4ContactSearch" type="search" value="${H(st.search || '')}" placeholder="搜索通讯录"></label>`)
+    + (st.saveError ? `<div class="note c" role="alert">${H(st.saveError)}。编辑草稿已保留，请修正后重试。</div>` : '')
+    + card(`通讯录（显示 ${entries.length} / ${st.list.length} 位${st.dirty ? '，有未保存修改' : ''}）`,
+      (rows.length ? table([{t:'启用'},{t:'姓名'},{t:'邮箱'},{t:'报表范围'},{t:'操作'}], rows) : `<div style="padding:14px">${st.loading ? '正在读取通讯录…' : query ? '没有匹配的联系人，可修改搜索条件。' : '还没有联系人，在下方添加。'}</div>`)
+      + `<div style="padding:14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input id="t4MailNewName" type="text" aria-label="新联系人姓名" placeholder="姓名" value="${H(draft.name || '')}" maxlength="100" style="width:110px" ${disabled}><input id="t4MailNewAddr" type="email" aria-label="新联系人邮箱" placeholder="邮箱" value="${H(draft.email || '')}" maxlength="254" style="width:230px" ${disabled}>${opts(draft.scope || 'all', 'id="t4MailNewScope" aria-label="新联系人报表范围"')}<button class="btn sm" data-t4act="mailAdd" ${disabled}>添加联系人</button></div>`)
+    + '<div class="note">添加、修改或删除后点“保存通讯录”。停用联系人仍保留；邮件只发给已启用的联系人。同一邮箱只保留一位联系人，报表范围可直接修改。</div></div>';
+}
+S['t4-contacts'] = () => {
+  const st = T4.mail;
+  if (!st.loaded && !st.loading) t4MailLoad();
+  return head('邮件通讯录', '按姓名或邮箱查找，维护联系人及默认报表范围。', '工具箱 · T4',
+    `<button class="btn" data-t4go="mail">返回邮件发送</button><button class="btn pri" data-t4act="mailSave" ${st.loading || !st.loaded || st.saving || st.error ? 'disabled' : ''}>${st.saving ? '正在保存…' : '保存通讯录'}</button>`)
+    + (st.error ? `<div class="note c" role="alert">${H(st.error)} <button class="btn sm" data-t4act="mailReload">重新读取</button></div>` : t4ContactsCard());
+};
 async function t4MailSend() {
   t4MailReadForm();
   const list = T4.mail.list.filter(r => r.enabled !== false && T4_EMAIL_RE.test(r.email || ''));
@@ -1706,7 +1774,7 @@ async function t4MailSend() {
   if (!(await t4SmtpEnsure())) return;
   const scopes = [...new Set(list.map(r => r.scope || 'all'))];
   const prev = T4.projFilter, payloads = {};
-  scopes.forEach(s => { T4.projFilter = s; payloads[s] = t4SuitePayload(); });   // 每个范围一份数据包
+  scopes.forEach(s => { T4.projFilter = s; payloads[s] = t4SuitePayload({ useViewRange: false }); });   // 每个范围一份数据包
   T4.projFilter = prev;
   toast(`正在生成 ${scopes.length} 份套表并发送给 ${list.length} 人，请稍候…`, 8000);
   try {
@@ -1727,27 +1795,18 @@ S['t4-mail'] = () => {
   if (!st.loaded && !st.loading) t4MailLoad();
   if (st.error) return head('邮件发送套表', '发件配置暂未加载。', '工具箱 · T4', '<button class="btn" data-t4go="sheet">← 返回损益表</button>')
     + `<div class="note c">${H(st.error)}</div>`;
-  const opts = (v, attr) => `<select ${attr}>${T4_PROJ_OPTS.map(([k, n]) => `<option value="${k}" ${v === k ? 'selected' : ''}>${n}</option>`).join('')}</select>`;
-  const rows = st.list.map((r, i) => [
-    `<input type="checkbox" data-t4mailon="${i}" ${r.enabled !== false ? 'checked' : ''}>`,
-    `<input data-t4mailname="${i}" value="${H(r.name || '')}" placeholder="姓名" style="width:110px">`,
-    `<input data-t4mailaddr="${i}" value="${H(r.email || '')}" placeholder="邮箱" style="width:230px">`,
-    opts(r.scope || 'all', `data-t4mailscope="${i}"`),
-    `<button class="btn sm" data-t4maildel="${i}">删除</button>`]);
   const cfg = st.status;
   const cfgNote = !cfg ? '<div class="note">正在读取发件配置…</div>'
     : cfg.configured ? `<div class="note g"><b>发件配置已保存，请发送测试邮件验证：</b>${H(cfg.fromName ? cfg.fromName + ' ' : '')}${H(cfg.from)}（${H(cfg.host)}:${H(String(cfg.port))}）</div>`
     : `<div class="note c"><b>发件邮箱尚未配置。</b>在下方选择服务商、填写发件账号和授权码后点「保存配置」，再发一封测试邮件确认。</div>`;
-  return head('邮件发送套表', '维护收件人清单，每人指定报表范围（全部 / 澳乐 / 瑞眠）；发送时按范围各生成一份套表工作簿，逐人附上对应的那份。', '工具箱 · T4',
-    '<button class="btn" data-t4go="sheet">← 返回损益表</button><button class="btn" data-t4act="mailSave">保存收件人</button><button class="btn pri" data-t4act="mailSend">生成并发送</button>')
+  return head('邮件发送套表', '维护收件人清单，每人指定报表范围（全部 / 澳乐 / 瑞眠 / 橘农）；发送时按范围各生成一份套表工作簿，逐人附上对应的那份。', '工具箱 · T4',
+    '<button class="btn" data-t4go="sheet">← 返回损益表</button><button class="btn" data-t4go="contacts">通讯录</button><button class="btn" data-t4act="mailSave">保存通讯录</button><button class="btn pri" data-t4act="mailSend">生成并发送</button>')
     + cfgNote
     + t4SmtpCard(cfg)
-    + card(`收件人清单（${st.list.length}）`,
-      (rows.length ? table([{t:'启用'},{t:'姓名'},{t:'邮箱'},{t:'报表范围'},{t:''}], rows) : '<div class="mut" style="padding:14px 14px 0">还没有收件人，在下面添加。</div>')
-      + `<div style="padding:11px 14px;display:flex;gap:7px;align-items:center;flex-wrap:wrap"><input id="t4MailNewName" placeholder="姓名" style="width:110px"><input id="t4MailNewAddr" placeholder="邮箱" style="width:230px">${opts('all', 'id="t4MailNewScope"')}<button class="btn sm" data-t4act="mailAdd">添加</button><span class="mut" style="font-size:11px">停用的收件人保留在清单但不发送</span></div>`)
+    + t4ContactsCard()
     + cardp('邮件内容', `<label class="sel" style="display:block;margin-bottom:8px">主题 <input id="t4MailSubject" value="${H(st.subject || `T4 日损益套表 · ${T4.period}`)}" style="width:440px"></label>`
       + `<label class="sel" style="display:block">附言 <input id="t4MailBody" value="${H(st.body || '')}" placeholder="可选，写在正文开头" style="width:440px"></label>`
-      + '<div class="mut" style="margin-top:8px;font-size:11px">正文自动附上期间、报表范围、生成时间；附件为该收件人范围的套表 .xlsx（总表→事业部→渠道逐日明细）。</div>')
+      + '<div class="mut" style="margin-top:8px;font-size:11px">邮件附件固定为当前期间的全月套表，不受损益表的起止日期筛选影响。正文附上期间、报表范围和生成时间。</div>')
     + (st.result ? card('发送结果', table([{t:'收件人'},{t:'范围'},{t:'结果'}],
         st.result.map(x => [H(x.name || x.to || ''), H(x.scopeName || ''), x.ok ? pill('已发送', 'ok') : `<span class="red">${H(x.error || '失败')}</span>`]))) : '');
 };
@@ -1848,9 +1907,11 @@ S['t4-rules'] = () => head('T4 取数口径', '以下规则来自用户提供的
   + '<div class="note"><b>重复导入是幂等的：</b>每次先清除该文件类型上次写入的字段，再写入本次结果；不同来源不会互相覆盖。</div>';
 
 // 套表数据包：按当前项目筛选裁剪（全部/澳乐/瑞眠），交给服务端 Python 生成多 Sheet 工作簿
-function t4SuitePayload() {
+function t4SuitePayload(options = {}) {
   t4Load();
-  const days = t4Days(), scope = T4.projFilter;
+  const range = options.useViewRange ? t4ViewRange() : null;
+  const from = range ? range.from : t4Date(1), to = range ? range.to : t4Date(t4Days());
+  const dates = t4RangeDates(from, to), days = dates.length, scope = T4.projFilter;
   const scopeName = (T4_PROJ_OPTS.find(o => o[0] === scope) || T4_PROJ_OPTS[0])[1];
   const chs = t4ProjCH();
   const full = t4TreeNodes()[0];
@@ -1862,20 +1923,20 @@ function t4SuitePayload() {
   const dailyByCh = {}, monthByCh = {};
   chs.forEach(c => {
     const arr = [];
-    for (let d = 1; d <= days; d++) {
-      const dt = t4Date(d), g = t4DayData(c.id, dt);
-      const o = { has: t4DayHasIncome(c.id, dt) || t4MgmtDaily(c.id).any };
-      T4_INPUT_KEYS.forEach(k => { o[k] = R6(g[k]); });
+    dates.forEach(dt => {
+      const g = t4DayData(c.id, dt);
+      const o = { has: t4HasInputs(t4Raw(c.id, dt)) || t4MgmtDaily(c.id).any };
+      T4_METRICS.forEach(({ k }) => { o[k] = R6(g[k]); });
       arr.push(o);
-    }
+    });
     dailyByCh[c.id] = arr;
-    const m = t4Month(c.id);
+    const m = range ? t4RangeData(c.id, from, to) : t4Month(c.id);
     monthByCh[c.id] = Object.fromEntries(T4_METRICS.map(x => [x.k, R(m[x.k])]));
   });
-  return { period: T4.period, days, scope, scopeName, generated: new Date().toLocaleString('zh-CN'),
+  return { period: T4.period, days, dates, from, to, rangeLabel: `${from} ～ ${to}`, scope, scopeName, generated: new Date().toLocaleString('zh-CN'),
     metrics: T4_METRICS.map(m => ({ k: m.k, n: m.n.trim(), lvl: m.lvl || 0, pct: !!m.pct })),
     inputKeys: T4_INPUT_KEYS,
-    channels: chs.map(c => ({ id: c.id, name: c.n, project: t4Project(c.bu), bu: c.bu, buName: t4BuName(c.bu), filled: t4Filled(c.id) })),
+    channels: chs.map(c => ({ id: c.id, name: c.n, project: t4Project(c.bu), bu: c.bu, buName: t4BuName(c.bu), filled: t4FilledRange(c.id, from, to) })),
     tree: roots.map(mkNode), dailyByCh, monthByCh };
 }
 
@@ -1899,7 +1960,7 @@ function t4SuiteClientWorkbook(payload) {
     while (used.has(name)) name = `${base.slice(0, 25)}~${i++}`;
     used.add(name); return name;
   };
-  const meta = title => [[{ h: title }], [`期间：${payload.period}`, `范围：${payload.scopeName}`, `生成：${payload.generated}`], []];
+  const meta = title => [[{ h: title }], [`日期：${payload.rangeLabel || payload.period}`, `范围：${payload.scopeName}`, `生成：${payload.generated}`], []];
 
   const summary = meta(`财务中心 · T4 日损益套表（${payload.scopeName}）`);
   // 总表采用标准利润表方向：损益科目纵向，组织层级横向。
@@ -1939,8 +2000,8 @@ function t4SuiteClientWorkbook(payload) {
 
   payload.channels.forEach(ch => {
     const rows = meta(`${ch.name} · 每日利润表`);
-    rows.push([{ h: '损益项目' }, { h: '合计' }, ...Array.from({ length: payload.days }, (_, i) => ({ h: `${i + 1}日` }))]);
-    const daily = Array.from({ length: payload.days }, (_, i) => t4DayData(ch.id, t4Date(i + 1)));
+    rows.push([{ h: '损益项目' }, { h: '合计' }, ...Array.from({ length: payload.days }, (_, i) => ({ h: (payload.dates || [])[i] || `${i + 1}日` }))]);
+    const daily = payload.dailyByCh[ch.id] || [];
     payload.metrics.forEach(m => rows.push([m.n, val((payload.monthByCh[ch.id] || {})[m.k], m.pct),
       ...daily.map((day, i) => (payload.dailyByCh[ch.id] || [])[i]?.has ? val(day[m.k], m.pct) : '')]));
     sheets.push({ name: sheetName(ch.name), rows });
@@ -1950,18 +2011,18 @@ function t4SuiteClientWorkbook(payload) {
 
 // 导出整套报表：优先服务端生成带公式/超链接的工作簿；接口不可用时在浏览器生成多 Sheet xlsx。
 async function t4ExportSuite() {
-  const payload = t4SuitePayload();
+  const payload = t4SuitePayload({ useViewRange: true });
   toast('正在生成套表工作簿…');
   try {
     const res = await fetch('/api/t4/suite', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     if (!res.ok) throw new Error((await res.text()).slice(0, 200));
     const blob = await res.blob();
-    downloadBlob(`T4日损益套表_${payload.scopeName}_${payload.period}.xlsx`, blob);
-    toast(`套表已生成：${payload.scopeName} · ${payload.channels.length} 个渠道（总表/渠道对比/逐日明细）`, 4500);
+    downloadBlob(`T4日损益套表_${payload.scopeName}_${payload.from}_${payload.to}.xlsx`, blob);
+    toast(`套表已生成：${payload.scopeName} · ${payload.rangeLabel} · ${payload.channels.length} 个渠道`, 4500);
   } catch (serverError) {
     try {
       const blob = t4SuiteClientWorkbook(payload);
-      downloadBlob(`T4日损益套表_${payload.scopeName}_${payload.period}.xlsx`, blob);
+      downloadBlob(`T4日损益套表_${payload.scopeName}_${payload.from}_${payload.to}.xlsx`, blob);
       toast(`套表已生成：${payload.scopeName} · ${payload.channels.length} 个渠道（浏览器多 Sheet 版）`, 5000);
     } catch (clientError) {
       toast(`套表生成失败：${clientError.message || clientError}；服务端：${serverError.message || serverError}`, 8000);
@@ -2041,38 +2102,88 @@ function t4DayExport() {
     ...daily.map((g, i) => has[i] ? fmt(g, metric) : ''), fmt(m, metric)]);
   download(`每日损益_${c.n}_${T4.period}.csv`, toCSV([hdr, ...rows])); toast('已导出每日损益明细');
 }
+function t4ExportSelection() {
+  const range = t4ViewRange();
+  return { from: range ? range.from : t4Date(1), to: range ? range.to : t4Date(t4Days()),
+    scopeName: (T4_PROJ_OPTS.find(([id]) => id === T4.projFilter) || T4_PROJ_OPTS[0])[1], channels: t4ProjCH(), range };
+}
+function t4RawExportRows() {
+  const selection = t4ExportSelection();
+  const fields = T4_INPUTS;
+  const rows = [['期间', '项目', '归属事业部', '渠道ID', '渠道', '日期', '来源类型', '来源代码', ...fields.map(f => f.n)]];
+  const names = { summaryIncome: '收入汇总导入', summaryCost: '成本汇总导入', summaryDaily: '收支汇总导入', daily: '日损益明细导入', sales: '销售单明细账导入', jdIncome: '京东收入导入', ztc: '直通车导入', cps: 'CPS导入', jzt: '京准通导入' };
+  const append = (c, dt, source, label, values) => {
+    if (!fields.some(f => values[f.k] != null && values[f.k] !== '')) return;
+    rows.push([T4.period, t4Project(c.bu), t4BuName(c.bu), c.id, c.n, dt, label, source,
+      ...fields.map(f => values[f.k] == null || values[f.k] === '' ? '' : values[f.k])]);
+  };
+  selection.channels.forEach(c => {
+    Object.keys(T4.data[c.id] || {}).sort().forEach(dt => {
+      if (dt < selection.from || dt > selection.to) return;
+      const raw = T4.data[c.id][dt];
+      if (!raw || typeof raw !== 'object') return;
+      const sources = Object.fromEntries(Object.entries(raw._fileParts || {}).map(([source, values]) => [source, { ...values }]));
+      const manual = {};
+      fields.forEach(({ k }) => {
+        if (raw[k] == null || raw[k] === '') return;
+        const source = raw._srcs && raw._srcs[k];
+        // 旧结构有逐字段来源时使用真实来源；已迁移的同名值不重复导出。
+        if (source) {
+          const values = sources[source] ||= {};
+          if (values[k] == null) values[k] = raw[k];
+        } else manual[k] = raw[k];
+      });
+      Object.entries(sources).forEach(([source, values]) => append(c, dt, source, names[source] || '文件导入', values));
+      append(c, dt, raw._src === 'file' && !raw._fileParts ? 'legacy-file' : 'manual',
+        raw._src === 'file' && !raw._fileParts ? '文件导入（旧记录，来源未细分）' : '人工录入 / 覆盖', manual);
+    });
+  });
+  return { selection, rows };
+}
+function t4RawExport() {
+  const { selection, rows } = t4RawExportRows();
+  if (rows.length === 1) { toast('当前项目和日期范围没有已保存的录入或导入数据'); return; }
+  const title = `T4录入导入数据_${selection.scopeName}_${selection.from}_${selection.to}.xlsx`;
+  const info = [['T4 录入与导入数据（按日归集）'], ['项目', selection.scopeName, '开始日期', selection.from, '结束日期', selection.to],
+    ['说明', '每行是一渠道、一天、一个来源的原始输入。包含人工覆盖与导入日汇总；空白与明确的 0 分开保留。'],
+    ['来源说明', '文件来源可能被人工输入或其他来源覆盖，各来源行不可直接相加当作最终损益。'],
+    ['数据范围', '系统未保留上传原文件的逐笔明细，本表不能还原原文件。参数推算、月度分摊等派生值请查看损益表。'], []];
+  try {
+    downloadBlob(title, XLSXWrite.build([{ name: '按日归集输入', rows: [...info, ...rows] }]));
+    toast(`已导出 ${rows.length - 1} 条按日归集输入，含各来源及人工覆盖`);
+  } catch (e) { toast(`导出失败：${e.message || e}`, 5200); }
+}
 function t4Export() {
+  const selection = t4ExportSelection(), { from, to, channels, range, scopeName } = selection;
+  const idsInView = new Set(channels.map(c => c.id));
   const hdr = ['期间','渠道','归属事业部','日期', ...T4_METRICS.map(x => x.n.trim()), '取数口径','来源'];
   const rows = [];
-  T4_CH.forEach(c => {
+  channels.forEach(c => {
     const md = t4MgmtDaily(c.id);
-    for (let d = 1; d <= t4Days(); d++) {
-      const dt = t4Date(d), r = t4Row(c.id, dt);
-      if (r) {
-        rows.push([T4.period,c.n,t4BuName(c.bu),dt, ...T4_METRICS.map(x => x.pct ? `${(r[x.k]*100).toFixed(2)}%` : (r[x.k] || 0).toFixed(2)),
-          r._hard.length ? `参数/硬推:${r._hard.join('/')}` : '实填', r._src === 'file' ? '文件' : '人工']);
-      } else if (md.any) {
-        // 无收入数据日：只计提管理费分摊
-        const e = Object.fromEntries(T4_METRICS.map(x => [x.k, 0]));
-        ['directLabor','directRent','directOther','sharedLabor','sharedRent','sharedOther','direct','indirect'].forEach(k => { e[k] = md[k]; });
-        e.contribution = -md.direct; e.netProfit = -(md.direct + md.indirect);
-        rows.push([T4.period,c.n,t4BuName(c.bu),dt, ...T4_METRICS.map(x => x.pct ? '0.00%' : (e[x.k] || 0).toFixed(2)), '管理费分摊（无收入数据日）','分摊']);
-      }
-    }
+    t4RangeDates(from, to).forEach(dt => {
+      const raw = t4Row(c.id, dt);
+      if (!raw && !md.any) return;
+      const r = raw || t4DayData(c.id, dt);
+      rows.push([T4.period,c.n,t4BuName(c.bu),dt, ...T4_METRICS.map(x => x.pct ? `${(r[x.k]*100).toFixed(2)}%` : (r[x.k] || 0).toFixed(2)),
+        raw ? (r._hard.length ? `参数/硬推:${r._hard.join('/')}` : '实填') : '管理费分摊（无收入数据日）',
+        raw ? (r._src === 'file' ? '文件' : '人工') : '分摊']);
+    });
   });
   rows.push([]);
   [
     ['特卖汇总','大电商事业部',T4_TMAI], ['大电商事业部汇总','大电商事业部',T4_BIG_ECOM],
-    ['拼多多事业部汇总','拼多多事业部',T4_PDD],
-    ['瑞眠事业部汇总','瑞眠事业部',T4_RUIMIAN],
-    ['橘农事业部汇总','橘农事业部',T4_ORANGE],
-    ['经销事业部汇总','经销事业部',T4_DEALER], ['全部汇总','全部',T4_ALL],
-  ].forEach(([n,bu,ids]) => {
-    const ok = t4SumOK(ids), m = ok ? t4Group(ids) : null;
-    rows.push([T4.period,n,bu,ok ? '' : `禁用：渠道取数天数极差 ${t4Gap(ids).gap} 天`,
+    ['拼多多事业部汇总','拼多多事业部',T4_PDD], ['瑞眠事业部汇总','瑞眠事业部',T4_RUIMIAN],
+    ['橘农事业部汇总','橘农事业部',T4_ORANGE], ['经销事业部汇总','经销事业部',T4_DEALER],
+    [T4.projFilter === 'all' ? '全部汇总' : `${scopeName}汇总`,scopeName,[...idsInView]],
+  ].forEach(([n,bu,group]) => {
+    const ids = group.filter(id => idsInView.has(id)); if (!ids.length) return;
+    const ok = range ? t4RangeOK(ids, from, to) : t4SumOK(ids);
+    const m = ok ? (range ? t4GroupRange(ids, from, to) : t4Group(ids)) : null;
+    const counts = ids.map(id => t4FilledRange(id, from, to)), gap = Math.max(...counts) - Math.min(...counts);
+    rows.push([T4.period,n,bu,ok ? `${from} ～ ${to}` : `禁用：渠道取数天数极差 ${gap} 天`,
       ...(ok ? T4_METRICS.map(x => x.pct ? `${(m[x.k]*100).toFixed(2)}%` : (m[x.k] || 0).toFixed(2)) : [])]);
   });
-  download(`渠道事业部日损益表_${T4.period}.csv`, toCSV([hdr, ...rows])); toast('已导出日损益明细');
+  download(`渠道事业部日损益表_${scopeName}_${from}_${to}.csv`, toCSV([hdr, ...rows])); toast('已按当前项目和日期导出日损益明细');
 }
 
 function t4Go(v, options) { go(v === 'overview' ? 't4' : `t4-${v}`, options); }
@@ -2086,6 +2197,7 @@ document.addEventListener('click', async e => {
   const nav = e.target.closest('[data-t4go]');
   if (nav) {
     const [v,ch] = nav.dataset.t4go.split(':');
+    if (document.getElementById('t4ContactSearch')) t4MailReadForm();
     if (ch && (v === 'sumimp' || v === 'summan')) T4.sumScope = ch;
     else if (ch && v === 'chday') T4.dayCh = ch;
     else if (ch) T4.editCh = ch;
@@ -2095,7 +2207,7 @@ document.addEventListener('click', async e => {
   if (field) { T4.chField = field.dataset.t4chfield; t4Go('channels', { resetScroll: true }); return; }
   const file = e.target.closest('[data-t4file]'); if (file) { t4PickFile(file.dataset.t4file); return; }
   const mdel = e.target.closest('[data-t4maildel]');
-  if (mdel) { t4MailReadForm(); T4.mail.list.splice(+mdel.dataset.t4maildel, 1); t4Go('mail'); return; }
+  if (mdel) { if (T4.mail.saving) return; t4MailReadForm(); T4.mail.list.splice(+mdel.dataset.t4maildel, 1); T4.mail.dirty = true; t4Go(t4ContactView()); return; }
   const tree = e.target.closest('[data-t4tree]');
   if (tree) { const id = tree.dataset.t4tree; T4.treeCollapsed[id] = !T4.treeCollapsed[id]; t4Go('sheet'); return; }
   const chdel = e.target.closest('[data-t4chdel]');
@@ -2176,16 +2288,20 @@ document.addEventListener('click', async e => {
   else if (a.dataset.t4act === 'sumImpCancel') { T4.imp = null; t4Go('sumimp'); }
   else if (a.dataset.t4act === 'sumImpRun') t4SummaryImpRun();
   else if (a.dataset.t4act === 'export') t4Export();
+  else if (a.dataset.t4act === 'rawExport') t4RawExport();
   else if (a.dataset.t4act === 'exportSuite') t4ExportSuite();
   else if (a.dataset.t4act === 'dayExport') t4DayExport();
   else if (a.dataset.t4act === 'mailAdd') {
+    if (T4.mail.loading || T4.mail.saving || !T4.mail.loaded) return;
     t4MailReadForm();
-    const g = id => (document.getElementById(id) || {}).value || '';
-    const name = g('t4MailNewName').trim(), email = g('t4MailNewAddr').trim(), scope = g('t4MailNewScope') || 'all';
-    if (!T4_EMAIL_RE.test(email)) { toast('请输入有效邮箱'); return; }
-    T4.mail.list.push({ name, email, scope, enabled: true }); t4Go('mail');
+    const draft = T4.mail.newContact || {};
+    const contact = { name: draft.name || '', email: draft.email || '', scope: draft.scope || 'all', enabled: true };
+    try { T4.mail.list = t4ValidateContacts([...T4.mail.list, contact]); }
+    catch (err) { T4.mail.saveError = err.message; toast(err.message, 5200); t4Go(t4ContactView()); return; }
+    T4.mail.dirty = true; T4.mail.newContact = {}; T4.mail.search = ''; T4.mail.saveError = ''; t4Go(t4ContactView());
   }
-  else if (a.dataset.t4act === 'mailSave') { t4MailReadForm(); t4MailSaveList().then(r => toast(r.ok ? '收件人已保存（服务端，多端共用）' : '保存失败')).catch(() => toast('保存失败：服务端不可达')); }
+  else if (a.dataset.t4act === 'mailSave') await t4SaveContacts();
+  else if (a.dataset.t4act === 'mailReload') { T4.mail.loaded = false; t4MailLoad(); }
   else if (a.dataset.t4act === 'mailSend') t4MailSend();
   else if (a.dataset.t4act === 'smtpSave') t4SmtpSave();
   else if (a.dataset.t4act === 'smtpTest') t4SmtpTest();
@@ -2274,4 +2390,10 @@ document.addEventListener('change', e => {
   else if (e.target.id === 't4SumDate') { T4.sumDate = e.target.value || t4Date(1); t4Go('summan'); }
   else if (e.target.id === 't4head' && T4.imp) { T4.imp.headRow = +e.target.value; T4.imp.map = t4AutoMap(T4.imp.rows[T4.imp.headRow] || [], T4_FILE_DEFS[T4.imp.fileK]); t4Go(T4.imp.mode === 'summary' ? 'sumimp' : 'imp'); }
   else if (e.target.dataset && e.target.dataset.t4map && T4.imp) { const k = e.target.dataset.t4map; if (e.target.value === '') delete T4.imp.map[k]; else T4.imp.map[k] = +e.target.value; t4Go(T4.imp.mode === 'summary' ? 'sumimp' : 'imp'); }
+});
+
+// 搜索前收回当前可见编辑，切换结果时保留其他联系人及新增草稿。
+document.addEventListener('input', e => {
+  if (e.target.id !== 't4ContactSearch') return;
+  t4MailReadForm(); T4.mail.search = e.target.value; t4Go(t4ContactView());
 });
