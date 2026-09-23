@@ -51,6 +51,7 @@ function client(server, withApp = false) {
   const requests = [];
   const storage = new Map();
   let nextSaveGate = null;
+  let nextSaveResponseError = null;
   function pauseNextSaveResponse() {
     let reached, release;
     const arrived = new Promise(resolve => { reached = resolve; });
@@ -64,8 +65,11 @@ function client(server, withApp = false) {
       requests.push({ method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : undefined });
       const gate = options.method === 'PUT' ? nextSaveGate : null;
       if (gate) nextSaveGate = null;
+      const responseError = options.method === 'PUT' ? nextSaveResponseError : null;
+      if (responseError) nextSaveResponseError = null;
       const response = await fetch(new URL(url, server.url), options);
       if (gate) { gate.reached(); await gate.resumed; }
+      if (responseError) throw responseError;
       return response;
     },
     window: {},
@@ -78,7 +82,9 @@ function client(server, withApp = false) {
     vm.runInContext(fs.readFileSync(path.join(ROOT, 't4.js'), 'utf8'), context);
     vm.runInContext(`T4.period='${PERIOD}'`, context);
   }
-  return { shared: context.window.T4Shared, requests, pauseNextSaveResponse, run: code => vm.runInContext(code, context) };
+  return { shared: context.window.T4Shared, requests, pauseNextSaveResponse,
+    failNextSaveResponse() { nextSaveResponseError = new Error('request timed out after server committed'); },
+    run: code => vm.runInContext(code, context) };
 }
 
 function workspace(row = { retailIncome: 20, retailCost: 10 }) {
@@ -101,6 +107,37 @@ test('two clients save different fields and receive the complete merged workspac
     assert.equal(Object.hasOwn(request.body, 'document'), false, 'shared saves must not replace a complete workspace');
     assert.ok(Array.isArray(request.body.changes));
   }
+});
+
+test('retrying after a lost save response preserves another device’s intervening changes', async t => {
+  const server = await service(t, workspace()), a = client(server), b = client(server);
+  await Promise.all([a.shared.load(), b.shared.load()]);
+  const before = copy(a.shared.state), adoc = copy(a.shared.state.document), bdoc = copy(b.shared.state.document);
+  adoc.periods[PERIOD].tmall[DAY].retailIncome = 100;
+  a.failNextSaveResponse();
+  await assert.rejects(a.shared.save(adoc, 'A'), /timed out/);
+  assert.deepEqual(copy(a.shared.state), before);
+  assert.equal((await server.request()).document.periods[PERIOD].tmall[DAY].retailIncome, 100);
+  bdoc.periods[PERIOD].tmall[DAY].retailCost = 200;
+  await b.shared.save(bdoc, 'B');
+  const retry = await a.shared.save(adoc, 'A');
+  assert.deepEqual(copy(retry.document.periods[PERIOD].tmall[DAY]), { retailIncome: 100, retailCost: 200 });
+});
+
+test('retrying an uncertain save cannot overwrite a newer edit to the same field', async t => {
+  const server = await service(t, workspace()), a = client(server), b = client(server);
+  await a.shared.load();
+  const before = copy(a.shared.state), adoc = copy(a.shared.state.document);
+  adoc.periods[PERIOD].tmall[DAY].retailIncome = 100;
+  a.failNextSaveResponse();
+  await assert.rejects(a.shared.save(adoc, 'A'), /timed out/);
+  await b.shared.load();
+  const bdoc = copy(b.shared.state.document);
+  bdoc.periods[PERIOD].tmall[DAY].retailIncome = 200;
+  await b.shared.save(bdoc, 'B');
+  await assert.rejects(a.shared.save(adoc, 'A'), error => error.code === 'field_conflict');
+  assert.deepEqual(copy(a.shared.state), before);
+  assert.equal((await server.request()).document.periods[PERIOD].tmall[DAY].retailIncome, 200);
 });
 
 test('real app defaults do not make edits to separate channels conflict', async t => {

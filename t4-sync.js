@@ -65,21 +65,49 @@
       ? `以下字段已被其他人修改：${paths}。本次输入已保留，请核对后再保存`
       : x.error === 'version_conflict' ? '共享数据正在更新，本次输入已保留，请稍后重试'
       : x.error === 'period_locked' ? `${(x.periods || []).join('、')} 已锁定，本次输入已保留`
+      : x.error === 'request_timeout' ? '共享数据请求超时，本次输入已保留，请检查连接后重试'
+      : x.error === 'invalid_response' ? '财务中心返回的数据不完整，本次输入已保留，请稍后重试'
       // 服务端按路径校验拒收时只回一句英文，用户看不出该改什么。
       : x.error === 'invalid change path' ? '数据结构不被共享存储接受（多为期间月份无效或本地遗留了无效的月份锁定）。本次输入已保留；请确认月份在 2000-01 至 2099-12 之间后重试'
       : status === 401 ? '未完成门户登录' : x.error || `保存失败 (${status})`;
     const e = new Error(message); e.status = status; e.code = x.error; e.response = x; return e;
   }
+  function validSnapshot(x) {
+    return object(x) && Number.isInteger(x.version) && x.version >= 0 && object(x.document) &&
+      ['periods', 'cfg', 'cfgByPeriod', 'periodLocks', 'importHistory'].every(key => !own(x.document, key) || object(x.document[key])) &&
+      ['channels', 'expenseItems'].every(key => !own(x.document, key) || Array.isArray(x.document[key]));
+  }
+  async function request(options = {}, timeout = 15000) {
+    let signal, timer;
+    if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+      signal = AbortSignal.timeout(timeout);
+    } else if (typeof AbortController !== 'undefined' && typeof setTimeout === 'function') {
+      const controller = new AbortController(); signal = controller.signal;
+      timer = setTimeout(() => controller.abort(), timeout);
+    }
+    try {
+      const r = await fetch('/api/t4/workspace', { cache: 'no-store', ...options, ...(signal ? { signal } : {}) });
+      const x = await r.json().catch(error => {
+        if (signal?.aborted) throw error;
+        if (r.ok) throw failure({ error: 'invalid_response' }, r.status);
+        return {};
+      });
+      if (r.ok && !validSnapshot(x)) throw failure({ error: 'invalid_response' }, r.status);
+      return { r, x: object(x) ? x : {} };
+    } catch (error) {
+      if (signal?.aborted) throw failure({ error: 'request_timeout' }, 0);
+      throw error;
+    } finally { if (timer !== undefined) clearTimeout(timer); }
+  }
   async function read() {
-    const signal = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
-      ? AbortSignal.timeout(15000) : undefined;
-    const r = await fetch('/api/t4/workspace', { cache: 'no-store', ...(signal ? { signal } : {}) });
-    if (!r.ok) throw failure(await r.json().catch(() => ({})), r.status);
-    return r.json();
+    const { r, x } = await request();
+    if (!r.ok) throw failure(x, r.status);
+    return x;
   }
   function accept(x) {
-    state.version = Number(x.version) || 0; state.found = x.found !== false;
-    state.document = clone(x.document || empty()); state.ready = true;
+    if (!validSnapshot(x) || x.version < state.version) throw failure({ error: 'invalid_response' }, 0);
+    state.version = x.version; state.found = x.found !== false;
+    state.document = clone(x.document); state.ready = true;
     return x;
   }
   function load(force = false) {
@@ -93,7 +121,7 @@
   // checked again for edits made while the request was in flight.
   function acceptRefresh(snapshot, expectedVersion) {
     if (!state.ready || state.loading || state.saving || state.version !== expectedVersion ||
-        !Number.isInteger(snapshot.version) || snapshot.version < state.version) return false;
+        !validSnapshot(snapshot) || snapshot.version < state.version) return false;
     accept(snapshot);
     return true;
   }
@@ -134,10 +162,9 @@
       for (let attempt = 0; attempt < 3; attempt++) {
         const changes = diff(latest.document, next);
         if (!changes.length) return accept(latest);
-        const r = await fetch('/api/t4/workspace', { method: 'PUT', cache: 'no-store',
+        const { r, x } = await request({ method: 'PUT',
           headers: { 'Content-Type': 'application/json', 'X-T4-User': user || 'portal-user' },
-          body: JSON.stringify({ baseVersion: latest.version, changes }) });
-        const x = await r.json().catch(() => ({}));
+          body: JSON.stringify({ baseVersion: latest.version, changes }) }, 30000);
         if (r.ok) return accept(x);
         if (!['field_conflict', 'version_conflict'].includes(x.error)) throw failure(x, r.status);
         // A failed conflict must leave the acknowledged snapshot untouched.

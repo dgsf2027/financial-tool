@@ -4,8 +4,8 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 
-function client(fetch) {
-  const context = { window: {}, fetch };
+function client(fetch, globals = {}) {
+  const context = { window: {}, fetch, ...globals };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 't4-sync.js'), 'utf8'), context);
   return context.window.T4Shared;
 }
@@ -49,4 +49,68 @@ test('a no-op with reordered object keys reads latest data without writing', asy
   await shared.save({ channels: [], cfg: { tmall: { b: 2, a: 1 } }, periods: {} }, 'A');
   assert.equal(calls.includes('PUT'), false);
   assert.equal(shared.state.version, 3);
+});
+
+test('an unresponsive write is bounded even without AbortSignal.timeout and releases saving for retry', async () => {
+  const callbacks = new Map(), delays = [];
+  const initial = { periods: {}, cfg: { value: 1 }, channels: [] };
+  let requests = 0, putSignal;
+  const shared = client(async (url, options = {}) => {
+    requests++;
+    if (requests === 2) {
+      putSignal = options.signal;
+      return new Promise((resolve, reject) => options.signal?.addEventListener('abort', () => reject(options.signal.reason)));
+    }
+    return response(requests > 2 ? { ...initial, cfg: { value: 2 } } : initial);
+  }, { AbortController, setTimeout(callback, delay) {
+    const id = delays.length + 1; delays.push(delay); callbacks.set(id, callback); return id;
+  }, clearTimeout(id) { callbacks.delete(id); } });
+  await shared.load();
+  const before = JSON.stringify(shared.state);
+  const draft = { ...initial, cfg: { value: 2 } };
+  const saving = shared.save(draft, 'A');
+  saving.catch(() => {});
+  await Promise.resolve();
+  assert.ok(putSignal, 'PUT must have an abort signal');
+  assert.equal(callbacks.size, 1);
+  assert.ok(delays.at(-1) > 0 && delays.at(-1) <= 30000);
+  [...callbacks.values()][0]();
+  await assert.rejects(saving, /超时|abort|timeout/i);
+  assert.equal(JSON.stringify(shared.state), before);
+  assert.equal(callbacks.size, 0);
+  await shared.save(draft, 'A');
+  assert.equal(shared.state.document.cfg.value, 2);
+  assert.equal(callbacks.size, 0);
+});
+
+test('a successful HTTP write with an invalid body cannot acknowledge an empty workspace', async () => {
+  const initial = { periods: {}, cfg: { value: 1 }, channels: [] };
+  for (const invalid of [null, {}, { version: 4 }, { version: 4, document: [] }, { version: -1, document: initial }]) {
+    let requests = 0;
+    const shared = client(async () => ++requests === 1 ? response(initial) : { ok: true, json: async () => invalid });
+    await shared.load();
+    const before = JSON.stringify(shared.state);
+    await assert.rejects(shared.save({ ...initial, cfg: { value: 2 } }, 'A'), error => error.code === 'invalid_response');
+    assert.equal(JSON.stringify(shared.state), before);
+  }
+  let requests = 0;
+  const shared = client(async () => ++requests === 1 ? response(initial) : {
+    ok: true, json: async () => { throw new SyntaxError('Unexpected token <'); },
+  });
+  await shared.load();
+  const before = JSON.stringify(shared.state);
+  await assert.rejects(shared.save({ ...initial, cfg: { value: 2 } }, 'A'), error => error.code === 'invalid_response');
+  assert.equal(JSON.stringify(shared.state), before);
+});
+
+test('invalid and older read snapshots retain the last confirmed workspace', async () => {
+  const initial = { periods: {}, cfg: { value: 1 }, channels: [] };
+  for (const snapshot of [{ version: 4 }, { version: 2, document: initial }, { version: 4, document: null }]) {
+    let requests = 0;
+    const shared = client(async () => ++requests === 1 ? response(initial) : { ok: true, json: async () => snapshot });
+    await shared.load();
+    const before = JSON.stringify(shared.state);
+    await assert.rejects(shared.load(true), error => error.code === 'invalid_response');
+    assert.equal(JSON.stringify(shared.state), before);
+  }
 });
