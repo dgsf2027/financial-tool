@@ -712,10 +712,12 @@ function t4Row(ch, dt) {
   if (!explicit.has('returnAmount') && cfg.returnRate != null) { r.returnAmount = r.retailIncome * cfg.returnRate; hard.push('returnAmount'); }
   if (!explicit.has('returnCost') && cfg.returnCostRate != null) { r.returnCost = (r.retailCost || 0) * cfg.returnCostRate; hard.push('returnCost'); }
   ['returnAmount','refundAmount','retailCost','returnCost','promotion','ztc','cps','research'].forEach(k => { if (r[k] == null) r[k] = 0; });
-  ['platformFee','platformOther','aftersales','logistics','warehouse','tax','directLabor','directRent','directOther','sharedLabor','sharedRent','sharedOther'].forEach(k => {
-    if (r[k] == null) r[k] = t4Assumed(ch, k, r.retailIncome, hard);
-  });
   r.salesIncome = r.retailIncome + r.returnAmount + r.refundAmount;
+  ['platformFee','platformOther','aftersales','logistics','warehouse','tax','directLabor','directRent','directOther','sharedLabor','sharedRent','sharedOther'].forEach(k => {
+    // Only platform commission uses net sales; the other agreed rates retain
+    // their retail-income base. Explicit imported/manual amounts still win.
+    if (r[k] == null) r[k] = t4Assumed(ch, k, k === 'platformFee' ? r.salesIncome : r.retailIncome, hard);
+  });
   r.salesCost = r.retailCost + r.returnCost;
   r.grossProfit = r.salesIncome - r.salesCost;
   r.grossMargin = r.salesIncome ? r.grossProfit / r.salesIncome : 0;
@@ -772,15 +774,22 @@ function t4Group(ids) {
   out.netMargin = out.salesIncome ? out.netProfit / out.salesIncome : 0;
   return out;
 }
-/* ---------- 区间视图：看板可选起止日期（限当前期间内），清空回整月累计 ---------- */
+/* ---------- 区间视图：当前月默认截至今天，历史月份默认整月 ---------- */
 const t4DayHasIncome = (ch, dt) => t4InputValue(t4Raw(ch, dt), 'retailIncome') != null;
-/* 当前生效的查看区间；两端都空视为整月，只填一端补齐月初/月末，跨期间旧选择作废 */
+function t4DefaultRangeEnd(now = new Date()) {
+  const current = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  return T4.period === current ? t4Date(now.getDate()) : t4Date(t4Days());
+}
+/* 当前月不提前累计未来的日摊；手选月末仍可查看整月预算。 */
 function t4ViewRange() {
   const val = v => (v && v.startsWith(T4.period + '-') ? v : '');
   let f = val(T4.viewFrom), t = val(T4.viewTo);
-  if (!f && !t) return null;
+  if (!f && !t) {
+    t = t4DefaultRangeEnd();
+    if (t === t4Date(t4Days())) return null;
+  }
   if (!f) f = t4Date(1);
-  if (!t) t = t4Date(t4Days());
+  if (!t) t = t4DefaultRangeEnd();
   if (t < f) t = f;
   return { from: f, to: t, n: t4RangeDays(f, t) };
 }
@@ -873,7 +882,7 @@ S.t4 = () => {
        <button class="btn sm" data-t4go="man:${c.id}">录入</button>`];
   });
   return head('T4　日损益表', `按底稿完整科目重算 ${T4_CH.length} 个渠道，并分别归集到大电商、拼多多、瑞眠、橘农和经销事业部。`, '工具箱 · 已更新',
-    t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="overview" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="选起止日期看区间损益，清空回整月累计" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="overview" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label>${t4ProjSelect('overview')}<button class="btn" data-t4go="sumimp:income">收入导入</button><button class="btn" data-t4go="sumimp:cost">成本导入</button><button class="btn" data-t4go="summan:income">收入录入</button><button class="btn" data-t4go="summan:cost">成本录入</button><button class="btn" data-t4go="channels">渠道列表</button><button class="btn" data-t4go="rules">取数口径</button><button class="btn" data-t4go="mgmt">工资 / 费用分摊</button><button class="btn" data-t4go="cfg">参数</button><button class="btn" data-t4act="wipePeriod" title="清空当前期间全部渠道的收入/成本/费用数据；参数、管理费分摊和渠道列表不受影响">清空本期</button><button class="btn pri" data-t4go="sheet">看损益表</button>`))
+    t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="overview" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="当前月默认截至今天；选择月末可看整月" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="overview" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label>${t4ProjSelect('overview')}<button class="btn" data-t4go="sumimp:income">收入导入</button><button class="btn" data-t4go="sumimp:cost">成本导入</button><button class="btn" data-t4go="summan:income">收入录入</button><button class="btn" data-t4go="summan:cost">成本录入</button><button class="btn" data-t4go="channels">渠道列表</button><button class="btn" data-t4go="rules">取数口径</button><button class="btn" data-t4go="mgmt">工资 / 费用分摊</button><button class="btn" data-t4go="cfg">参数</button><button class="btn" data-t4act="wipePeriod" title="清空当前期间全部渠道的收入/成本/费用数据；参数、管理费分摊和渠道列表不受影响">清空本期</button><button class="btn pri" data-t4go="sheet">看损益表</button>`))
     + kpis([
       { k: '渠道', v: String(T4_CH.length), u: '个' },
       { k: '大电商', v: String(T4_BIG_ECOM.length), u: '个渠道' },
@@ -1482,6 +1491,9 @@ const T4_TREE_COLS = [
   ['operating', '运营费'], ['contribution', '边际毛利'], ['mgmt', '管理费'], ['netProfit', '净利润'], ['netMargin', '净利率', true],
 ];
 const t4TreeVal = (g, key) => key === 'mgmt' ? (g.direct || 0) + (g.indirect || 0) : (g[key] || 0);
+function t4PinnedTable(cols, rows, count = 1) {
+  return table(cols, rows).replace('<div class="tw">', `<div class="tw t4-pinned-${count === 2 ? 'two' : 'one'}" tabindex="0" aria-label="可左右滚动的表格，左侧字段固定">`);
+}
 function t4TreeCell(g, col) {
   const [key, , pct] = col;
   const v = t4TreeVal(g, key);
@@ -1514,7 +1526,7 @@ S['t4-sheet'] = () => {
   t4Load();
   const vr = t4ViewRange();
   const grpOf = ids => vr ? t4GroupRange(ids, vr.from, vr.to) : t4Group(ids);
-  const ctrl = t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="sheet" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="选起止日期看区间损益，清空回整月累计" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="sheet" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label>${t4ProjSelect('sheet')}<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="sheetMode">${T4.sheetMode === 'tree' ? '切换明细表' : '切换树视图'}</button><button class="btn" data-t4go="chday">每日明细</button><button class="btn" data-t4act="export">导出本表</button><button class="btn" data-t4go="mail">邮件发送</button><button class="btn pri" data-t4act="exportSuite">导出套表</button>`);
+  const ctrl = t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="sheet" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="当前月默认截至今天；选择月末可看整月" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="sheet" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label>${t4ProjSelect('sheet')}<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="sheetMode">${T4.sheetMode === 'tree' ? '切换明细表' : '切换树视图'}</button><button class="btn" data-t4go="chday">每日明细</button><button class="btn" data-t4act="export">导出本表</button><button class="btn" data-t4go="mail">邮件发送</button><button class="btn pri" data-t4act="exportSuite">导出套表</button>`);
   const desc = vr ? `${vr.from} ～ ${vr.to}（${vr.n} 天）区间损益。` : '渠道月累计损益。';
   const title = vr ? `${vr.from} ～ ${vr.to} 区间损益（${vr.n} 天）` : '月累计损益';
 
@@ -1539,7 +1551,7 @@ S['t4-sheet'] = () => {
     roots.forEach(n => walk(n, []));
     const headers = [{ t: '项目 / 事业部 / 渠道' }, ...T4_TREE_COLS.map(c => ({ t: c[1], n: 1 }))];
     return head('渠道事业部日损益表', desc + '按 项目→事业部→渠道 逐层汇总，父级为子级之和；点名称前的三角可折叠。', '工具箱 · T4', ctrl)
-      + card(title + ' · 树视图', table(headers, rows))
+      + card(title + ' · 树视图', t4PinnedTable(headers, rows))
       + `<div class="note c"><b>红线口径：</b>京东自营零售成本、退货金额和退货成本来自底稿设定比例；管理费为直接+间接合计。比例与分摊可在「参数」「管理费分摊」中修改。</div>`;
   }
 
@@ -1553,7 +1565,7 @@ S['t4-sheet'] = () => {
     return [name, ...vals];
   });
   return head('渠道事业部日损益表', desc + '按渠道逐列展开损益科目；事业部与全部汇总见「树视图」。', '工具箱 · T4', ctrl)
-    + card(title, table(headers, rows))
+    + card(title, t4PinnedTable(headers, rows))
     + `<div class="note c"><b>红线口径：</b>京东自营零售成本、退货金额和退货成本仍来自底稿设定比例，不是平台原始数据；所有比例与月度分摊可在「参数」中审阅和修改。</div>`;
 };
 
@@ -1754,7 +1766,7 @@ S['t4-cfg'] = () => {
         : '<div class="mut" style="padding:14px 14px 0">暂无费用规则；用下方「添加费用规则」为本渠道设置分摊。</div>')
       + `<div style="padding:11px 14px;display:flex;gap:7px;align-items:center;flex-wrap:wrap">${addCtrl}<span style="flex:1"></span><button class="btn sm pri" data-t4act="cfgSave">保存参数</button></div>`, '', `t4-cfg:${c.id}`);
   }).join('');
-  return head('T4 参数', '比例基于每日零售收入；月度金额按当月自然日平均分摊。可为每个渠道单独添加费用分摊规则；直接/间接管理费用请在「管理费分摊」页维护。', '工具箱 · T4',
+  return head('T4 参数', '平台扣点按每日销售收入（零售收入加退货、退款的负数金额）计算；其他费率仍按零售收入。月度金额按当月自然日平均分摊；直接/间接管理费用在「工资 / 费用分摊」页维护。', '工具箱 · T4',
     `<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="cfgReset">恢复底稿值</button><button class="btn pri" data-t4act="cfgSave">保存参数</button>`)
     + '<div class="note w"><b>修改会影响所有对应日期的派生结果。</b>人工录入的同名科目优先于参数值。添加规则后填入数值并「保存参数」生效。</div>' + blocks;
 };
@@ -1763,7 +1775,7 @@ S['t4-mgmt'] = () => {
   t4Load();
   const days = t4Days();
   let from = T4.mgmtFrom.startsWith(T4.period + '-') ? T4.mgmtFrom : t4Date(1);
-  let to = T4.mgmtTo.startsWith(T4.period + '-') ? T4.mgmtTo : t4Date(days);
+  let to = T4.mgmtTo.startsWith(T4.period + '-') ? T4.mgmtTo : t4DefaultRangeEnd();
   if (to < from) to = from;
   const rangeN = t4RangeDays(from, to);
   const rows = T4_CH.map(c => {
@@ -1779,8 +1791,8 @@ S['t4-mgmt'] = () => {
     t4PeriodControl(`<label class="sel">起 <input id="t4MgmtFrom" type="date" min="${t4Date(1)}" max="${t4Date(days)}" value="${from}" style="width:132px"></label><label class="sel">止 <input id="t4MgmtTo" type="date" value="${to}" min="${from}" max="${t4Date(days)}" style="width:132px"></label><button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="mgmtTemplate">下载模板</button><button class="btn" data-t4act="payrollPick">导入工资底稿</button><button class="btn" data-t4act="mgmtPick">导入费用分摊表</button><button class="btn pri" data-t4act="mgmtSave" ${t4IsPeriodLocked() ? 'disabled' : ''}>保存分摊</button>`))
     + t4AllocationPreview()
     + '<div class="note">工资底稿按“店铺直接人工 + 企业社保直接”取直接人工，按“公摊人工 + 企业社保间接”取人力公摊；已有同名分摊合计列时直接取合计。导入后先核对预览再写入本月。</div>'
-    + card(`月度分摊金额（元/月） · 区间 ${from} ～ ${to}（${rangeN} 天）`, table(
-      [{t:'归属事业部'},{t:'渠道'}, ...T4_MGMT_FIELDS.map(([,n]) => ({t:n,n:1})), {t:'月合计',n:1},{t:'折算每日',n:1},{t:`区间合计（${rangeN} 天）`,n:1}], rows))
+    + card(`月度分摊金额（元/月） · 区间 ${from} ～ ${to}（${rangeN} 天）`, t4PinnedTable(
+      [{t:'归属事业部'},{t:'渠道'}, ...T4_MGMT_FIELDS.map(([,n]) => ({t:n,n:1})), {t:'月合计',n:1},{t:'折算每日',n:1},{t:`区间合计（${rangeN} 天）`,n:1}], rows, 2))
     + '<div class="note"><b>口径：</b>直接管理费用 = 直接人工 + 直接租金物业 + 直接其他管理；间接管理费用 = 人力公摊 + 房租水电公摊 + 其他公摊。每日分摊额 = 月度金额 ÷ 当月自然日，分摊数据按月份独立保存；某天人工或文件实填的同名科目优先于分摊值。修改立即影响对应日期的派生结果与汇总。</div>';
 };
 
@@ -2247,7 +2259,7 @@ document.addEventListener('change', e => {
   }
   else if (e.target.id === 't4MgmtFrom' || e.target.id === 't4MgmtTo') {
     if (T4_SERVER_LOADING || T4_SERVER_SAVING || (e.target.value && !e.target.value.startsWith(T4.period + '-'))) {
-      e.target.value = e.target.id === 't4MgmtFrom' ? (T4.mgmtFrom || t4Date(1)) : (T4.mgmtTo || t4Date(t4Days()));
+      e.target.value = e.target.id === 't4MgmtFrom' ? (T4.mgmtFrom || t4Date(1)) : (T4.mgmtTo || t4DefaultRangeEnd());
       toast('请在同步完成后选择本月内的日期；切换月份请用期间选择框'); return;
     }
     if (e.target.id === 't4MgmtFrom') T4.mgmtFrom = e.target.value || ''; else T4.mgmtTo = e.target.value || '';

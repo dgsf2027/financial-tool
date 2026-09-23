@@ -125,6 +125,13 @@ tr.tr3 .tnm{color:var(--text-2);font-weight:400}
 @media (max-width:1080px){.c2,.c21{grid-template-columns:1fr}}
 
 .tw{overflow:auto;max-height:62vh}
+.t4-pinned-one,.t4-pinned-two{isolation:isolate}
+.t4-pinned-one tr>:first-child,.t4-pinned-two tr>:first-child,.t4-pinned-two tr>:nth-child(2){position:sticky;left:0;z-index:1;background:var(--surface)}
+.t4-pinned-one tr>:first-child{min-width:220px;width:220px;max-width:220px;white-space:normal}
+.t4-pinned-two tr>:first-child{min-width:88px;width:88px;max-width:88px}
+.t4-pinned-two tr>:nth-child(2){left:88px;min-width:176px;width:176px;max-width:176px;white-space:normal;box-shadow:1px 0 var(--border)}
+.t4-pinned-one thead tr>:first-child,.t4-pinned-two thead tr>:first-child,.t4-pinned-two thead tr>:nth-child(2){z-index:3;background:var(--surface-2)}
+.t4-pinned-one tbody tr:hover>:first-child,.t4-pinned-two tbody tr:hover>:first-child,.t4-pinned-two tbody tr:hover>:nth-child(2){background:var(--surface-2)}
 table{border-collapse:collapse;width:100%;font-size:12px}
 th,td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap}
 thead th{background:var(--surface-2);font-weight:500;font-size:10.5px;color:var(--text-2);letter-spacing:.05em;position:sticky;top:0;z-index:2}
