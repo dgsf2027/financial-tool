@@ -124,6 +124,27 @@ test('an idle second client receives saved amounts, configuration and catalogs w
   assert.equal(a.renders.length, renders, 'an unchanged version does not redraw the page');
 });
 
+test('a clean editor announces a newer snapshot without replacing controls or advancing its save baseline', async t => {
+  const { a, b } = await pair(t), before = baseline(a), sharedBefore = acknowledged(a);
+  a.run("CURS='t4-cfg'");
+  b.run(`${row}.retailIncome=100`); await b.run('t4Save()');
+  const renders = a.renders.length;
+  assert.equal(await a.run('t4RefreshServer()'), false);
+  assert.equal(a.run(`${row}.retailIncome`), 20);
+  assert.equal(a.run('T4_PENDING_VERSION'), b.run('T4_SERVER_VERSION'));
+  assert.match(a.run('t4SyncStatus()'), /有共享更新/);
+  assert.deepEqual(baseline(a), before); assert.deepEqual(acknowledged(a), sharedBefore);
+  assert.equal(a.renders.length, renders);
+  assert.equal(a.requests.includes('PUT'), false);
+
+  assert.equal(await a.run('t4RefreshServer(true)'), true);
+  assert.equal(a.run(`${row}.retailIncome`), 100);
+  assert.equal(a.run('T4_SERVER_VERSION'), b.run('T4_SERVER_VERSION'));
+  assert.deepEqual(acknowledged(a), acknowledged(b));
+  assert.equal(a.renders.length, renders + 1);
+  assert.doesNotMatch(a.run('t4SyncStatus()'), /有共享更新/);
+});
+
 test('a local draft keeps its old baseline and still conflicts with another user on save', async t => {
   const { a, b } = await pair(t), before = baseline(a), sharedBefore = acknowledged(a);
   a.run(`${row}.retailIncome=200`);
@@ -278,7 +299,7 @@ test('clean return prefills follow a new snapshot on the form, off the form and 
     a.run(setup);
     const next = b.run(`-T4.data.tm_zzzrest['${DAY}'].rebateAmount`) + 100;
     b.run(`T4.data.tm_zzzrest['${DAY}'].rebateAmount=-${next}`); await b.run('t4Save()');
-    assert.equal(await a.run('t4RefreshServer()'), true);
+    assert.equal(await a.run("t4RefreshServer(CURS === 't4-returns')"), true);
     assert.equal(a.run('T4.returnEntry.amount'), String(next));
     a.run(`T4.period='${PERIOD}'; t4Load()`);
     await a.run('t4SaveReturn()');

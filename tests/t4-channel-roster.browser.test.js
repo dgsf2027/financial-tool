@@ -83,10 +83,11 @@ async function reloadChannels(page) {
   await enterChannels(page);
 }
 async function importWorkbook(page, file) {
+  const previousVersion = await page.evaluate(() => T4_SERVER_VERSION);
   const chooser = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: '导入渠道列表', exact: true }).click();
   await (await chooser).setFiles(file);
-  await page.waitForFunction(() => !T4_SERVER_SAVING && /已识别.*张渠道表/.test(document.getElementById('toast').textContent));
+  await page.waitForFunction(previous => T4_SERVER_VERSION > previous && !T4_SERVER_SAVING && /已识别.*张渠道表/.test(document.getElementById('toast').textContent), previousVersion);
 }
 async function workbook(page, rows) {
   const bytes = await page.evaluate(async rows => Array.from(new Uint8Array(await XLSXWrite.build([{ name: '渠道列表', rows }]).arrayBuffer())), rows);

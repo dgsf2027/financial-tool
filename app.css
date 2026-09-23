@@ -233,6 +233,10 @@ button:focus-visible,.btn:focus-visible,a:focus-visible{outline:2px solid var(--
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 
 /* ===== T4 日损益速算表 ===== */
+[data-t4-sync-status]{display:inline-grid;grid-template-columns:minmax(0,1fr) 112px;align-items:center;gap:6px;width:306px;max-width:100%;min-width:0;min-height:27px;flex-shrink:0}
+[data-t4-sync-label]{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;display:block}
+[data-t4-sync-action],[data-t4-sync-login]{box-sizing:border-box;width:112px;text-align:center;white-space:nowrap;grid-column:2;grid-row:1}
+[data-t4-sync-status] [hidden]{display:none}
 .t4cal{display:flex;gap:2px;flex-wrap:wrap;min-width:210px}
 .t4cal i{width:17px;height:17px;border-radius:3px;background:var(--surface-3);display:grid;place-items:center;font-size:8.5px;font-style:normal;color:var(--text-3);font-family:var(--f-mono)}
 .t4cal i.f{background:var(--good);color:#fff}

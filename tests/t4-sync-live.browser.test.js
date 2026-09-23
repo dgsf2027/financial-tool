@@ -65,6 +65,7 @@ async function clients(t, sameBrowser = false) {
 
 test('a channel saved in one tab does not make the other tab falsely dirty', { skip: !chromium }, async t => {
   const { a, b, puts } = await clients(t, true);
+  await b.evaluate(() => go('t4'));
   await a.evaluate(async () => { await t4SaveChannel({ id: 'tmall', n: '同步回归渠道', bu: T4_CHM.tmall.bu, aliases: '' }); });
   await b.evaluate(() => window.dispatchEvent(new Event('focus')));
   await b.waitForFunction(() => T4_CHM.tmall.n === '同步回归渠道', null, { timeout: 5000 });
@@ -73,8 +74,10 @@ test('a channel saved in one tab does not make the other tab falsely dirty', { s
 
 test('an idle second browser receives a colleague save through the real polling timer', { skip: !chromium }, async t => {
   const { a, b, puts } = await clients(t);
+  await b.evaluate(() => go('t4'));
   await a.evaluate(async () => { T4.cfg.tmall.platformFeeRate = 0.08; await t4SaveCfg(); });
   await b.waitForFunction(() => T4.cfg.tmall.platformFeeRate === 0.08, null, { timeout: 22000 });
+  await b.evaluate(() => go('t4-cfg'));
   assert.equal(await b.locator('[data-t4cfg="tmall:platformFeeRate"]').inputValue(), '8');
   assert.equal(puts[1], 0, 'receiving updates must not write to the workspace');
 });

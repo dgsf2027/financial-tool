@@ -95,8 +95,8 @@ test('the channel page renders its connection state and retry control as HTML', 
   const a = app();
   a.run("T4_SERVER_LAST_KEY = 'error:network';");
   const html = a.run("S['t4-channels']()");
-  assert.match(html, /<span class="pill p-wa">未能连接财务中心<\/span>/);
-  assert.match(html, /<button class="btn sm" data-t4act="retrySync">重新连接<\/button>/);
+  assert.match(html, /<span[^>]*class="pill p-wa"[^>]*>未能连接财务中心<\/span>/);
+  assert.match(html, /<button[^>]*data-t4act="retrySync">重新连接<\/button>/);
   assert.doesNotMatch(html, /&lt;(?:span|button)/);
 });
 
@@ -113,7 +113,7 @@ test('an unauthenticated channel page offers a working login route instead of on
   await a.run('t4LoadServer()');
   const html = a.run('rendered');
   assert.match(html, /请先登录财务中心/);
-  assert.match(html, /<a href="\/sso\/login" class="btn sm pri">登录财务中心<\/a>/);
+  assert.match(html, /<a[^>]*href="\/sso\/login" class="btn sm pri">登录财务中心<\/a>/);
   assert.match(html, /登录后.*财务中心/);
   assert.doesNotMatch(html, /data-t4act="retrySync"/);
   assert.equal(a.run('sessionExpired'), 1);
@@ -132,7 +132,7 @@ test('a service outage remains a connection error without a login instruction', 
   const html = a.run('rendered');
   assert.match(html, /未能连接财务中心/);
   assert.match(html, /data-t4act="retrySync"/);
-  assert.doesNotMatch(html, /href="\/sso\/login"/);
+  assert.match(html, /<a[^>]*href="\/sso\/login"[^>]* hidden>登录财务中心<\/a>/);
   assert.throws(() => a.run('t4RequireServerReady()'), /未能连接财务中心/);
 });
 

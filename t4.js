@@ -449,6 +449,8 @@ let T4_LOADED_PERIOD = '';
 let T4_SERVER_SAVING = false;
 let T4_PENDING_DRAFT = null;
 let T4_SERVER_REFRESHING = false;
+let T4_REFRESH_MANUAL = false;
+let T4_PENDING_VERSION = 0;
 let T4_REFRESH_TIMER = null;
 let T4_REFRESH_DEFERRED = false;
 let T4_REFRESH_REASON = '';
@@ -476,27 +478,49 @@ function t4RequireServerReady() {
   }
   throw new Error('共享数据未连接，本次修改未写入服务器');
 }
+function t4SyncStatusModel() {
+  const status = { text: '已连接财务中心', kind: 'ok', title: '每15秒后台检查共享数据；填写页不会自动刷新', action: 'refreshSync', button: '更新共享数据', login: false };
+  if (T4_SERVER_LOADING) return { ...status, text: '正在连接财务中心…', kind: 'mu', action: 'retrySync' };
+  if (T4_SERVER_ERROR?.status === 401) return { ...status, text: '请先登录财务中心', kind: 'wa', title: '登录后可继续保存，本页输入已保留', login: true };
+  if (!T4_SERVER_READY) return { ...status, text: '未能连接财务中心', kind: 'wa', title: '共享数据尚未加载，请重新连接', action: 'retrySync', button: '重新连接' };
+  if (T4_SERVER_ERROR) return { ...status, text: '连接中断', kind: 'wa', title: '当前显示上次共享数据，本页输入已保留，请检查连接后重试' };
+  if (T4_SERVER_REFRESHING && T4_REFRESH_MANUAL) return { ...status, text: '正在更新共享数据…', kind: 'mu' };
+  if (T4_REFRESH_DEFERRED) {
+    const resume = T4_REFRESH_DRAFT_ROUTE && CURS !== `t4-${T4_REFRESH_DRAFT_ROUTE}`;
+    return { ...status, text: '填写中 · 暂缓更新', kind: 'wa', title: T4_REFRESH_REASON,
+      ...(resume ? { action: 'resumeSyncDraft', button: '返回未完成编辑' } : {}) };
+  }
+  if (T4_PENDING_VERSION > T4_SERVER_VERSION) return { ...status, text: '有共享更新 · 点击更新', kind: 'wa', title: '本页保持不变；保存或取消未提交输入后，点击更新共享数据' };
+  if (T4_CACHE_ERROR) return { ...status, text: '本机缓存不可用', kind: 'wa', title: '共享数据已连接；关闭页面前请保存本次输入' };
+  return status;
+}
 function t4SyncStatusContent() {
-  if (T4_SERVER_LOADING) return pill('正在连接财务中心…', 'mu');
-  if (T4_SERVER_ERROR && T4_SERVER_ERROR.status === 401) {
-    return pill('请先登录财务中心', 'wa') + '<a href="/sso/login" class="btn sm pri">登录财务中心</a>';
-  }
-  if (T4_SERVER_READY) {
-    const refresh = '<button class="btn sm" data-t4act="refreshSync">更新共享数据</button>';
-    if (T4_SERVER_ERROR) return pill('连接中断，当前显示上次共享数据', 'wa') + refresh;
-    if (T4_SERVER_REFRESHING) return pill('正在更新共享数据…', 'mu');
-    const resume = T4_REFRESH_DEFERRED && T4_REFRESH_DRAFT_ROUTE && CURS !== `t4-${T4_REFRESH_DRAFT_ROUTE}`
-      ? '<button class="btn sm" data-t4act="resumeSyncDraft">返回未完成编辑</button>' : '';
-    const cache = T4_CACHE_ERROR ? pill('本机缓存不可用，关闭页面前请保存', 'wa') : '';
-    return pill(T4_REFRESH_DEFERRED ? H(T4_REFRESH_REASON) : '已连接财务中心 · 每15秒自动更新', T4_REFRESH_DEFERRED ? 'wa' : 'ok') + cache + resume + refresh;
-  }
-  const retry = T4_SERVER_LAST_KEY.startsWith('error:')
-    ? '<button class="btn sm" data-t4act="retrySync">重新连接</button>' : '';
-  return pill('未能连接财务中心', 'wa') + retry;
+  const s = t4SyncStatusModel();
+  return `<span data-t4-sync-label class="pill p-${s.kind}" title="${H(s.title)}" aria-label="${H(s.text + '。' + s.title)}">${H(s.text)}</span>` +
+    `<button type="button" data-t4-sync-action class="btn sm" data-t4act="${s.action}"${s.login ? ' hidden' : ''}>${H(s.button)}</button>` +
+    `<a data-t4-sync-login href="/sso/login" class="btn sm pri"${s.login ? '' : ' hidden'}>登录财务中心</a>`;
 }
 function t4SyncStatus() { return `<span data-t4-sync-status role="status">${t4SyncStatusContent()}</span>`; }
 function t4UpdateSyncStatus() {
-  document.querySelectorAll('[data-t4-sync-status]').forEach(el => { el.innerHTML = t4SyncStatusContent(); });
+  const s = t4SyncStatusModel();
+  document.querySelectorAll('[data-t4-sync-status]').forEach(el => {
+    const label = el.querySelector?.('[data-t4-sync-label]');
+    if (!label) { el.innerHTML = t4SyncStatusContent(); return; }
+    const button = el.querySelector('[data-t4-sync-action]'), login = el.querySelector('[data-t4-sync-login]');
+    // Keep the live nodes (including a focused button) and skip identical text.
+    if (label.textContent !== s.text) label.textContent = s.text;
+    if (label.className !== `pill p-${s.kind}`) label.className = `pill p-${s.kind}`;
+    if (label.title !== s.title) label.title = s.title;
+    const description = s.text + '。' + s.title;
+    if (label.getAttribute('aria-label') !== description) label.setAttribute('aria-label', description);
+    if (button.textContent !== s.button) button.textContent = s.button;
+    if (button.dataset.t4act !== s.action) button.dataset.t4act = s.action;
+    if (button.hidden !== s.login) button.hidden = s.login;
+    if (login.hidden === s.login) login.hidden = !s.login;
+  });
+}
+function t4IsEditorRoute(route = CURS) {
+  return !['t4', 't4-channels', 't4-sheet', 't4-chday', 't4-history', 't4-rules'].includes(route);
 }
 function t4ReturnDraftDirty() {
   const entry = T4.returnEntry;
@@ -521,6 +545,7 @@ function t4RefreshBlockedReason() {
   }
   const active = document.activeElement;
   if (active && (active.matches?.('input, textarea, select') || active.isContentEditable)) return '请先结束当前输入，再更新共享数据';
+  if (typeof viewPointerDown !== 'undefined' && viewPointerDown) return '当前正在操作，请完成后再更新共享数据';
   if (typeof CURS === 'string' && ['t4-channel-edit', 't4-source-edit', 't4-mail', 't4-contacts', 't4-clear'].includes(CURS)) return '当前正在编辑，请完成后返回概览更新共享数据';
   const edited = [...document.querySelectorAll('#view input, #view textarea, #view select')].some(el => {
     if (el.tagName === 'SELECT') {
@@ -548,7 +573,8 @@ async function t4RefreshServer(manual = false) {
     // acknowledging the response, so a retained draft can still use its old CAS.
   }
   const version = T4_SERVER_VERSION, documentBefore = T4_SERVER_DOCUMENT, period = T4.period, route = CURS;
-  T4_SERVER_REFRESHING = true; T4_REFRESH_DEFERRED = !!blocked; t4UpdateSyncStatus();
+  T4_SERVER_REFRESHING = true; T4_REFRESH_MANUAL = manual; T4_REFRESH_DEFERRED = !!blocked;
+  if (manual) t4UpdateSyncStatus();
   try {
     const snapshot = await window.T4Shared.readSnapshot();
     // Never advance the acknowledged baseline of a draft. A save, navigation,
@@ -563,6 +589,13 @@ async function t4RefreshServer(manual = false) {
       if (manual) toast(`连接已恢复，${changedDuringRead}`, 4200); return false;
     }
     if (!Number.isInteger(snapshot.version) || snapshot.version < version) return false;
+    if (!manual && t4IsEditorRoute(route) && snapshot.version > version) {
+      // Even a currently clean form is an editing surface. Do not replace its
+      // controls or acknowledge a different CAS baseline between keystrokes.
+      T4_PENDING_VERSION = Math.max(T4_PENDING_VERSION, snapshot.version);
+      T4_SERVER_ERROR = null; T4_SERVER_LAST_KEY = '';
+      return false;
+    }
     // The server is authoritative; a full/disabled browser cache must not block
     // accepting shared channels or parameters.
     if (snapshot.version !== version) t4SaveChOverrides(t4Clone(snapshot.document.channels || []));
@@ -583,7 +616,7 @@ async function t4RefreshServer(manual = false) {
       if (manual) toast(`共享数据未更新：${error.message || error}。当前输入已保留`, 5200);
     }
     return false;
-  } finally { T4_SERVER_REFRESHING = false; t4UpdateSyncStatus(); }
+  } finally { T4_SERVER_REFRESHING = false; T4_REFRESH_MANUAL = false; t4UpdateSyncStatus(); }
 }
 function t4StartAutoRefresh() {
   if (T4_REFRESH_TIMER !== null || typeof window.setInterval !== 'function') return;
