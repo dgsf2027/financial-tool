@@ -153,6 +153,7 @@ const T4_SOURCE_CHANNEL_NORM = Object.fromEntries(Object.entries(T4_SOURCE_CHANN
   .map(([name, id]) => [name.toLowerCase().replace(/[\s\-_—（）()]/g, ''), id]));
 /* 渠道表 = 内置基础表 + localStorage 覆盖层（渠道列表页可导入模板批量改名/调事业部/新增） */
 const T4_CHLIST_KEY = 'fsc_t4_channels_v2';
+const T4_EXPENSE_ITEMS_KEY = 'fsc_t4_expense_items_v1';
 let T4_CH = [], T4_CHM = {}, T4_TMAI = [], T4_BIG_ECOM = [], T4_PDD = [], T4_RUIMIAN = [], T4_ORANGE = [], T4_DEALER = [], T4_ALL = [];
 function t4ChOverrides() { try { const v = JSON.parse(localStorage.getItem(T4_CHLIST_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; } }
 function t4SaveChOverrides(list) { localStorage.setItem(T4_CHLIST_KEY, JSON.stringify(list)); }
@@ -261,6 +262,28 @@ const T4_METRICS = [
   { k: 'salesReceipt', n: '销售回款（仅记录）', lvl: 0 },
 ];
 
+// Keep the arrays themselves stable: the import, entry and export views share them.
+const T4_BASE_INPUTS = T4_INPUTS.slice();
+const T4_BASE_METRICS = T4_METRICS.slice();
+const t4OperatingKeys = () => T4_INPUTS.filter(f => f.g === '运营费用').map(f => f.k);
+function t4ApplyExpenseItems(items = []) {
+  T4.expenseItems = Array.isArray(items) ? items.filter(x => x && /^expense_[a-z0-9_]{1,64}$/.test(x.k)
+    && typeof x.n === 'string').map(x => ({ k: x.k, n: x.n })) : [];
+  const inputs = T4.expenseItems.map(x => ({ ...x, g: '运营费用' }));
+  const inputAt = T4_BASE_INPUTS.findIndex(f => f.g === '直接管理费用');
+  T4_INPUTS.splice(0, T4_INPUTS.length, ...T4_BASE_INPUTS.slice(0, inputAt), ...inputs, ...T4_BASE_INPUTS.slice(inputAt));
+  T4_INPUT_KEYS.splice(0, T4_INPUT_KEYS.length, ...T4_INPUTS.map(x => x.k));
+  const metricAt = T4_BASE_METRICS.findIndex(f => f.k === 'direct');
+  T4_METRICS.splice(0, T4_METRICS.length, ...T4_BASE_METRICS.slice(0, metricAt),
+    ...inputs.map(x => ({ k: x.k, n: '　' + x.n, lvl: 1 })), ...T4_BASE_METRICS.slice(metricAt));
+  // Dynamic daily columns remain available to standard imports as well.
+  for (const name of ['daily', 'summaryDaily']) {
+    const fields = T4_FILE_DEFS[name].fields;
+    const base = fields.filter(([k]) => !k.startsWith('expense_'));
+    fields.splice(0, fields.length, ...base, ...inputs.map(x => [x.k, x.n, [x.n]]));
+  }
+}
+
 /* 管理费 6 项月摊不再内置底稿默认值——统一在「管理费分摊」页由用户录入/导入维护 */
 const T4_CFG_DEFAULT = {
   tmall: { platformFeeRate: .05, platformOtherRate: .033, aftersalesRate: .009, logisticsRate: .08, warehouseRate: .02, taxRate: .01 },
@@ -365,6 +388,7 @@ function t4SanePeriodLocks(locks) {
   return { clean, dropped };
 }
 const T4 = { period: new Date().toISOString().slice(0, 7), data: {}, cfg: {}, editCh: 'tmall', imp: null, sumDate: '', sumTo: '', manFrom: '', manTo: '', sumScope: 'both', importHistory: {}, importFeedback: null, viewFrom: '', viewTo: '', mgmtFrom: '', mgmtTo: '', sheetMode: 'tree', treeCollapsed: {}, projFilter: 'all', dayCh: 'tmall',
+  expenseItems: [], expenseCh: 'tmall', expenseDate: '', expenseEdits: {}, channelDraft: null, expenseDraft: null, catalogError: '',
   mail: { list: [], status: null, loaded: false, loading: false, result: null, subject: '', body: '' } };
 
 // 项目筛选：全部 / 澳乐（大电商+拼多多+经销）/ 瑞眠
@@ -432,6 +456,7 @@ function t4ConfigForPeriod(doc, period) {
   return cfg;
 }
 function t4ApplyPeriod(doc) {
+  t4ApplyExpenseItems(doc.expenseItems || []);
   T4.data = t4Clone((doc.periods || {})[T4.period] || {});
   T4.cfg = t4ConfigForPeriod(doc, T4.period);
   T4.periodLocks = t4Clone(doc.periodLocks || {});
@@ -456,6 +481,7 @@ function t4ViewDocument(source = T4_SERVER_DOCUMENT) {
   doc.periodLocks = t4Clone(locks.clean);
   doc.channels = t4ChOverrides();
   doc.importHistory = t4Clone(T4.importHistory || {});
+  doc.expenseItems = t4Clone(T4.expenseItems);
   return doc;
 }
 function t4EntityKey() {
@@ -485,6 +511,7 @@ async function t4LoadServer() {
       migrated.periodLocks = t4Clone(T4.periodLocks || {});
       migrated.channels = t4ChOverrides();
       migrated.importHistory = t4Clone(T4.importHistory || {});
+      migrated.expenseItems = t4Clone(T4.expenseItems);
       const cloudLocks = T4_SERVER_DOCUMENT.periodLocks || {};
       const locked = typeof cloudLocks[T4.period] === 'boolean' ? cloudLocks[T4.period] : T4.period < t4CurrentMonth();
       if (locked) {
@@ -524,10 +551,12 @@ async function t4SaveServer(lockOnly = false) {
   doc.periodLocks = t4Clone(T4.periodLocks || {});
   doc.channels = t4ChOverrides();
   doc.importHistory = t4Clone(T4.importHistory || {});
+  doc.expenseItems = t4Clone(T4.expenseItems);
   const pendingBase = lockOnly ? t4Clone(T4_SERVER_BASELINE) : t4Clone(doc);
   pendingBase.periodLocks = t4Clone(doc.periodLocks); pendingBase.channels = t4Clone(doc.channels);
   pendingBase.importHistory = t4Clone(doc.importHistory);
-  const controls = [...document.querySelectorAll('[data-t4cfg], [data-t4mgmt], [data-t4cell], [data-t4sumcell], #t4Period')]
+  pendingBase.expenseItems = t4Clone(doc.expenseItems);
+  const controls = [...document.querySelectorAll('[data-t4cfg], [data-t4mgmt], [data-t4cell], [data-t4sumcell], [data-t4expense], #t4ExpenseCh, #t4ExpenseDate, [data-t4act="expenseSave"], #t4Period')]
     .map(input => ({ input, disabled: input.disabled }));
   controls.forEach(({ input }) => { input.disabled = true; });
   T4_SERVER_SAVING = true;
@@ -547,6 +576,7 @@ async function t4SaveServer(lockOnly = false) {
       T4.periodLocks = pending.periodLocks;
       T4.importHistory = pending.importHistory || {};
       t4SaveChOverrides(pending.channels); t4RebuildChannels();
+      t4ApplyExpenseItems(pending.expenseItems || []);
     }
     const all = t4Stored(T4_KEY, {}); all[T4.period] = T4.data;
     localStorage.setItem(T4_KEY, JSON.stringify(all));
@@ -554,6 +584,7 @@ async function t4SaveServer(lockOnly = false) {
     localStorage.setItem(T4_PERIOD_CFG_KEY, JSON.stringify(cfgs));
     localStorage.setItem(T4_LOCK_KEY, JSON.stringify(T4.periodLocks));
     localStorage.setItem(T4_IMPORT_HISTORY_KEY, JSON.stringify(T4.importHistory));
+    localStorage.setItem(T4_EXPENSE_ITEMS_KEY, JSON.stringify(T4.expenseItems));
     T4_SERVER_ERROR = null;
     return x;
   } catch (err) {
@@ -587,6 +618,7 @@ function t4Load() {
     T4_CH.forEach(c => { if (!T4.data[c.id]) T4.data[c.id] = {}; });
     return;
   }
+  t4ApplyExpenseItems(t4Stored(T4_EXPENSE_ITEMS_KEY, []));
   try {
     const all = JSON.parse(localStorage.getItem(T4_KEY) || '{}');
     T4.data = all[T4.period] || {};
@@ -601,6 +633,155 @@ function t4Load() {
   t4MigrateV1();
   t4MigrateFileParts();
   void t4LoadServer();
+}
+
+// Catalog edits save only their own top-level array. Nothing is changed locally
+// before field CAS succeeds; a rejected save therefore cannot leak into a later save.
+async function t4SaveCatalog(field, value) {
+  t4RequireServerReady();
+  if (!['channels', 'expenseItems'].includes(field)) throw new Error('不支持的目录');
+  const pendingView = t4ViewDocument(), before = t4Clone(T4_SERVER_BASELINE);
+  const candidate = t4Clone(T4_SERVER_DOCUMENT);
+  candidate[field] = t4Clone(value);
+  const controls = [...document.querySelectorAll('[data-t4act="channelSave"], [data-t4act="expenseItemSave"], #t4ChannelName, #t4ChannelBu, #t4ChannelAliases, #t4ExpenseName, #t4Period')]
+    .map(input => ({ input, disabled: input.disabled }));
+  controls.forEach(({ input }) => { input.disabled = true; });
+  T4_SERVER_SAVING = true;
+  try {
+    const saved = await window.T4Shared.save(candidate, (typeof CUR_USER === 'string' && CUR_USER) || 'portal-user', T4_SERVER_DOCUMENT);
+    T4_SERVER_VERSION = saved.version;
+    T4_SERVER_DOCUMENT = saved.document || candidate;
+    t4SaveChOverrides(t4Clone(T4_SERVER_DOCUMENT.channels || [])); t4RebuildChannels();
+    t4ApplyPeriod(T4_SERVER_DOCUMENT);
+    if (window.T4Shared.reapply) {
+      const pending = window.T4Shared.reapply(before, pendingView, T4_SERVER_BASELINE);
+      T4.data = pending.periods[T4.period]; T4.cfg = pending.cfgByPeriod[T4.period];
+      T4.periodLocks = pending.periodLocks;
+    }
+    localStorage.setItem(T4_EXPENSE_ITEMS_KEY, JSON.stringify(T4.expenseItems));
+    T4_SERVER_ERROR = null;
+    return saved;
+  } catch (err) {
+    if (err.status === 401) T4_SERVER_ERROR = err;
+    throw err;
+  } finally {
+    T4_SERVER_SAVING = false;
+    controls.forEach(({ input, disabled }) => { input.disabled = disabled; });
+  }
+}
+function t4CatalogName(value, what, limit) {
+  const name = String(value || '').trim();
+  if (!name || name.length > limit || /[\u0000-\u001f\u007f<>]/.test(name)) {
+    throw new Error(`${what}请输入 1～${limit} 个字，不能包含换行或尖括号`);
+  }
+  return name;
+}
+function t4NewCatalogId(prefix) {
+  const token = globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function'
+    ? globalThis.crypto.randomUUID().replace(/-/g, '') : Date.now().toString(36) + Math.random().toString(36).slice(2);
+  return prefix + token;
+}
+function t4ChannelCandidate(draft) {
+  const existing = draft.id && Object.hasOwn(T4_CHM, draft.id) ? T4_CHM[draft.id] : null;
+  if (draft.id && !existing) throw new Error('该渠道已不存在，请返回渠道列表重新选择');
+  const name = t4CatalogName(draft.n, '渠道名称', 80), bu = draft.bu;
+  if (!Object.hasOwn(T4_BU_META, bu)) throw new Error('请选择归属事业部');
+  const aliases = String(draft.aliases || '').split(/[\n,，;；、]/).map(x => x.trim()).filter(Boolean)
+    .map(x => t4CatalogName(x, '销售渠道别名', 80));
+  for (const label of [name, ...aliases]) {
+    const resolved = t4ResolveChannel(label);
+    if (resolved && resolved !== existing?.id) throw new Error(`「${label}」已属于其他渠道，请使用不同名称`);
+  }
+  const list = t4Clone(t4ChOverrides()), id = existing?.id || t4NewCatalogId('ch_');
+  const prior = list.find(c => c.id === id) || {};
+  const retained = [...(existing?.aliases || []), ...(prior.aliases || []), ...(existing && existing.n !== name ? [existing.n] : []), ...aliases];
+  const seen = new Set();
+  const entry = { ...prior, id, n: name, bu, aliases: retained.filter(alias => {
+    const norm = t4ChNorm(alias); if (norm === t4ChNorm(name) || seen.has(norm)) return false; seen.add(norm); return true;
+  }) };
+  const index = list.findIndex(c => c.id === id);
+  if (index < 0) list.push(entry); else list[index] = entry;
+  return { id, list };
+}
+async function t4SaveChannel(draft) {
+  t4RequireServerReady();
+  const candidate = t4ChannelCandidate(draft);
+  await t4SaveCatalog('channels', candidate.list);
+  return candidate.id;
+}
+async function t4SaveExpenseItem(draft) {
+  t4RequireServerReady();
+  const name = t4CatalogName(draft.n, '费用科目名称', 40), key = draft.k;
+  if (key && !T4.expenseItems.some(item => item.k === key)) throw new Error('该费用科目已不存在，请重新选择');
+  if (T4_METRICS.some(item => item.k !== key && t4ChNorm(item.n) === t4ChNorm(name))) throw new Error('该费用科目名称已存在');
+  if (!key && T4.expenseItems.length >= 100) throw new Error('最多支持 100 个自定义费用科目');
+  const list = t4Clone(T4.expenseItems), k = key || t4NewCatalogId('expense_');
+  const index = list.findIndex(item => item.k === k);
+  if (index < 0) list.push({ k, n: name }); else list[index] = { k, n: name };
+  await t4SaveCatalog('expenseItems', list);
+  return k;
+}
+
+S['t4-channel-edit'] = () => {
+  t4Load();
+  const draft = T4.channelDraft || { n: '', bu: 'dealer', aliases: '' }, current = T4_CHM[draft.id];
+  return head(current ? `修改渠道 · ${H(current.n)}` : '新增渠道', '渠道名称和归属保存后在各页面共用。改名会保留原名匹配，已有损益继续归属原渠道。', '工具箱 · T4',
+    '<button class="btn" data-t4go="channels">返回渠道列表</button>')
+    + (T4.catalogError ? `<div class="note c" role="alert">${H(T4.catalogError)}</div>` : '')
+    + cardp('渠道信息', `<div class="frow"><label>渠道名称 <input id="t4ChannelName" type="text" maxlength="80" value="${H(draft.n)}" style="width:min(320px,100%)"></label>
+      <label>归属事业部 <select id="t4ChannelBu" aria-label="归属事业部">${Object.entries(T4_BU_META).map(([id, meta]) => `<option value="${id}" ${id === draft.bu ? 'selected' : ''}>${H(meta.n)}</option>`).join('')}</select></label></div>
+      <div style="margin-top:14px"><label>新增销售渠道别名 <textarea id="t4ChannelAliases" class="t4in" rows="3" style="display:block;width:100%;max-width:600px;font-family:inherit;text-align:left;line-height:1.6" placeholder="可选，每行一个源文件里的销售渠道名称">${H(draft.aliases || '')}</textarea></label></div>
+      ${current?.aliases?.length ? `<p class="mut">已保留别名：${current.aliases.map(H).join('、')}</p>` : ''}
+      <div class="frow" style="margin-top:14px"><button class="btn pri" data-t4act="channelSave">保存渠道</button></div>`);
+};
+
+function t4RememberExpenseInputs() {
+  const fields = [...document.querySelectorAll('[data-t4expense]')];
+  if (!fields.length) return;
+  T4.expenseEdits[`${T4.expenseCh}:${T4.expenseDate}`] = Object.fromEntries(fields
+    .filter(el => el.value !== el.dataset.t4orig).map(el => [el.dataset.t4expense, el.value]));
+}
+S['t4-expenses'] = () => {
+  t4Load();
+  if (!T4_CHM[T4.expenseCh]) T4.expenseCh = T4_CH[0].id;
+  if (!T4.expenseDate.startsWith(T4.period + '-')) T4.expenseDate = t4Date(1);
+  const raw = t4Raw(T4.expenseCh, T4.expenseDate), draft = T4.expenseDraft;
+  const edits = T4.expenseEdits[`${T4.expenseCh}:${T4.expenseDate}`] || {};
+  const rows = T4_INPUTS.filter(f => f.g === '运营费用').map(f => {
+    const value = t4InputValue(raw, f.k), shown = value == null ? '' : value;
+    const entered = Object.hasOwn(edits, f.k) ? edits[f.k] : shown;
+    return [H(f.n), `<input type="number" class="t4in" style="width:140px;max-width:100%" step="0.01" data-t4expense="${f.k}" data-t4orig="${shown}" value="${H(entered)}" placeholder="—" aria-label="${H(f.n)}金额">`,
+      f.k.startsWith('expense_') ? `<button class="btn sm" data-t4expenseedit="${f.k}">修改名称</button>` : '<span class="mut">固定科目</span>'];
+  });
+  return head('运营费用', '按渠道和日期录入费用。自定义费用会计入运营费与净利润，并出现在每日明细和导出报表中。', '工具箱 · T4',
+    t4PeriodControl('<button class="btn" data-t4go="overview">返回</button><button class="btn" data-t4act="expenseItemNew">新增费用科目</button>'))
+    + (T4.catalogError ? `<div class="note c" role="alert">${H(T4.catalogError)}</div>` : '')
+    + (draft ? cardp(draft.k ? '修改费用科目名称' : '新增费用科目', `<div class="frow"><label>科目名称 <input id="t4ExpenseName" type="text" maxlength="40" value="${H(draft.n || '')}"></label><button class="btn pri" data-t4act="expenseItemSave">保存科目</button><button class="btn" data-t4act="expenseItemCancel">取消</button></div><p class="mut">修改名称保留已有金额。费用科目在所有渠道共用。</p>`) : '')
+    + `<div class="frow" style="margin:14px 0"><label>渠道 <select id="t4ExpenseCh" aria-label="渠道">${T4_CH.map(c => `<option value="${c.id}" ${c.id === T4.expenseCh ? 'selected' : ''}>${H(c.n)}</option>`).join('')}</select></label>
+      <label>日期 <input id="t4ExpenseDate" type="date" value="${T4.expenseDate}" min="${t4Date(1)}" max="${t4Date(t4Days())}"></label></div>`
+    + card(`${H(T4_CHM[T4.expenseCh].n)} · ${T4.expenseDate}`, table([{ t: '费用科目' }, { t: '当日金额（元）', n: 1 }, { t: '操作' }], rows))
+    + '<div class="note">留空取消手工覆盖，继续使用导入金额或参数计算值；填 0 表示该日确认为零。负数用于冲减费用。</div>'
+    + `<button class="btn pri" data-t4act="expenseSave" ${t4IsPeriodLocked() ? 'disabled' : ''}>保存当日费用</button>`;
+};
+async function t4SaveDailyExpenses(ch, date, entries) {
+  t4RequireServerReady(); t4AssertEditable();
+  if (!Object.hasOwn(T4_CHM, ch) || !t4RangeDates(t4Date(1), t4Date(t4Days())).includes(date)) throw new Error('请选择本月内的有效日期与渠道');
+  const keys = t4OperatingKeys(), changes = [];
+  entries.forEach(({ k, value, original }) => {
+    if (!keys.includes(k)) throw new Error('费用科目已变化，请刷新后重试');
+    const text = String(value ?? '').trim();
+    if (text === String(original ?? '')) return;
+    const amount = t4ImportAmount(text);
+    if (amount != null && !Number.isFinite(amount)) throw new Error('请填写有效金额');
+    changes.push({ k, amount });
+  });
+  if (!changes.length) return 0;
+  const previous = t4Clone(T4.data), raw = (T4.data[ch] ||= {})[date] || { _src: 'manual', _fileParts: {} };
+  changes.forEach(({ k, amount }) => { if (amount == null) delete raw[k]; else raw[k] = amount; });
+  raw._src = 'manual';
+  if (t4HasInputs(raw)) T4.data[ch][date] = raw; else delete T4.data[ch][date];
+  try { await t4Save(); } catch (err) { t4RestorePeriodData(previous); throw err; }
+  return changes.length;
 }
 function t4MigrateV1() {
   try {
@@ -834,7 +1015,8 @@ function t4Row(ch, dt) {
   r.salesCost = r.retailCost + r.returnCost;
   r.grossProfit = r.salesIncome - r.salesCost;
   r.grossMargin = r.salesIncome ? r.grossProfit / r.salesIncome : 0;
-  r.operating = ['platformFee','platformOther','promotion','ztc','cps','research','aftersales','logistics','warehouse','tax'].reduce((n, k) => n + r[k], 0);
+  T4.expenseItems.forEach(({ k }) => { if (r[k] == null) r[k] = 0; });
+  r.operating = t4OperatingKeys().reduce((n, k) => n + r[k], 0);
   r.direct = r.directLabor + r.directRent + r.directOther;
   r.contribution = r.grossProfit - r.operating - r.direct;
   r.contributionRate = r.salesIncome ? r.contribution / r.salesIncome : 0;
@@ -889,6 +1071,7 @@ function t4Group(ids) {
 }
 /* ---------- 区间视图：当前月默认截至今天，历史月份默认整月 ---------- */
 const t4DayHasIncome = (ch, dt) => t4InputValue(t4Raw(ch, dt), 'retailIncome') != null;
+const t4DayHasData = (ch, dt) => t4HasInputs(t4Raw(ch, dt));
 function t4DefaultRangeEnd(now = new Date()) {
   const current = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   return T4.period === current ? t4Date(now.getDate()) : t4Date(t4Days());
@@ -995,7 +1178,7 @@ S.t4 = () => {
        <button class="btn sm" data-t4go="man:${c.id}">录入</button>`];
   });
   return head('T4　日损益表', `按底稿完整科目重算 ${T4_CH.length} 个渠道，并分别归集到大电商、拼多多、瑞眠、橘农和经销事业部。`, '工具箱 · 已更新',
-    t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="overview" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="当前月默认截至今天；选择月末可看整月" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="overview" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label>${t4ProjSelect('overview')}<button class="btn" data-t4go="sumimp:both">收入成本导入</button><button class="btn" data-t4go="summan:both">收入成本录入</button><button class="btn" data-t4go="history">导入记录</button><button class="btn" data-t4go="returns">瑞眠 / 橘农返款</button><button class="btn" data-t4go="channels">渠道列表</button><button class="btn" data-t4go="rules">取数口径</button><button class="btn" data-t4go="mgmt">工资 / 费用分摊</button><button class="btn" data-t4go="cfg">参数</button><button class="btn" data-t4act="wipePeriod" title="清空当前期间全部渠道的收入/成本/费用数据；参数、管理费分摊和渠道列表不受影响">清空本期</button><button class="btn pri" data-t4go="sheet">看损益表</button>`))
+    t4PeriodControl(`<label class="sel">起 <input id="t4ViewFrom" data-view="overview" type="date" min="${t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.from : ''}" title="当前月默认截至今天；选择月末可看整月" style="width:132px"></label><label class="sel">止 <input id="t4ViewTo" data-view="overview" type="date" min="${vr ? vr.from : t4Date(1)}" max="${t4Date(t4Days())}" value="${vr ? vr.to : ''}" style="width:132px"></label>${t4ProjSelect('overview')}<button class="btn" data-t4go="sumimp:both">收入成本导入</button><button class="btn" data-t4go="summan:both">收入成本录入</button><button class="btn" data-t4go="history">导入记录</button><button class="btn" data-t4go="returns">瑞眠 / 橘农返款</button><button class="btn" data-t4go="channels">渠道列表</button><button class="btn" data-t4go="expenses">运营费用</button><button class="btn" data-t4go="rules">取数口径</button><button class="btn" data-t4go="mgmt">工资 / 费用分摊</button><button class="btn" data-t4go="cfg">参数</button><button class="btn" data-t4act="wipePeriod" title="清空当前期间全部渠道的收入/成本/费用数据；参数、管理费分摊和渠道列表不受影响">清空本期</button><button class="btn pri" data-t4go="sheet">看损益表</button>`))
     + kpis([
       { k: '渠道', v: String(T4_CH.length), u: '个' },
       { k: '大电商', v: String(T4_BIG_ECOM.length), u: '个渠道' },
@@ -1466,8 +1649,11 @@ function t4ChPickFile() {
     try {
       if (T4_SERVER_SAVING || T4_SERVER_LOADING) throw new Error('正在同步，请稍后再导入');
       t4RequireServerReady();
-      const r = t4ChApplySheets(await XLSXLite.readSheets(file));
-      await t4SaveServer(true);
+      const sheets = await XLSXLite.readSheets(file), previous = t4Clone(t4ChOverrides());
+      let r, channels;
+      try { r = t4ChApplySheets(sheets); channels = t4Clone(t4ChOverrides()); }
+      finally { t4SaveChOverrides(previous); t4RebuildChannels(); }
+      await t4SaveCatalog('channels', channels);
       t4Load(); T4.chField = '__sources'; t4Go('channels');
       const warn = r.bad.length ? `；注意：${r.bad.slice(0, 3).join('、')}` : '';
       toast(`已识别 ${r.sheets} 张渠道表：读取销售渠道 ${r.imported} 条，新增归集渠道 ${r.added}、映射销售渠道 ${r.mapped}、改名 ${r.renamed}、调事业部 ${r.moved}${warn}`, 5600);
@@ -1742,7 +1928,7 @@ S['t4-chday'] = () => {
   for (let d = 1; d <= days; d++) {
     const dt = t4Date(d);
     daily.push(t4DayData(c.id, dt));
-    hasData.push(t4DayHasIncome(c.id, dt) || t4MgmtDaily(c.id).any);
+    hasData.push(t4DayHasData(c.id, dt) || t4MgmtDaily(c.id).any);
   }
   const m = t4Month(c.id);
   // 合计列放最左（紧挨科目名）与最右各一列，两头都能直接看到
@@ -2019,7 +2205,7 @@ S['t4-channels'] = () => {
   if (T4.chField !== '__sources' && !fields.includes(T4.chField)) T4.chField = '';
   const tabs = (displayRows.length || fields.length) ? `<div class="tabs t4-channel-tabs" aria-label="渠道列表页面">${['', ...(displayRows.length ? ['__sources'] : []), ...fields].map(name =>
     `<button type="button" class="${T4.chField === name ? 'on' : ''}" data-t4chfield="${H(name)}" aria-pressed="${T4.chField === name}">${H(name === '__sources' ? '销售渠道' : name || '渠道清单')}</button>`).join('')}</div>` : '';
-  const actions = c => `<button class="btn sm" data-t4go="man:${H(c.id)}">录入</button> <button class="btn sm" data-t4go="chday:${H(c.id)}">明细</button>`;
+  const actions = c => `<button class="btn sm" data-t4chedit="${H(c.id)}">修改</button> <button class="btn sm" data-t4go="man:${H(c.id)}">录入</button> <button class="btn sm" data-t4go="chday:${H(c.id)}">明细</button>`;
   const rows = T4_CH.map(c => [
     `<span class="mono">${H(c.id)}</span>`, t4BuPill(c.bu), `<b>${H(c.n)}</b>`,
     (c.aliases || []).map(H).join('、') || '<span class="mut">—</span>',
@@ -2034,7 +2220,7 @@ S['t4-channels'] = () => {
     : card(`渠道清单（${T4_CH.length} 个）`, table([{t:'渠道ID'},{t:'归属事业部'},{t:'渠道汇总'},{t:'关联销售渠道'},{t:'来源'},{t:'操作'}], rows));
   const sourceCount = importedCount;
   return head('T4 渠道列表', `当前 ${T4_CH.length} 个归集渠道${sourceCount ? `，已关联 ${sourceCount} 个销售渠道` : ''}。自动识别表头、列顺序和 xlsx 内的渠道工作表；新增渠道自动接入录入、明细与汇总。每个附加字段生成同名页签。`, '工具箱 · T4',
-    t4SyncStatus() + '<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="chTemplate">下载当前列表</button><button class="btn pri" data-t4act="chPick">导入渠道列表</button>')
+    t4SyncStatus() + '<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="chTemplate">下载当前列表</button><button class="btn" data-t4act="chPick">导入渠道列表</button><button class="btn pri" data-t4act="channelNew">新增渠道</button>')
     + (T4_SERVER_ERROR && T4_SERVER_ERROR.status === 401 ? '<div class="note w">点击“登录财务中心”，进入门户登录后点“财务中心”，即可回到当前网址继续保存。</div>' : '')
     + tabs + content
     + '<div class="note"><b>导入规则：</b>至少包含「销售渠道」「渠道名称」或「渠道汇总」之一；支持每行一个渠道，也支持每列一个渠道。销售渠道按「渠道汇总」归集；未填汇总时按渠道名称匹配或新增。已有渠道未填事业部时保留原归属，新渠道未填时归经销并提示。附加字段按销售渠道保存，仅供查看；再次导入只更新文件中提供的渠道和字段，未提供的内容及历史损益保留。事业部支持大电商、拼多多、瑞眠、橘农、经销。</div>';
@@ -2075,7 +2261,7 @@ function t4SuitePayload(options = {}) {
     const arr = [];
     dates.forEach(dt => {
       const g = t4DayData(c.id, dt);
-      const o = { has: t4HasInputs(t4Raw(c.id, dt)) || t4MgmtDaily(c.id).any };
+      const o = { has: t4DayHasData(c.id, dt) || t4MgmtDaily(c.id).any };
       T4_METRICS.forEach(({ k }) => { o[k] = R6(g[k]); });
       arr.push(o);
     });
@@ -2085,7 +2271,7 @@ function t4SuitePayload(options = {}) {
   });
   return { period: T4.period, days, dates, from, to, rangeLabel: `${from} ～ ${to}`, scope, scopeName, generated: new Date().toLocaleString('zh-CN'),
     metrics: T4_METRICS.map(m => ({ k: m.k, n: m.n.trim(), lvl: m.lvl || 0, pct: !!m.pct })),
-    inputKeys: T4_INPUT_KEYS,
+    inputKeys: T4_INPUT_KEYS.slice(), operatingKeys: t4OperatingKeys(),
     channels: chs.map(c => ({ id: c.id, name: c.n, project: t4Project(c.bu), bu: c.bu, buName: t4BuName(c.bu), filled: t4FilledRange(c.id, from, to) })),
     tree: roots.map(mkNode), dailyByCh, monthByCh };
 }
@@ -2222,9 +2408,9 @@ function t4ExportSuiteCsv() {
   push([`【三、渠道每日利润表】${period} 逐日，仅列有数据的渠道`]);
   blank();
   T4_CH.forEach(c => {
-    if (t4Filled(c.id) === 0 && !t4MgmtDaily(c.id).any) return;  // 完全无数据的渠道跳过
+    if (!Object.values(T4.data[c.id] || {}).some(t4HasInputs) && !t4MgmtDaily(c.id).any) return;
     const daily = [], has = [];
-    for (let d = 1; d <= days; d++) { const dt = t4Date(d); daily.push(t4DayData(c.id, dt)); has.push(t4DayHasIncome(c.id, dt) || t4MgmtDaily(c.id).any); }
+    for (let d = 1; d <= days; d++) { const dt = t4Date(d); daily.push(t4DayData(c.id, dt)); has.push(t4DayHasData(c.id, dt) || t4MgmtDaily(c.id).any); }
     const m = t4Month(c.id);
     push([`▼ ${c.n}（${t4Project(c.bu)} / ${t4BuName(c.bu)}） 实取 ${t4Filled(c.id)}/${days} 天`]);
     push(['损益项目', '合计', ...Array.from({ length: days }, (_, i) => `${i + 1}日`)]);
@@ -2244,7 +2430,7 @@ function t4DayExport() {
   const c = T4_CHM[T4.dayCh]; if (!c) return;
   const days = t4Days();
   const daily = [], has = [];
-  for (let d = 1; d <= days; d++) { const dt = t4Date(d); daily.push(t4DayData(c.id, dt)); has.push(t4DayHasIncome(c.id, dt) || t4MgmtDaily(c.id).any); }
+  for (let d = 1; d <= days; d++) { const dt = t4Date(d); daily.push(t4DayData(c.id, dt)); has.push(t4DayHasData(c.id, dt) || t4MgmtDaily(c.id).any); }
   const m = t4Month(c.id);
   const hdr = ['损益项目', ...Array.from({ length: days }, (_, i) => `${T4.period}-${String(i + 1).padStart(2, '0')}`), '合计'];
   const fmt = (g, metric) => metric.pct ? `${(g[metric.k] * 100).toFixed(2)}%` : (g[metric.k] || 0).toFixed(2);
@@ -2356,6 +2542,18 @@ document.addEventListener('click', async e => {
   const field = e.target.closest('[data-t4chfield]');
   if (field) { T4.chField = field.dataset.t4chfield; t4Go('channels', { resetScroll: true }); return; }
   const file = e.target.closest('[data-t4file]'); if (file) { t4PickFile(file.dataset.t4file); return; }
+  const channelEdit = e.target.closest('[data-t4chedit]');
+  if (channelEdit) {
+    const c = T4_CHM[channelEdit.dataset.t4chedit]; if (!c) return;
+    T4.channelDraft = { id: c.id, n: c.n, bu: c.bu, aliases: '' }; T4.catalogError = '';
+    t4Go('channel-edit', { resetScroll: true }); return;
+  }
+  const expenseEdit = e.target.closest('[data-t4expenseedit]');
+  if (expenseEdit) {
+    const item = T4.expenseItems.find(x => x.k === expenseEdit.dataset.t4expenseedit); if (!item) return;
+    t4RememberExpenseInputs();
+    T4.expenseDraft = { ...item }; T4.catalogError = ''; t4Go('expenses'); return;
+  }
   const mdel = e.target.closest('[data-t4maildel]');
   if (mdel) { if (T4.mail.saving) return; t4MailReadForm(); T4.mail.list.splice(+mdel.dataset.t4maildel, 1); T4.mail.dirty = true; t4Go(t4ContactView()); return; }
   const tree = e.target.closest('[data-t4tree]');
@@ -2363,9 +2561,7 @@ document.addEventListener('click', async e => {
   const chdel = e.target.closest('[data-t4chdel]');
   if (chdel) {
     try { t4RequireServerReady(); } catch (err) { toast(err.message, 5200); return; }
-    t4SaveChOverrides(t4ChOverrides().filter(x => x.id !== chdel.dataset.t4chdel));
-    t4RebuildChannels();
-    try { await t4SaveServer(true); t4Load(); toast('已移除自定义渠道（历史数据保留）'); t4Go('channels'); }
+    try { await t4SaveCatalog('channels', t4ChOverrides().filter(x => x.id !== chdel.dataset.t4chdel)); toast('已移除自定义渠道（历史数据保留）'); t4Go('channels'); }
     catch (err) { toast(`渠道未同步：${err.message}`, 5200); }
     return;
   }
@@ -2392,7 +2588,29 @@ document.addEventListener('click', async e => {
     return;
   }
   const a = e.target.closest('[data-t4act]'); if (!a) return;
-  if (a.dataset.t4act === 'retrySync') { T4_SERVER_LAST_KEY = ''; await t4LoadServer(); }
+  if (a.dataset.t4act === 'channelNew') {
+    T4.channelDraft = { n: '', bu: 'dealer', aliases: '' }; T4.catalogError = ''; t4Go('channel-edit', { resetScroll: true });
+  }
+  else if (a.dataset.t4act === 'channelSave') {
+    const g = id => document.getElementById(id).value;
+    T4.channelDraft = { ...T4.channelDraft, n: g('t4ChannelName'), bu: g('t4ChannelBu'), aliases: g('t4ChannelAliases') };
+    try { await t4SaveChannel(T4.channelDraft); T4.channelDraft = null; T4.catalogError = ''; toast('渠道已保存到服务器'); t4Go('channels'); }
+    catch (err) { T4.catalogError = `未保存：${err.message}`; t4Go('channel-edit'); }
+  }
+  else if (a.dataset.t4act === 'expenseItemNew') { t4RememberExpenseInputs(); T4.expenseDraft = { n: '' }; T4.catalogError = ''; t4Go('expenses'); }
+  else if (a.dataset.t4act === 'expenseItemCancel') { t4RememberExpenseInputs(); T4.expenseDraft = null; T4.catalogError = ''; t4Go('expenses'); }
+  else if (a.dataset.t4act === 'expenseItemSave') {
+    t4RememberExpenseInputs();
+    T4.expenseDraft = { ...T4.expenseDraft, n: document.getElementById('t4ExpenseName').value };
+    try { await t4SaveExpenseItem(T4.expenseDraft); T4.expenseDraft = null; T4.catalogError = ''; toast('费用科目已保存到服务器'); t4Go('expenses'); }
+    catch (err) { T4.catalogError = `未保存：${err.message}`; t4Go('expenses'); }
+  }
+  else if (a.dataset.t4act === 'expenseSave') {
+    const entries = [...document.querySelectorAll('[data-t4expense]')].map(el => ({ k: el.dataset.t4expense, value: el.value, original: el.dataset.t4orig }));
+    try { const count = await t4SaveDailyExpenses(T4.expenseCh, T4.expenseDate, entries); delete T4.expenseEdits[`${T4.expenseCh}:${T4.expenseDate}`]; T4.catalogError = ''; toast(count ? `已保存 ${count} 项当日费用` : '没有需要保存的修改'); t4Go('expenses'); }
+    catch (err) { toast(`费用未保存，原数据已保留：${err.message}`, 6000); }
+  }
+  else if (a.dataset.t4act === 'retrySync') { T4_SERVER_LAST_KEY = ''; await t4LoadServer(); }
   else if (a.dataset.t4act === 'migrateDraft') {
     try {
       t4AssertEditable();
@@ -2483,7 +2701,13 @@ document.addEventListener('click', async e => {
   }
 });
 document.addEventListener('change', e => {
-  if (e.target.id === 't4Period') {
+  if (e.target.id === 't4ExpenseCh' || e.target.id === 't4ExpenseDate') {
+    t4RememberExpenseInputs();
+    if (e.target.id === 't4ExpenseCh') T4.expenseCh = e.target.value;
+    else T4.expenseDate = e.target.value;
+    T4.catalogError = ''; t4Go('expenses');
+  }
+  else if (e.target.id === 't4Period') {
     if (T4_SERVER_LOADING || T4_SERVER_SAVING) { e.target.value = T4.period; toast('正在同步，请稍后切换月份'); return; }
     const picked = e.target.value || T4.period;
     if (!t4ValidPeriod(picked)) { e.target.value = T4.period; toast('期间需在 2000-01 至 2099-12 之间，请重新选择月份', 4200); return; }

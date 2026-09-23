@@ -37,13 +37,25 @@ BORDER = GRID
 
 
 # ---------- 公式：与系统 t4Row 完全一致 ----------
-def formula_for(key, col, row_of):
+def operating_keys(meta):
+    """Keep existing fixed fees and include registered custom daily expense rows."""
+    extra = meta.get("operatingKeys", OPERATING)
+    metric_keys = {m["k"] for m in meta["metrics"]}
+    inputs = set(meta["inputKeys"])
+    if not isinstance(extra, list) or any(not isinstance(k, str) or k not in metric_keys or k not in inputs
+                                        or (k not in OPERATING and not re.fullmatch(r"expense_[a-z0-9_]{1,64}", k))
+                                        for k in extra):
+        raise ValueError("invalid operatingKeys")
+    return list(dict.fromkeys(OPERATING + extra))
+
+
+def formula_for(key, col, row_of, operating=None):
     r = lambda k: f"{col}{row_of[k]}"
     if key == "salesIncome":      return f"={r('retailIncome')}+{r('returnAmount')}+{r('refundAmount')}"
     if key == "salesCost":        return f"={r('retailCost')}+{r('returnCost')}"
     if key == "grossProfit":      return f"={r('salesIncome')}-{r('salesCost')}"
     if key == "grossMargin":      return f"=IF({r('salesIncome')}=0,0,{r('grossProfit')}/{r('salesIncome')})"
-    if key == "operating":        return "=" + "+".join(r(k) for k in OPERATING)
+    if key == "operating":        return "=" + "+".join(r(k) for k in (OPERATING if operating is None else operating))
     if key == "direct":           return "=" + "+".join(r(k) for k in DIRECT)
     if key == "contribution":     return f"={r('grossProfit')}-{r('operating')}-{r('direct')}"
     if key == "contributionRate": return f"=IF({r('salesIncome')}=0,0,{r('contribution')}/{r('salesIncome')})"
@@ -53,14 +65,14 @@ def formula_for(key, col, row_of):
     return None
 
 
-def derive(vals):
+def derive(vals, operating=None):
     """Python 复算，用于校验（与 formula_for 同口径）"""
     g = lambda k: vals.get(k, 0) or 0
     d = dict(vals)
     d["salesIncome"] = g("retailIncome") + g("returnAmount") + g("refundAmount")
     d["salesCost"] = g("retailCost") + g("returnCost")
     d["grossProfit"] = d["salesIncome"] - d["salesCost"]
-    d["operating"] = sum(g(k) for k in OPERATING)
+    d["operating"] = sum(g(k) for k in (OPERATING if operating is None else operating))
     d["direct"] = sum(g(k) for k in DIRECT)
     d["contribution"] = d["grossProfit"] - d["operating"] - d["direct"]
     d["indirect"] = sum(g(k) for k in INDIRECT)
@@ -139,6 +151,7 @@ def q(s):
 def write_channel(wb, ch, days_data, meta, row_of, first_row):
     ws = wb.create_sheet(ch["sheet"])
     days, metrics, inputs = meta["days"], meta["metrics"], set(meta["inputKeys"])
+    operating = operating_keys(meta)
     last_col = get_column_letter(2 + days)
     title(ws, f"{ch['name']} · {meta.get('rangeLabel', meta['period'])} 每日利润表", 2 + days)
     note(ws, "A2", f"{ch['project']} / {ch['buName']}　实取 {ch['filled']}/{days} 天　　小计与比率为公式；每日数据来自系统取数（含费率/分摊派生）")
@@ -158,7 +171,7 @@ def write_channel(wb, ch, days_data, meta, row_of, first_row):
         metric_name_cell(ws.cell(r, 1), m)
         is_input = m["k"] in inputs
         # 合计列 B：取数项 = SUM(各日)；派生项 = 同口径公式作用于 B 列
-        cb = ws.cell(r, 2, f"=SUM(C{r}:{last_col}{r})" if is_input else formula_for(m["k"], "B", row_of))
+        cb = ws.cell(r, 2, f"=SUM(C{r}:{last_col}{r})" if is_input else formula_for(m["k"], "B", row_of, operating))
         num_cell(cb, m)
         for d in range(1, days + 1):
             col = get_column_letter(2 + d)
@@ -167,7 +180,7 @@ def write_channel(wb, ch, days_data, meta, row_of, first_row):
                 v = day.get(m["k"]) if day.get("has") else None
                 cell = ws.cell(r, 2 + d, None if v is None else v)
             else:
-                cell = ws.cell(r, 2 + d, formula_for(m["k"], col, row_of))
+                cell = ws.cell(r, 2 + d, formula_for(m["k"], col, row_of, operating))
             num_cell(cell, m)
     ws.column_dimensions["A"].width = 20
     ws.column_dimensions["B"].width = 14
@@ -180,6 +193,7 @@ def write_channel(wb, ch, days_data, meta, row_of, first_row):
 # ---------- 事业部页：事业部合计 + 该事业部各渠道（当月累计） ----------
 def write_bu(ws, bu_name, chans, meta, row_of, first_row):
     metrics, inputs = meta["metrics"], set(meta["inputKeys"])
+    operating = operating_keys(meta)
     n = len(chans)
     title(ws, f"{bu_name} · 渠道对比 · {meta.get('rangeLabel', meta['period'])}", 2 + n)
     note(ws, "A2", f"{bu_name}合计 = 本页各渠道之和（公式）；渠道名与数字可点击跳转到该渠道逐日明细对应行")
@@ -197,7 +211,7 @@ def write_bu(ws, bu_name, chans, meta, row_of, first_row):
         r = row_of[m["k"]]
         metric_name_cell(ws.cell(r, 1), m)
         is_input = m["k"] in inputs
-        cb = ws.cell(r, 2, (f"=SUM(C{r}:{last_col}{r})" if n else 0) if is_input else formula_for(m["k"], "B", row_of))
+        cb = ws.cell(r, 2, (f"=SUM(C{r}:{last_col}{r})" if n else 0) if is_input else formula_for(m["k"], "B", row_of, operating))
         num_cell(cb, m)
         for i, ch in enumerate(chans):
             cell = ws.cell(r, 3 + i, f"={q(ch['sheet'])}!B{r}")
@@ -213,6 +227,7 @@ def write_bu(ws, bu_name, chans, meta, row_of, first_row):
 # ---------- Sheet1：总表（竖式利润表：科目竖排，列 = 全部→项目→事业部 逐级汇总） ----------
 def write_summary(ws, tree, chans, chans_by_id, meta, row_of, first_row):
     metrics, inputs = meta["metrics"], set(meta["inputKeys"])
+    operating = operating_keys(meta)
     # 列 = 树上的非叶节点，DFS 顺序：全部、澳乐项目、其下各事业部、瑞眠项目、瑞眠事业部…
     nodes = []
 
@@ -259,7 +274,7 @@ def write_summary(ws, tree, chans, chans_by_id, meta, row_of, first_row):
                     terms = [f"{c['_col']}{r}" for c in node["children"] if c.get("_col")]
                 f = "=" + "+".join(terms) if terms else 0
             else:
-                f = formula_for(m["k"], node["_col"], row_of)   # 小计/比率：同口径公式作用于本列
+                f = formula_for(m["k"], node["_col"], row_of, operating)   # 小计/比率：同口径公式作用于本列
             cell = ws.cell(r, 2 + node["_idx"], f)
             link = node["_is_bu"] and bool(bu_sheet(node))
             num_cell(cell, m, is_link=link)
@@ -290,7 +305,8 @@ def leaf_list(node):
 
 # ---------- 主流程 ----------
 def main(inp, outp):
-    data = json.load(open(inp, encoding="utf-8"))
+    with open(inp, encoding="utf-8") as source:
+        data = json.load(source)
     metrics = data["metrics"]
     first_row = 6                                   # 明细页/对比页科目起始行（第 5 行是表头）
     row_of = {m["k"]: first_row + i for i, m in enumerate(metrics)}
@@ -342,7 +358,7 @@ def main(inp, outp):
                 continue
             for k in data["inputKeys"]:
                 tot[k] = tot.get(k, 0) + (day.get(k) or 0)
-        d = derive(tot)
+        d = derive(tot, operating_keys(data))
         sysm = data.get("monthByCh", {}).get(ch["id"], {})
         for k in ["salesIncome", "grossProfit", "operating", "netProfit"]:
             if abs(d.get(k, 0) - (sysm.get(k) or 0)) > 0.05:
