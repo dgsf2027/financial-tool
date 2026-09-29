@@ -61,6 +61,8 @@ const T4_CH_BASE = [
   { id: 'tb_orange', n: '淘宝-橘农滋补企业店', bu: 'orange', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「淘宝-橘农滋补企业店」' }] },
   { id: 'jd_orange', n: '京东-橘农旗舰店', bu: 'orange', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「京东-橘农旗舰店」' }] },
   { id: 'dy_orange', n: '抖音-橘农滋补旗舰店', bu: 'orange', tier: '直属', files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「抖音-橘农滋补旗舰店」' }] },
+  // 后加的内置渠道：若之前已手工新增同名自定义渠道，沿用那个（数据挂在它的 ID 上）。
+  { id: 'pdd_orange', n: '拼多多-橘农官方旗舰店', bu: 'orange', tier: '直属', optional: true, files: [T4_DAILY_FILE, { k: 'sales', n: '销售单明细账', hint: '仅取「拼多多-橘农官方旗舰店」' }] },
   { id: 'tianmen', n: '分销-微商-天门（1688）', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
   { id: 'gift', n: '分销-澳乐礼品单', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
   { id: 'supply', n: '电商供货', bu: 'dealer', tier: '直属', files: [T4_DAILY_FILE] },
@@ -120,6 +122,7 @@ const T4_SOURCE_CHANNEL_MAP = {
   '京东-橘农旗舰店': 'jd_orange',
   '分销-巧巧手玩具': 'groupbuy',
   '抖音-橘农滋补旗舰店': 'dy_orange',
+  '拼多多-橘农官方旗舰店': 'pdd_orange',
   '拼多多-澳乐母婴旗舰店': 'pdd_mom',
   '拼多多-澳乐旗舰店': 'pdd_aole',
   '小红书-澳乐旗舰店': 'tmall',
@@ -154,7 +157,7 @@ const T4_SOURCE_CHANNEL_NORM = Object.fromEntries(Object.entries(T4_SOURCE_CHANN
 /* 渠道表 = 内置基础表 + localStorage 覆盖层（渠道列表页可导入模板批量改名/调事业部/新增） */
 const T4_CHLIST_KEY = 'fsc_t4_channels_v2';
 const T4_EXPENSE_ITEMS_KEY = 'fsc_t4_expense_items_v1';
-let T4_CH = [], T4_CHM = {}, T4_TMAI = [], T4_BIG_ECOM = [], T4_PDD = [], T4_RUIMIAN = [], T4_ORANGE = [], T4_DEALER = [], T4_ALL = [];
+let T4_CH = [], T4_CH_ALL = [], T4_CH_ACTIVE = [], T4_CHM = {}, T4_TMAI = [], T4_BIG_ECOM = [], T4_PDD = [], T4_RUIMIAN = [], T4_ORANGE = [], T4_DEALER = [], T4_ALL = [];
 let T4_CH_OVERRIDES = null;
 let T4_CACHE_ERROR = false;
 function t4CacheWrite(key, value) {
@@ -175,6 +178,7 @@ function t4ChOverrides() {
     // shared loading can run. Keep usable rows; leave the original cache intact.
     return Array.isArray(v) ? v.filter(c => record(c) && typeof c.id === 'string' &&
       (c.n == null || typeof c.n === 'string') && (c.bu == null || typeof c.bu === 'string') &&
+      (c.removed == null || typeof c.removed === 'boolean') && strings(c.removedSources) &&
       strings(c.aliases) && details(c.details)) : [];
   } catch (e) { return []; }
 }
@@ -184,23 +188,37 @@ function t4SaveChOverrides(list) {
   t4CacheWrite(T4_CHLIST_KEY, serialized);
 }
 function t4ChannelList(overrides) {
-  const base = T4_CH_BASE.map(c => ({ ...c }));
+  const norm = v => String(v || '').toLowerCase().replace(/[\s\-_—（）()]/g, '');
+  const customNames = new Set(overrides.filter(o => o.n && !T4_CH_BASE.some(c => c.id === o.id)).map(o => norm(o.n)));
+  const base = T4_CH_BASE.filter(c => !c.optional || !customNames.has(norm(c.n))).map(c => ({ ...c }));
   overrides.forEach(o => {
-    const hit = base.find(c => c.id === o.id);
+    let hit = base.find(c => c.id === o.id);
     if (hit) {
       if (o.n && o.n !== hit.n) { hit.aliases = (hit.aliases || []).concat(hit.n); hit.n = o.n; }
       if (o.bu) hit.bu = o.bu;
       if (o.aliases) hit.aliases = (hit.aliases || []).concat(o.aliases);
       if (o.details) hit.details = o.details;
     } else if (o.n) {
-      base.push({ id: o.id, n: o.n, bu: o.bu || 'dealer', tier: '直属', files: [T4_DAILY_FILE], aliases: o.aliases || [], details: o.details || [], custom: true });
+      hit = { id: o.id, n: o.n, bu: o.bu || 'dealer', tier: '直属', files: [T4_DAILY_FILE], aliases: o.aliases || [], details: o.details || [], custom: true };
+      base.push(hit);
     }
+    if (hit && o.removed) hit.removed = true;
+    if (hit && o.removedSources) hit.removedSources = o.removedSources;
   });
   return base;
 }
+// 停用的渠道只在本期已有数据时留在损益表中，保证往期合计不变。
+function t4ChannelHasPeriodData(id) {
+  let data;
+  try { data = T4.data; } catch (_) { return false; }
+  return !!data && Object.values(data[id] || {}).some(day =>
+    day && typeof day === 'object' && Object.values(day).some(v => v != null && v !== ''));
+}
 function t4RebuildChannels() {
-  T4_CH = t4ChannelList(t4ChOverrides());
-  T4_CHM = Object.fromEntries(T4_CH.map(c => [c.id, c]));
+  T4_CH_ALL = t4ChannelList(t4ChOverrides());
+  T4_CH_ACTIVE = T4_CH_ALL.filter(c => !c.removed);
+  T4_CH = T4_CH_ALL.filter(c => !c.removed || t4ChannelHasPeriodData(c.id));
+  T4_CHM = Object.fromEntries(T4_CH_ALL.map(c => [c.id, c]));
   T4_TMAI = T4_CH.filter(c => c.tier === '特卖').map(c => c.id);
   T4_BIG_ECOM = T4_CH.filter(c => c.bu === 'ecom').map(c => c.id);
   T4_PDD = T4_CH.filter(c => c.bu === 'pdd').map(c => c.id);
@@ -642,6 +660,7 @@ function t4ApplyPeriod(doc) {
   const refreshReturnAmount = returnEntry && String(returnEntry.amount ?? '').trim() !== '' && !t4ReturnDraftDirty();
   t4ApplyExpenseItems(doc.expenseItems || []);
   T4.data = t4Clone((doc.periods || {})[T4.period] || {});
+  t4RebuildChannels();
   T4.cfg = t4ConfigForPeriod(doc, T4.period);
   T4.periodLocks = t4Clone(doc.periodLocks || {});
   T4.importHistory = t4Clone(doc.importHistory || {});
@@ -816,6 +835,7 @@ function t4Load() {
     const all = JSON.parse(localStorage.getItem(T4_KEY) || '{}');
     T4.data = all[T4.period] || {};
   } catch (e) { T4.data = {}; }
+  t4RebuildChannels();
   T4_CH.forEach(c => { if (!T4.data[c.id]) T4.data[c.id] = {}; });
   try {
     T4.cfg = t4ConfigForPeriod({ cfg: t4Stored(T4_CFG_KEY, {}), cfgByPeriod: t4Stored(T4_PERIOD_CFG_KEY, {}) }, T4.period);
@@ -888,7 +908,7 @@ function t4NewCatalogId(prefix) {
 }
 function t4ChannelCandidate(draft) {
   const existing = draft.id && Object.hasOwn(T4_CHM, draft.id) ? T4_CHM[draft.id] : null;
-  if (draft.id && !existing) throw new Error('该渠道已不存在，请返回渠道列表重新选择');
+  if (draft.id && (!existing || existing.removed)) throw new Error('该渠道已不存在或已停用，请返回渠道列表重新选择');
   const name = t4CatalogName(draft.n, '渠道名称', 80), bu = draft.bu;
   if (!Object.hasOwn(T4_BU_META, bu)) throw new Error('请选择归属事业部');
   const aliases = String(draft.aliases || '').split(/[\n,，;；、]/).map(x => x.trim()).filter(Boolean)
@@ -928,7 +948,7 @@ async function t4SaveChannel(draft) {
   return candidate.id;
 }
 function t4SourceCandidate(draft) {
-  const target = Object.hasOwn(T4_CHM, draft.channel) ? T4_CHM[draft.channel] : null;
+  const target = Object.hasOwn(T4_CHM, draft.channel) && !T4_CHM[draft.channel].removed ? T4_CHM[draft.channel] : null;
   if (!target) throw new Error('请选择已有的归集渠道');
   const source = t4CatalogName(draft.source, '销售渠道名称', 80);
   const list = t4Clone(t4ChOverrides());
@@ -941,7 +961,7 @@ function t4SourceCandidate(draft) {
     detail = (original.details || []).find(row => t4ChNorm(row.source) === originalNorm);
     // A genuinely unregistered basic row can be promoted into the sales roster.
     const fallback = !detail && !(original.details || []).length && t4ChNorm(original.n) === originalNorm
-      && !T4_CH.some(c => (c.details || []).some(row => t4ChNorm(row.source) === originalNorm));
+      && !T4_CH_ACTIVE.some(c => (c.details || []).some(row => t4ChNorm(row.source) === originalNorm));
     if (!detail && !fallback) throw new Error('原销售渠道已变更，请返回列表重新选择');
     detail = detail || { source: original.n, fields: [] };
   }
@@ -951,9 +971,9 @@ function t4SourceCandidate(draft) {
   const names = [source, ...historicalNames];
   for (const label of names) {
     const norm = t4ChNorm(label);
-    const reserved = T4_CH.find(c => c.id !== target.id && t4ChNorm(c.id) === norm);
+    const reserved = T4_CH_ACTIVE.find(c => c.id !== target.id && t4ChNorm(c.id) === norm);
     if (reserved) throw new Error(`「${label}」是归集渠道「${reserved.n}」的保留编号，不能映射到其他渠道`);
-    for (const c of T4_CH) {
+    for (const c of T4_CH_ACTIVE) {
       const otherRow = (c.details || []).find(r =>
         (t4ChNorm(r.source) === norm || (r.aliases || []).some(alias => t4ChNorm(alias) === norm))
         && !(editing && c.id === original.id && t4ChNorm(r.source) === originalNorm));
@@ -984,6 +1004,9 @@ function t4SourceCandidate(draft) {
   list.forEach(entry => {
     if (editing && entry.id === original.id) entry.details = (entry.details || []).filter(r => t4ChNorm(r.source) !== originalNorm);
     if (entry.id !== target.id && entry.aliases) entry.aliases = entry.aliases.filter(alias => !transferred.has(t4ChNorm(alias)));
+    // 重新登记的门店：解除删除标记；停用渠道里的旧行随之迁出。
+    if (entry.removedSources) entry.removedSources = entry.removedSources.filter(name => !transferred.has(t4ChNorm(name)));
+    if (entry.removed && entry.details) entry.details = entry.details.filter(r => !transferred.has(t4ChNorm(r.source)));
   });
   let entry = list.find(c => c.id === target.id);
   if (!entry) { entry = { id: target.id }; list.push(entry); }
@@ -995,6 +1018,36 @@ function t4SourceCandidate(draft) {
     aliasSeen.add(norm); return true;
   });
   return { channel: target.id, source, list };
+}
+function t4RemovedSourceNames() {
+  return new Set(t4ChOverrides().flatMap(c => c.removedSources || []).map(t4ChNorm));
+}
+// 停用 / 恢复归集渠道：只打标记，渠道定义与历史损益都保留，可随时恢复。
+function t4ChannelDisableCandidate(id, removed) {
+  if (!Object.hasOwn(T4_CHM, id)) throw new Error('该渠道已不存在，请返回渠道列表重新选择');
+  const list = t4Clone(t4ChOverrides());
+  let entry = list.find(c => c.id === id);
+  if (!entry) { entry = { id }; list.push(entry); }
+  if (removed) entry.removed = true; else delete entry.removed;
+  return list;
+}
+// 删除一个销售渠道（门店）：去掉明细行和匹配名，并记下名称，避免内置映射或旧文件把它带回来。
+function t4SourceDeleteCandidate(channel, source) {
+  if (!Object.hasOwn(T4_CHM, channel)) throw new Error('该渠道已不存在，请返回渠道列表重新选择');
+  const norm = t4ChNorm(source);
+  const row = (T4_CHM[channel].details || []).find(r => t4ChNorm(r.source) === norm);
+  const names = [source, ...((row && row.aliases) || [])];
+  const drop = new Set(names.map(t4ChNorm));
+  const list = t4Clone(t4ChOverrides());
+  list.forEach(entry => {
+    if (entry.details) entry.details = entry.details.filter(r => !drop.has(t4ChNorm(r.source)));
+    if (entry.aliases) entry.aliases = entry.aliases.filter(alias => !drop.has(t4ChNorm(alias)));
+  });
+  let entry = list.find(c => c.id === channel);
+  if (!entry) { entry = { id: channel }; list.push(entry); }
+  const kept = (entry.removedSources || []).filter(name => !drop.has(t4ChNorm(name)));
+  entry.removedSources = [...kept, ...names];
+  return list;
 }
 async function t4SaveSource(draft) {
   t4RequireServerReady();
@@ -1039,7 +1092,7 @@ S['t4-source-edit'] = () => {
     + cardp('销售渠道信息', `<div class="t4-catalog-form">
       <label>销售渠道名称 <input id="t4SourceName" type="text" maxlength="80" required value="${H(draft.source)}" autocomplete="off"></label>
       <label>编号（可留空） <input id="t4SourceNumber" type="text" maxlength="80" value="${H(draft.number || '')}" autocomplete="off"></label>
-      <label>归集渠道 <select id="t4SourceChannel" required aria-label="归集渠道" aria-describedby="t4SourceHint"><option value="">请选择归集渠道</option>${T4_CH.map(c => `<option value="${H(c.id)}" ${c.id === draft.channel ? 'selected' : ''}>${H(c.n)} · ${H(t4BuName(c.bu))}</option>`).join('')}</select></label>
+      <label>归集渠道 <select id="t4SourceChannel" required aria-label="归集渠道" aria-describedby="t4SourceHint"><option value="">请选择归集渠道</option>${T4_CH_ACTIVE.map(c => `<option value="${H(c.id)}" ${c.id === draft.channel ? 'selected' : ''}>${H(c.n)} · ${H(t4BuName(c.bu))}</option>`).join('')}</select></label>
       <p id="t4SourceHint" class="mut">更名后，旧名称仍可匹配。调整归集会影响后续导入，已保存的损益仍保留在原归集渠道。</p>
       <div class="frow"><button class="btn pri" data-t4act="sourceSave">保存销售渠道</button></div></div>`);
 };
@@ -1739,14 +1792,18 @@ function t4ResolveChannel(value) {
     京东自营: 'jdzy', 唯品会: 'vip' };
   const raw = String(value == null ? '' : value).trim();
   const n = norm(raw);
-  const override = t4ChOverrides().slice().reverse().find(c => (c.aliases || []).some(a => norm(a) === n));
-  if (override && T4_CHM[override.id]) return override.id;
-  const exact = T4_CH.find(c => norm(c.n) === n || norm(c.id) === n);
+  // 已删除的销售渠道、已停用的归集渠道都不再匹配，导入时按未识别处理。
+  if (t4RemovedSourceNames().has(t4ChNorm(raw))) return '';
+  const active = id => (id && T4_CHM[id] && !T4_CHM[id].removed ? id : '');
+  const override = t4ChOverrides().slice().reverse().find(c => !c.removed && (c.aliases || []).some(a => norm(a) === n));
+  if (override && active(override.id)) return override.id;
+  const exact = T4_CH_ACTIVE.find(c => norm(c.n) === n || norm(c.id) === n);
   if (exact) return exact.id;
-  if (aliases[raw]) return aliases[raw];
-  if (T4_SOURCE_CHANNEL_NORM[n]) return T4_SOURCE_CHANNEL_NORM[n];
-  if (aliases[n]) return aliases[n];
-  const hit = T4_CH.find(c => norm(c.n) === n || norm(c.id) === n || (c.aliases || []).some(a => norm(a) === n));
+  if (T4_CH_ALL.some(c => c.removed && (norm(c.n) === n || norm(c.id) === n))) return '';
+  if (aliases[raw]) return active(aliases[raw]);
+  if (T4_SOURCE_CHANNEL_NORM[n]) return active(T4_SOURCE_CHANNEL_NORM[n]);
+  if (aliases[n]) return active(aliases[n]);
+  const hit = T4_CH_ACTIVE.find(c => norm(c.n) === n || norm(c.id) === n || (c.aliases || []).some(a => norm(a) === n));
   return hit ? hit.id : '';
 }
 const t4SummaryReady = imp => !!imp && T4_FILE_DEFS.summaryDaily.required.every(k => imp.map[k] != null)
@@ -1906,20 +1963,20 @@ function t4ChSchema(input) {
 }
 function t4ChExtraFields() {
   const fields = new Map();
-  T4_CH.forEach(c => (c.details || []).forEach(r => (r.fields || []).forEach(f => {
+  T4_CH_ACTIVE.forEach(c => (c.details || []).forEach(r => (r.fields || []).forEach(f => {
     const key = t4ChClean(f.name); if (!fields.has(key)) fields.set(key, f.name);
   })));
   return [...fields.values()];
 }
 function t4ChFieldRows(name) {
-  return T4_CH.flatMap(c => (c.details || []).flatMap(r => {
+  return T4_CH_ACTIVE.flatMap(c => (c.details || []).flatMap(r => {
     const field = (r.fields || []).find(f => t4ChClean(f.name) === t4ChClean(name));
     return field ? [{ channel: c.id, source: r.source, value: field.value }] : [];
   }));
 }
 function t4ChSourceRows() {
-  const imported = T4_CH.some(c => (c.details || []).length);
-  return T4_CH.flatMap(c => {
+  const imported = T4_CH_ACTIVE.some(c => (c.details || []).length);
+  return T4_CH_ACTIVE.flatMap(c => {
     const details = c.details || [];
     if (details.length) return details.map(r => ({ channel: c.id, source: r.source, target: c.n, fields: r.fields || [] }));
     if (imported) return [];
@@ -1929,17 +1986,18 @@ function t4ChSourceRows() {
 // 渠道列表导入后，仍把尚未出现在文件中的内置渠道展示出来，避免用户误以为
 // 它们被导入覆盖或删除。它们只作为“未导入基础渠道”展示，不计入销售渠道导入数。
 function t4ChDisplaySourceRows() {
-  const importedRows = T4_CH.flatMap(c => (c.details || []).map(r => ({
+  const importedRows = T4_CH_ACTIVE.flatMap(c => (c.details || []).map(r => ({
     channel: c.id, source: r.source, target: c.n, fields: r.fields || [], fallback: false,
   })));
-  if (!importedRows.length) return t4ChSourceRows().map(r => ({ ...r, fallback: true }));
+  const removed = t4RemovedSourceNames();
+  if (!importedRows.length) return t4ChSourceRows().map(r => ({ ...r, fallback: true })).filter(r => !removed.has(t4ChNorm(r.source)));
   const seen = new Set(importedRows.map(r => r.channel));
-  const sourceNames = new Set(T4_CH.flatMap(c => (c.details || []).flatMap(row =>
+  const sourceNames = new Set(T4_CH_ACTIVE.flatMap(c => (c.details || []).flatMap(row =>
     [row.source, ...(row.aliases || [])].map(t4ChNorm))));
-  const fallbackRows = T4_CH.filter(c => !seen.has(c.id) && !sourceNames.has(t4ChNorm(c.n))).map(c => ({
+  const fallbackRows = T4_CH_ACTIVE.filter(c => !seen.has(c.id) && !sourceNames.has(t4ChNorm(c.n))).map(c => ({
     channel: c.id, source: c.n, target: c.n, fields: [], fallback: true,
   }));
-  return [...importedRows, ...fallbackRows];
+  return [...importedRows, ...fallbackRows].filter(r => !removed.has(t4ChNorm(r.source)));
 }
 function t4ChTemplateRows() {
   const extra = t4ChExtraFields();
@@ -1983,6 +2041,28 @@ function t4ChApplySheets(sheets) {
   };
   let renamed = 0, moved = 0, added = 0, mapped = 0, imported = 0;
   const bad = [];
+  // 下载的列表带「渠道ID」：同一 ID 的所有行把「渠道汇总」改成同一个新名称，视为给该归集渠道改名，
+  // 而不是另建一个新渠道。只改了其中几行时，仍按原逻辑把这几家门店移到新归集渠道。
+  const renameTo = new Map();
+  schemas.forEach(({ body, map }) => {
+    if (map.id < 0 || map.target < 0) return;
+    body.forEach(row => {
+      const id = String(row[map.id] ?? '').trim(), name = String(row[map.target] ?? '').trim();
+      if (!id || !name || !channels.some(c => c.id === id && !c.removed)) return;
+      if (!renameTo.has(id)) renameTo.set(id, new Set());
+      renameTo.get(id).add(name);
+    });
+  });
+  renameTo.forEach((names, id) => {
+    const current = channels.find(c => c.id === id), name = [...names][0];
+    if (names.size !== 1 || t4ChNorm(name) === t4ChNorm(current.n)) return;
+    const other = resolve(name);
+    if (other && other.id !== id) return;
+    const prior = ov.find(o => o.id === id);
+    put({ id, n: name, aliases: [...new Set([...(prior?.aliases || []), current.n])] });
+    channels = t4ChannelList(ov); renamed++;
+  });
+  const removedSources = new Set(ov.flatMap(o => o.removedSources || []).map(t4ChNorm));
   schemas.forEach(({ body, map, extra, renameByName }) => body.forEach(row => {
     const get = key => map[key] < 0 ? '' : String(row[map[key]] ?? '').trim();
     const source = get('source') || get('target'), name = get('target') || source;
@@ -1992,9 +2072,11 @@ function t4ChApplySheets(sheets) {
     const bu = Object.prototype.hasOwnProperty.call(T4_BU_ALIAS, buKey) ? T4_BU_ALIAS[buKey] : '';
     if (buRaw && !bu) { bad.push(`${name}（事业部「${buRaw}」不识别）`); return; }
     const idRaw = get('id');
+    if (removedSources.has(t4ChNorm(source))) { bad.push(`${source}（已删除的销售渠道，已跳过；如需恢复请用「新增销售渠道」）`); return; }
     const registeredSource = channels.find(c => (c.details || []).some(detail =>
       [detail.source, ...(detail.aliases || [])].some(alias => t4ChNorm(alias) === t4ChNorm(source))));
     let target = (map.target < 0 && idRaw && channels.find(c => c.id === idRaw)) || resolve(name, !get('target'));
+    if (target && target.removed) { bad.push(`${source}（归集渠道「${target.n}」已停用，已跳过；如需使用请先在列表中恢复）`); return; }
     if (target) {
       const entry = { id: target.id };
       // 映射表以渠道汇总为准，旧 ID 不能把调整归集误当成改名。
@@ -2633,31 +2715,34 @@ S['t4-channels'] = () => {
   const fields = t4ChExtraFields();
   const displayRows = t4ChDisplaySourceRows();
   const fallbackCount = displayRows.filter(r => r.fallback).length;
-  const registeredCount = T4_CH.reduce((n, c) => n + (c.details || []).length, 0);
+  const registeredCount = T4_CH_ACTIVE.reduce((n, c) => n + (c.details || []).length, 0);
   // A new session opens the sales roster. An explicit selection of the summary
   // tab (the empty key) is still respected during this session.
   if (T4.chField !== '' && T4.chField !== '__sources' && !fields.includes(T4.chField)) T4.chField = '__sources';
   const tabs = `<div class="tabs t4-channel-tabs" aria-label="渠道列表页面">${['__sources', '', ...fields].map(name =>
     `<button type="button" class="${T4.chField === name ? 'on' : ''}" data-t4chfield="${H(name)}" aria-pressed="${T4.chField === name}">${H(name === '__sources' ? '销售渠道' : name || '归集渠道')}</button>`).join('')}</div>`;
   const actions = c => `<button class="btn sm" data-t4chedit="${H(c.id)}" aria-label="修改归集渠道 ${H(c.n)}">修改</button> <button class="btn sm" data-t4go="man:${H(c.id)}">录入</button> <button class="btn sm" data-t4go="chday:${H(c.id)}">明细</button>`;
-  const sourceActions = r => `<button class="btn sm" data-t4sourceedit="${H(r.source)}" data-channel="${H(r.channel)}" aria-label="修改销售渠道 ${H(r.source)}">${r.fallback ? '登记' : '修改'}</button> <button class="btn sm" data-t4go="chday:${H(r.channel)}">归集损益</button>`;
-  const rows = T4_CH.map(c => [
+  const sourceActions = r => `<button class="btn sm" data-t4sourceedit="${H(r.source)}" data-channel="${H(r.channel)}" aria-label="修改销售渠道 ${H(r.source)}">${r.fallback ? '登记' : '修改'}</button> <button class="btn sm" data-t4go="chday:${H(r.channel)}">归集损益</button> <button class="btn sm" data-t4sourcedel="${H(r.source)}" data-channel="${H(r.channel)}" aria-label="删除销售渠道 ${H(r.source)}">删除</button>`;
+  const rows = T4_CH_ACTIVE.map(c => [
     `<span class="mono">${H(c.id)}</span>`, t4BuPill(c.bu), `<b>${H(c.n)}</b>`,
     (c.aliases || []).map(H).join('、') || '<span class="mut">—</span>',
     c.custom ? pill('自定义', 'in') : pill('内置', 'mu'),
-    actions(c) + (c.custom ? ` <button class="btn sm" data-t4chdel="${H(c.id)}">移除</button>` : '')]);
+    actions(c) + ` <button class="btn sm" data-t4chdel="${H(c.id)}" aria-label="停用归集渠道 ${H(c.n)}">停用</button>`]);
+  const removed = T4_CH_ALL.filter(c => c.removed);
+  const removedCard = removed.length ? card(`已停用的归集渠道（${removed.length} 个）`, table([{t:'渠道ID'},{t:'归属事业部'},{t:'归集渠道'},{t:'操作'}],
+    removed.map(c => [`<span class="mono">${H(c.id)}</span>`, t4BuPill(c.bu), H(c.n), `<button class="btn sm" data-t4chrestore="${H(c.id)}" aria-label="恢复归集渠道 ${H(c.n)}">恢复</button>`]))) : '';
   const content = T4.chField === '__sources'
     ? card(`销售渠道明细（已登记 ${registeredCount} 条${fallbackCount ? `，${fallbackCount} 个归集渠道待登记` : ''}）`, table([{t:'销售渠道'},{t:'归属事业部'},{t:'归集渠道'},{t:'编号'},{t:'状态'},{t:'操作'}],
       displayRows.map(r => { const c = T4_CHM[r.channel]; const no = (r.fields || []).find(f => t4ChClean(f.name) === '编号'); return [H(r.source), t4BuPill(c.bu), H(r.target), H(no ? no.value : ''), r.fallback ? pill('待登记', 'mu') : pill('已登记', 'ok'), sourceActions(r)]; })))
     : T4.chField
     ? card(T4.chField, table([{t:'销售渠道'},{t:'归属事业部'},{t:'渠道汇总'},{t:T4.chField},{t:'操作'}],
       t4ChFieldRows(T4.chField).map(r => { const c = T4_CHM[r.channel]; return [H(r.source), t4BuPill(c.bu), H(c.n), H(r.value), sourceActions(r)]; })))
-    : card(`归集渠道（${T4_CH.length} 个）`, table([{t:'渠道ID'},{t:'归属事业部'},{t:'归集渠道'},{t:'匹配名称（含旧名）'},{t:'来源'},{t:'操作'}], rows));
-  return head('T4 渠道列表', `已登记 ${registeredCount} 个销售渠道，归入 ${T4_CH.length} 个归集渠道。销售渠道用于匹配门店名称，归集渠道用于汇总损益。`, '工具箱 · T4',
+    : card(`归集渠道（${T4_CH_ACTIVE.length} 个）`, table([{t:'渠道ID'},{t:'归属事业部'},{t:'归集渠道'},{t:'匹配名称（含旧名）'},{t:'来源'},{t:'操作'}], rows)) + removedCard;
+  return head('T4 渠道列表', `已登记 ${registeredCount} 个销售渠道，归入 ${T4_CH_ACTIVE.length} 个归集渠道。销售渠道用于匹配门店名称，归集渠道用于汇总损益。`, '工具箱 · T4',
     t4SyncStatus() + '<button class="btn" data-t4go="overview">← 返回</button><button class="btn" data-t4act="chTemplate">下载当前列表</button><button class="btn" data-t4act="chPick">导入渠道列表</button><button class="btn" data-t4act="channelNew">新增归集渠道</button><button class="btn pri" data-t4act="sourceNew">新增销售渠道</button>')
     + (T4_SERVER_ERROR && T4_SERVER_ERROR.status === 401 ? '<div class="note w">点击“登录财务中心”，进入门户登录后点“财务中心”，即可回到当前网址继续保存。</div>' : '')
     + tabs + content
-    + '<div class="note"><b>导入规则：</b>至少包含「销售渠道」「渠道名称」或「渠道汇总」之一；支持每行一个渠道，也支持每列一个渠道。销售渠道按「渠道汇总」归集；未填汇总时按渠道名称匹配或新增。已有渠道未填事业部时保留原归属，新渠道未填时归经销并提示。附加字段按销售渠道保存，编号可直接修改，其余字段可通过表格更新；再次导入只更新文件中提供的渠道和字段，未提供的内容及历史损益保留。事业部支持大电商、拼多多、瑞眠、橘农、经销。</div>';
+    + '<div class="note"><b>导入规则：</b>至少包含「销售渠道」「渠道名称」或「渠道汇总」之一；支持每行一个渠道，也支持每列一个渠道。销售渠道按「渠道汇总」归集；未填汇总时按渠道名称匹配或新增。已有渠道未填事业部时保留原归属，新渠道未填时归经销并提示。附加字段按销售渠道保存，编号可直接修改，其余字段可通过表格更新；再次导入只更新文件中提供的渠道和字段，未提供的内容及历史损益保留；要去掉渠道请用列表里的「删除 / 停用」按钮，已删除或停用的渠道再次导入时会跳过。停用的归集渠道在已有数据的月份仍计入损益表。事业部支持大电商、拼多多、瑞眠、橘农、经销。</div>';
 };
 
 S['t4-rules'] = () => head('T4 取数口径', '以下规则来自用户提供的销售明细、平台推广明细和 2026-08 日损益底稿。', '工具箱 · T4', t4SyncStatus() + '<button class="btn" data-t4go="overview">← 返回</button>')
@@ -3010,10 +3095,22 @@ document.addEventListener('click', async e => {
   if (mdel) { if (T4.mail.saving) return; t4MailReadForm(); T4.mail.list.splice(+mdel.dataset.t4maildel, 1); T4.mail.dirty = true; t4Go(t4ContactView()); return; }
   const tree = e.target.closest('[data-t4tree]');
   if (tree) { const id = tree.dataset.t4tree; T4.treeCollapsed[id] = !T4.treeCollapsed[id]; t4Go('sheet'); return; }
-  const chdel = e.target.closest('[data-t4chdel]');
+  const chdel = e.target.closest('[data-t4chdel], [data-t4chrestore]');
   if (chdel) {
+    const restore = !!chdel.dataset.t4chrestore, id = restore ? chdel.dataset.t4chrestore : chdel.dataset.t4chdel;
+    const c = T4_CHM[id]; if (!c) return;
     try { t4RequireServerReady(); } catch (err) { toast(err.message, 5200); return; }
-    try { await t4SaveCatalog('channels', t4ChOverrides().filter(x => x.id !== chdel.dataset.t4chdel)); toast('已移除自定义渠道（历史数据保留）'); t4Go('channels'); }
+    if (!restore && !confirm(`停用归集渠道「${c.n}」？\n停用后不再出现在渠道列表、录入和导入中；已有数据的月份仍计入损益表。可在列表底部「已停用」里恢复。`)) return;
+    try { await t4SaveCatalog('channels', t4ChannelDisableCandidate(id, !restore)); toast(restore ? `已恢复「${c.n}」` : `已停用「${c.n}」（历史数据保留）`); T4.chField = ''; t4Go('channels'); }
+    catch (err) { toast(`渠道未同步：${err.message}`, 5200); }
+    return;
+  }
+  const srcdel = e.target.closest('[data-t4sourcedel]');
+  if (srcdel) {
+    const source = srcdel.dataset.t4sourcedel, channel = srcdel.dataset.channel;
+    try { t4RequireServerReady(); } catch (err) { toast(err.message, 5200); return; }
+    if (!confirm(`删除销售渠道「${source}」？\n之后导入文件中该门店的数据将提示未识别；已保存的损益不变。需要时可用「新增销售渠道」重新登记。`)) return;
+    try { await t4SaveCatalog('channels', t4SourceDeleteCandidate(channel, source)); toast(`已删除销售渠道「${source}」`); T4.chField = '__sources'; t4Go('channels'); }
     catch (err) { toast(`渠道未同步：${err.message}`, 5200); }
     return;
   }

@@ -33,8 +33,8 @@ test('orange sales appear only in the orange project, including Douyin', () => {
   assert.equal(a.run("t4ResolveChannel('抖音-橘农滋补旗舰店')"), 'dy_orange');
   assert.equal(a.run("t4Project(T4_CHM.tm_orange.bu)"), '橘农项目');
   assert.equal(a.run("T4.projFilter='aole'; t4ProjCH().some(c => c.id==='tm_orange')"), false);
-  assert.equal(a.run("T4.projFilter='orange'; t4ProjCH().length"), 4);
-  assert.equal(a.run("t4TreeNodes()[0].children.find(n=>n.id==='proj:orange').ids.length"), 4);
+  assert.equal(a.run("T4.projFilter='orange'; t4ProjCH().length"), 5);
+  assert.equal(a.run("t4TreeNodes()[0].children.find(n=>n.id==='proj:orange').ids.length"), 5);
 });
 
 test('an uploaded channel mapping overrides a built-in source mapping', () => {

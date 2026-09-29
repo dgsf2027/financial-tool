@@ -113,7 +113,7 @@ test('a fresh session opens sales rows and production cross-group names appear e
   }
   assert.equal(new Set(sourceRows(a).map(row => row.source)).size, sourceRows(a).length);
   assert.deepEqual(a.json('T4_CH.map(c => [c.id,c.n,c.bu])'), groups);
-  assert.equal(a.run('T4_CH.length'), 26);
+  assert.equal(a.run('T4_CH.length'), 27);
 });
 
 test('editing one sales name and number preserves its sibling, extra fields, groups and financial history', async () => {
@@ -152,7 +152,7 @@ test('new sales rows and explicitly entered aliases persist for fresh clients wi
     assert.equal(sourceRows(b).filter(row => row.source === name).length, 1);
     assert.equal(b.run(`t4ResolveChannel(${JSON.stringify(name)})`), 'gift');
   }
-  assert.equal(b.run('T4_CH.length'), 26);
+  assert.equal(b.run('T4_CH.length'), 27);
 });
 
 test('conflicting or invalid source edits are rejected before a shared write', async () => {

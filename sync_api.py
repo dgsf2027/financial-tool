@@ -96,6 +96,9 @@ def validate_document(doc):
             if channel.get(field) is not None and not isinstance(channel[field], str):
                 raise ValueError('channel ' + field + ' must be a string')
         validate_string_list(channel.get('aliases'), 'channel aliases')
+        validate_string_list(channel.get('removedSources'), 'channel removedSources')
+        if channel.get('removed') is not None and not isinstance(channel['removed'], bool):
+            raise ValueError('channel removed must be a boolean')
         details = channel.get('details')
         if details is not None:
             if not isinstance(details, list):
