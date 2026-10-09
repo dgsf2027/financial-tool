@@ -51,10 +51,55 @@ test('configuration is public, contains no key or gateway address, and fails clo
   const config = JSON.parse(text);
   assert.equal(config.configured, true); assert.equal(config.model, 'gpt-6.1-sol');
   assert.equal(config.maxBodyBytes, 8 * 1024 * 1024); assert.equal(config.maxConcurrency, 2);
+  assert.equal(config.requestsPerMinute, 30); assert.equal(config.requestIntervalMs, 2200);
   const bad = await fixture(t, { env: { RECEIPT_AI_KEY: KEY + '\n' } });
   assert.equal((await (await fetch(bad.base + '/api/receipt-check/config')).json()).configured, false);
   const failed = await bad.post();
   assert.equal(failed.status, 503); assert(!(await failed.text()).includes(KEY)); assert.equal(bad.calls.length, 0);
+});
+
+test('environment batch limits accept bounded integers and invalid values fall back to safe defaults', async t => {
+  for (const [concurrency, rpm, expectedConcurrency, expectedRpm] of [
+    ['1', '1', 1, 1], ['8', '120', 8, 120], ['6', '60', 6, 60],
+    ['0', '0', 2, 30], ['-1', '-1', 2, 30], ['9', '121', 2, 30],
+    ['1.5', '30.5', 2, 30], ['Infinity', 'NaN', 2, 30], ['', '', 2, 30], ['999999999', '999999999', 2, 30],
+  ]) {
+    const app = await fixture(t, { env: { RECEIPT_AI_CONCURRENCY: concurrency, RECEIPT_AI_RPM: rpm } });
+    const config = await (await fetch(app.base + '/api/receipt-check/config')).json();
+    assert.equal(config.maxConcurrency, expectedConcurrency, 'concurrency=' + concurrency);
+    assert.equal(config.requestsPerMinute, expectedRpm, 'rpm=' + rpm);
+    assert.equal(config.requestIntervalMs, Math.ceil(66000 / expectedRpm));
+    assert.equal(app.calls.length, 0);
+  }
+});
+
+test('six configured in-flight images are admitted and the seventh is rejected until a slot finishes', { timeout: 10000 }, async t => {
+  const allEntered = deferred(), release = deferred(); let entered = 0;
+  const app = await fixture(t, { env: { RECEIPT_AI_CONCURRENCY: '6', RECEIPT_AI_RPM: '120' }, onHub: async (_req, res) => {
+    entered += 1; if (entered === 6) allEntered.resolve(); await release.promise; reply(res);
+  } });
+  const config = await (await fetch(app.base + '/api/receipt-check/config')).json();
+  assert.equal(config.maxConcurrency, 6); assert.equal(config.requestsPerMinute, 120); assert.equal(config.requestIntervalMs, 550);
+  const requests = Array.from({ length: 6 }, (_, i) => app.post({ imageDataUrl: image('concurrent-' + i) }));
+  await allEntered.promise;
+  assert.equal(app.calls.length, 6, 'all six must reach the hub before any response is released');
+  const seventh = await app.post({ imageDataUrl: image('seventh') });
+  assert.equal(seventh.status, 429); assert.equal((await seventh.json()).error.code, 'AI_BUSY'); assert.equal(app.calls.length, 6);
+  release.resolve();
+  assert.deepEqual((await Promise.all(requests)).map(r => r.status), [200, 200, 200, 200, 200, 200]);
+  assert.equal((await app.post({ imageDataUrl: image('seventh') })).status, 200); assert.equal(app.calls.length, 7, 'completed calls release their slots');
+});
+
+test('environment RPM is enforced per identity and resets after its advertised window', async t => {
+  let current = 1000;
+  const app = await fixture(t, { env: { RECEIPT_AI_CONCURRENCY: '6', RECEIPT_AI_RPM: '2' }, factory: { now: () => current } });
+  const config = await (await fetch(app.base + '/api/receipt-check/config')).json(); assert.equal(config.requestIntervalMs, 33000);
+  assert.equal((await app.post({ imageDataUrl: image('one') })).status, 200);
+  assert.equal((await app.post({ imageDataUrl: image('two') })).status, 200);
+  const blocked = await app.post({ imageDataUrl: image('three') }); assert.equal(blocked.status, 429); assert.equal((await blocked.json()).error.code, 'RATE_LIMIT'); assert.equal(app.calls.length, 2);
+  assert.equal((await app.post({ imageDataUrl: image('other') }, { headers: { Cookie: 's=b' } })).status, 200);
+  current += 60001;
+  assert.equal((await app.post({ imageDataUrl: image('three') })).status, 200); assert.equal(app.calls.length, 4);
 });
 
 test('paid recognition requires a server session and exact allowed Origin before any upstream call', async t => {

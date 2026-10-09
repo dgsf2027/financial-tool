@@ -436,9 +436,13 @@ yc-finance-web/
 ```dotenv
 RECEIPT_AI_BASE_URL=http://host.docker.internal:8200/v1
 RECEIPT_AI_KEY=<财务中心专属业务密钥>
-RECEIPT_AI_MODEL=gpt-6.1-sol
+RECEIPT_AI_MODEL=gemini-3.8-flash
+RECEIPT_AI_CONCURRENCY=6
+RECEIPT_AI_RPM=60
 ```
 
-AI 中台业务身份 `finance`，功能字段 `finance-receipt-check`，模型经中台路由并计量。默认请求并发 2、每登录身份每分钟 30 次、单图 5 MiB、JSON 请求 8 MiB、上游超时 120 秒。模型只抽取图片事实，表格金额不发送给模型，金额比较及回填规则独立执行。默认不自动重试收费请求；相同身份相同图 5 分钟内缓存复用不重复计入本次调用量。
+AI 中台业务身份 `finance`，功能字段 `finance-receipt-check`，模型经中台路由并计量。线上批量配置为并发 6、每登录身份每分钟 60 次（中台 finance key 的 RPM 同步设为 60）；环境变量未设置时仍保守使用并发 2 / 30 RPM。并发只接受 1–8，RPM 只接受 1–120，非法值回到安全默认。页面每次开始核对重新读取配置，共享发送节奏保留 10% 余量，显示当前模型、处理速度及预计剩余时间。单图 5 MiB、JSON 请求 8 MiB、上游超时 120 秒。模型只抽取图片事实，表格金额不发送给模型，金额比较及回填规则独立执行。默认不自动重试收费请求；相同身份相同图 5 分钟内缓存复用不重复计入本次调用量。
 
 付费识别复用财务中心门户 SSO，并限制同源请求。配置检查端点只返回是否就绪和模型，不返回密钥/上游地址。部署时仅 app 服务加载 `.env.ai`；nginx 为 `/api/receipt-check/recognize` 设置 `client_max_body_size 8m`、`proxy_read_timeout 160s` 和 `proxy_send_timeout 160s`。配置后沿用既有 `deploy.sh deploy finance --recreate`，确保新环境变量进入 app 容器。
+
+Flash 模型通过现有 ACW Gemini 通道登记，调用仍归入财务中心。模型选择基于付款成功、待收款、缺失日期三类图片实测。新批次使用并发配置；已打开的旧页面无需刷新也会在服务器切换后使用新模型，但保留原前端并发节奏。更换版本前可暂停并导出已通过的记录，再用导出文件继续；不要直接刷新丢失内存结果。中台缺少模型费率时只把调用次数和 Token 作为有效统计，显示的零费用不能理解为免费。

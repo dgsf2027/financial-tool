@@ -3,7 +3,8 @@
   'use strict';
   const state = { book: null, file: null, rows: [], sheet: 'all', filter: 'all', page: 0, running: false,
     pause: false, busy: false, error: '', config: null, auth: false, monthMode: 'payment', fixedMonth: '',
-    calls: 0, tokens: 0, cached: 0, selected: null, previewUrl: '', previewSeq: 0 };
+    calls: 0, tokens: 0, cached: 0, selected: null, previewUrl: '', previewSeq: 0,
+    startedAt: 0, runDone: 0, runCount: 0, concurrency: 2 };
   const labels = { waiting: '待识别', working: '识别中', passed: '一致 · 可回填', mismatch: '金额差异', review: '待复核', skipped: '原已核对', error: '识别失败' };
   const tones = { passed: 'ok', mismatch: 'cr', review: 'wa', error: 'cr', working: 'in', skipped: 'mu', waiting: 'mu' };
   const statusNames = { success: '付款成功', pending: '待收款', refunded: '已退款', failed: '付款失败', unknown: '不明确' };
@@ -15,12 +16,14 @@
   function refresh() { if (CURS === 'receipt-check') go('receipt-check'); }
   function message() { return state.error ? `<div class="note rc-error" role="alert">${H(state.error)}</div>` : ''; }
   async function loadConfig() {
+    let ok = false;
     try {
       const [c, s] = await Promise.all([fetch('/api/receipt-check/config', {cache:'no-store'}), fetch('/api/session', {cache:'no-store'})]);
       if (!c.ok || !s.ok) throw Error('服务状态读取失败，请稍后重试');
-      state.config = await c.json(); state.auth = !!(await s.json()).authenticated;
+      state.config = await c.json(); state.auth = !!(await s.json()).authenticated; ok = true;
     } catch (e) { state.error = e.message; }
     refresh();
+    return ok;
   }
   S['receipt-check'] = () => {
     if (!state.config && !state.configLoading) { state.configLoading = true; void loadConfig(); }
@@ -31,6 +34,9 @@
     const done = rows.filter(r => r.result || r.transportError).length;
     const taskCount = done + (counts.waiting || 0) + (counts.working || 0);
     const model = state.config?.model || '连接中';
+    const elapsed = state.startedAt ? (Date.now() - state.startedAt) / 1000 : 0;
+    const perMinute = state.runDone >= 3 && elapsed > 0 ? state.runDone / elapsed * 60 : 0;
+    const eta = perMinute ? Math.ceil((state.runCount - state.runDone) / perMinute) : 0;
     const auth = !state.auth ? `<div class="note">AI 识别需先通过门户登录。<a href="/sso/login" target="_blank" rel="noopener">打开门户并进入财务中心</a>，完成后 <button class="btn sm" data-rc="session">刷新登录状态</button>。可先选择文件查看明细。</div>` : '';
     return head('支付凭证核对', '读取支付截图、逐笔核对金额，自动回填通过记录的「已核对」与月份。', 'AI · 财务工具')
       + `<section class="rc" aria-label="支付凭证核对">${message()}${auth}
@@ -52,6 +58,7 @@
       <button class="btn" data-rc="export" ${state.busy || state.running || !passing().length ? 'disabled' : ''}>导出已回填 Excel（${passing().length}）</button></div>
       <div class="cb"><div class="rc-progress" role="status" aria-live="polite">${state.running ? state.pause ? '等待当前请求结束后暂停' : '正在识别，请保持页面打开' : '本次已识别'} · ${done} / ${taskCount} 条 <progress max="${Math.max(1, taskCount)}" value="${done}" aria-label="本次处理进度"></progress></div>
       <div class="rc-meta">模型 ${H(model)} · 本次成功调用 ${state.calls} 次 · Token ${fmt(state.tokens)} · 缓存复用 ${state.cached} 次 · <a href="https://token.vvaix.com/" target="_blank" rel="noopener">AI 中台统计</a>（财务中心）</div>
+      ${state.running ? `<div class="rc-meta">同时处理 ${state.concurrency} 张${perMinute ? ` · 约 ${perMinute.toFixed(0)} 张/分钟 · 预计还需 ${Math.max(1, eta)} 分钟` : ' · 正在估算处理速度'}</div>` : ''}
       <p class="rc-help">导出包含所有工作表中本次通过的记录。暂停会等待正在进行的请求完成；切换模块可保留进度，刷新或关闭页面会丢失本次结果。</p>
       <label class="rc-filter">显示记录<select id="rc-filter">${['all','waiting','passed','mismatch','review','error','skipped'].map(k => `<option value="${k}" ${state.filter === k ? 'selected' : ''}>${k === 'all' ? '全部' : labels[k]}</option>`).join('')}</select></label></div>
       <div class="rc-results"><div class="tw"><table><thead><tr><th>工作表 / 行</th><th>支出项目</th><th class="num">表格金额</th><th class="num">截图金额</th><th>判定</th><th>回填月份</th><th>凭证</th></tr></thead><tbody>${visible.slice(state.page * 30, state.page * 30 + 30).map(r => { const d = evaluate(r); return `<tr ${state.selected === r.key ? 'class="rc-selected"' : ''}><td>${H(r.sheetName)} / ${r.row}</td><td class="rc-label">${H(r.label)}</td><td class="num">${H(r.amount)}</td><td class="num">${r.result?.amount == null ? '—' : H(r.result.amount)}</td><td>${pill(labels[d.state], tones[d.state])}<div class="rc-reason">${H(d.reason)}</div></td><td>${H(d.month || r.month || '—')}</td><td><button class="btn sm" data-rc-detail="${H(r.key)}">查看</button></td></tr>`; }).join('') || '<tr><td colspan="7">没有符合筛选条件的记录</td></tr>'}</tbody></table></div>
@@ -89,22 +96,31 @@
       }
       if (!body.result) throw Error('识别结果缺失，请重试');
       row.result = body.result; row.callId = body.callId; row.model = body.model;
+      if (typeof body.model === 'string') state.config.model = body.model;
       if (body.cached) state.cached++; else { state.calls++; state.tokens += Number(body.usage?.total_tokens) || 0; }
     } catch (e) { row.transportError = e.name === 'AbortError' ? '请求超时，本行未通过，可重试' : e.message; }
-    finally { row.working = false; refresh(); }
+    finally { row.working = false; state.runDone++; refresh(); }
   }
   async function start() {
     if (state.running || state.busy || !state.auth || !state.config?.configured) return;
-    state.running = true; state.pause = false; state.error = ''; const queue = readyRows(); refresh();
-    // Two workers match the API cap; request spacing also stays below the business-key RPM.
+    state.running = true; state.pause = false; state.error = ''; refresh();
+    // Refresh the server's model and batch limits without discarding any results.
+    if (!await loadConfig() || !state.auth || !state.config?.configured || state.pause) { state.running = false; refresh(); return; }
+    const queue = readyRows(); state.startedAt = Date.now(); state.runDone = 0; state.runCount = queue.length;
+    const bounded = (value, fallback, max) => Number.isInteger(value) && value >= 1 && value <= max ? value : fallback;
+    state.concurrency = bounded(state.config.maxConcurrency, 2, 8);
+    const rpm = bounded(state.config.requestsPerMinute, 30, 120);
+    const interval = Math.max(Math.ceil(66000 / rpm), Number(state.config.requestIntervalMs) || 0);
+    refresh();
+    // Shared pacing across all workers stays below the server/business-key cap.
     let nextStart = 0;
     const worker = async () => { while (!state.pause && queue.length) {
-      const row = queue.shift(); const delay = Math.max(0, nextStart - Date.now()); nextStart = Math.max(Date.now(), nextStart) + 2300;
+      const row = queue.shift(); const delay = Math.max(0, nextStart - Date.now()); nextStart = Math.max(Date.now(), nextStart) + interval;
       if (delay) await new Promise(r => setTimeout(r, delay));
       if (state.pause) break;
       await recognize(row);
     }};
-    try { await Promise.all([worker(), worker()]); } finally { state.running = false; refresh(); }
+    try { await Promise.all(Array.from({length: state.concurrency}, () => worker())); } finally { state.running = false; refresh(); }
   }
   async function exportFile() {
     if (state.busy || state.running) return;

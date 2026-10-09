@@ -75,19 +75,22 @@ async function fixture(page, rows) {
 const recognized = (amount, patch = {}) => ({ result: { amount: String(amount), currency: 'CNY', payment_status: 'success', payment_date: '2026-09-23', multiple_transactions: false, needs_review: false, reason: '付款记录清晰', ...patch }, usage: { total_tokens: 123 }, callId: 'mock-call-id', model: 'mock-vision', cached: false });
 async function setup(t, opts = {}) {
   const context = await browser.newContext({ viewport: { width: opts.width || 1440, height: 1000 }, acceptDownloads: true }); t.after(() => context.close());
-  const page = await context.newPage(), errors = [], calls = []; page.on('pageerror', e => errors.push(e.message));
+  const page = await context.newPage(), errors = [], calls = [], callTimes = [], configCalls = []; page.on('pageerror', e => errors.push(e.message));
   await context.route('**/*', async route => {
     const url = new URL(route.request().url());
     if (url.origin !== baseURL) return route.abort();
     if (url.pathname === '/api/session') return route.fulfill({ json: { authenticated: opts.auth !== false, name: '本地验收', loginUrl: '/sso/login' } });
-    if (url.pathname === '/api/receipt-check/config') return route.fulfill({ json: { configured: opts.configured !== false, model: 'mock-vision' } });
-    if (url.pathname === '/api/receipt-check/recognize') { calls.push(route.request().postDataJSON()); return opts.recognize ? opts.recognize(route, calls.length) : route.fulfill({ status: 500, json: { error: 'Unexpected recognition request' } }); }
+    if (url.pathname === '/api/receipt-check/config') {
+      configCalls.push(Date.now());
+      return route.fulfill({ json: { configured: opts.configured !== false, model: 'mock-vision', maxConcurrency: 2, requestsPerMinute: 30, requestIntervalMs: 2200, ...(typeof opts.config === 'function' ? opts.config(configCalls.length) : opts.config || {}) } });
+    }
+    if (url.pathname === '/api/receipt-check/recognize') { calls.push(route.request().postDataJSON()); callTimes.push(Date.now()); return opts.recognize ? opts.recognize(route, calls.length) : route.fulfill({ status: 500, json: { error: 'Unexpected recognition request' } }); }
     if (url.pathname.startsWith('/api/')) return route.fulfill({ json: { found: false, version: 0, document: {}, configured: false } });
     return route.continue();
   });
   await page.goto(baseURL + '/?tool=receipt-check', { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => document.querySelector('.rc') && !document.querySelector('.rc').textContent.includes('模型 连接中'));
-  return { page, calls, errors };
+  return { page, calls, errors, callTimes, configCalls };
 }
 async function upload(page, input) { await page.locator('#rc-file').setInputFiles({ name: '费用测试.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: input.buffer }); await page.locator('#rc-sheet').waitFor(); }
 const row = (page, label) => page.locator('.rc-results tbody tr').filter({ has: page.locator('.rc-label', { hasText: label }) });
@@ -143,6 +146,53 @@ test('pause waits for active request; a rate limit leaves rows retryable and suc
   await firstRoute.fulfill({ status: 429, json: { error: { message: '测试频率限制，请稍后重试' } } }); await finished(page);
   assert.equal(calls.length, 1); assert.match(await row(page, 'one').innerText(), /识别失败[\s\S]*测试频率限制/); assert.ok(await page.locator('[data-rc="export"]').isDisabled());
   await page.locator('[data-rc="start"]').click(); await finished(page); assert.equal(calls.length, 4); assert.match(await page.locator('[data-rc="export"]').innerText(), /（3）/); assert.equal(await page.locator('.rc-results tbody tr').filter({ hasText: '一致 · 可回填' }).count(), 3); assert.deepEqual(errors, []);
+});
+
+test('latest config enables six actual concurrent requests with shared pacing; pause and retry retain prior evidence', options, async t => {
+  const held = []; let sixEntered;
+  const entered = new Promise(resolve => { sixEntered = resolve; });
+  let latest = { model: 'old-model', maxConcurrency: 2, requestsPerMinute: 30, requestIntervalMs: 2200 };
+  const { page, calls, callTimes, configCalls, errors } = await setup(t, { config: () => latest, recognize: (route, number) => {
+    if (number <= 6) { held.push(route); if (number === 6) sixEntered(); return; }
+    if (number === 7) return route.fulfill({ status: 500, json: { error: { message: '一次性测试故障' } } });
+    return route.fulfill({ json: { ...recognized('2.5'), model: 'actual-flash' } });
+  } });
+  await upload(page, await fixture(page, Array.from({ length: 8 }, (_, i) => ({ image: 'batch' + i, amount: '2.5', label: 'batch' + i }))));
+  await page.waitForFunction(() => document.querySelector('.rc-meta')?.textContent.includes('old-model'));
+  latest = { model: 'fresh-flash', maxConcurrency: 6, requestsPerMinute: 120, requestIntervalMs: 550 };
+  await page.locator('[data-rc="start"]').click();
+  const deadline = setTimeout(() => sixEntered('timeout'), 8000); const outcome = await entered; clearTimeout(deadline);
+  assert.notEqual(outcome, 'timeout', 'six requests must all arrive before any response is released'); assert.equal(held.length, 6); assert.equal(calls.length, 6);
+  assert.equal(configCalls.length, 2, 'starting reloads the initial config');
+  assert.match(await page.locator('.rc-meta').first().innerText(), /fresh-flash/); assert.match(await page.locator('.rc').innerText(), /同时处理 6 张/);
+  for (let i = 1; i < callTimes.length; i++) assert.ok(callTimes[i] - callTimes[i - 1] >= 500, 'global request pacing between workers: ' + (callTimes[i] - callTimes[i - 1]) + 'ms');
+  await page.locator('[data-rc="pause"]').click();
+  await Promise.all(held.slice(0, 3).map(route => route.fulfill({ json: { ...recognized('2.5'), model: 'actual-flash' } })));
+  await page.waitForFunction(() => document.querySelector('.rc')?.textContent.includes('预计还需'));
+  assert.match(await page.locator('.rc').innerText(), /约 \d+ 张\/分钟/); assert.match(await page.locator('.rc-meta').first().innerText(), /actual-flash/);
+  await Promise.all(held.slice(3).map(route => route.fulfill({ json: { ...recognized('2.5'), model: 'actual-flash' } })));
+  await finished(page); assert.equal(calls.length, 6, 'paused queue must not start either remaining row');
+  assert.equal(await page.locator('.rc-results tbody tr').filter({ hasText: '一致 · 可回填' }).count(), 6);
+  latest = { model: 'second-config-flash', maxConcurrency: 4, requestsPerMinute: 120, requestIntervalMs: 550 };
+  await page.locator('[data-rc="start"]').click(); await finished(page);
+  assert.equal(configCalls.length, 3); assert.equal(calls.length, 8, 'resume starts only the two unprocessed rows');
+  assert.equal(await page.locator('.rc-results tbody tr').filter({ hasText: '一致 · 可回填' }).count(), 7);
+  assert.match(await row(page, 'batch6').innerText(), /一次性测试故障/);
+  await page.locator('[data-rc="start"]').click(); await finished(page);
+  assert.equal(configCalls.length, 4); assert.equal(calls.length, 9); assert.deepEqual(calls[8], calls[6], 'only the failed image is retried');
+  assert.equal(await page.locator('.rc-results tbody tr').filter({ hasText: '一致 · 可回填' }).count(), 8); assert.match(await page.locator('[data-rc="export"]').innerText(), /（8）/);
+  assert.match(await page.locator('.rc-meta').first().innerText(), /actual-flash.*成功调用 8 次/); assert.deepEqual(errors, []);
+});
+
+test('pausing six workers cancels every paced request that has not started and preserves the completed row', options, async t => {
+  let firstRoute, firstEntered; const entered = new Promise(resolve => { firstEntered = resolve; });
+  const { page, calls, errors } = await setup(t, { config: { maxConcurrency: 6, requestsPerMinute: 120, requestIntervalMs: 550 }, recognize: route => { firstRoute = route; firstEntered(); } });
+  await upload(page, await fixture(page, Array.from({ length: 7 }, (_, i) => ({ image: 'pause' + i, amount: '2.5', label: 'pause' + i }))));
+  await page.locator('[data-rc="start"]').click(); await entered; await page.locator('[data-rc="pause"]').click();
+  await firstRoute.fulfill({ json: recognized('2.5') }); await finished(page);
+  assert.equal(calls.length, 1, 'five scheduled worker delays must finish without sending requests');
+  assert.equal(await page.locator('.rc-results tbody tr').filter({ hasText: '一致 · 可回填' }).count(), 1); assert.match(await page.locator('[data-rc="start"]').innerText(), /（6）/);
+  assert.match(await page.locator('[data-rc="export"]').innerText(), /（1）/); assert.deepEqual(errors, []);
 });
 
 test('unconfigured or unauthenticated clients can inspect files but cannot start recognition', options, async t => {

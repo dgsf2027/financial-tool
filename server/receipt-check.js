@@ -168,7 +168,13 @@ function requestAI(config, imageDataUrl, timeoutMs) {
 }
 
 function createReceiptCheck({ sessionUser, env = process.env, publicOrigin = 'https://finance.vvaix.com',
-  timeoutMs = 120000, uploadTimeoutMs = 15000, maxConcurrent = 2, rateLimit = 30, now = Date.now } = {}) {
+  timeoutMs = 120000, uploadTimeoutMs = 15000, maxConcurrent, rateLimit, now = Date.now } = {}) {
+  const bounded = (value, fallback, max) => {
+    const number = Number(value);
+    return Number.isInteger(number) && number >= 1 && number <= max ? number : fallback;
+  };
+  maxConcurrent = bounded(maxConcurrent ?? env.RECEIPT_AI_CONCURRENCY, 2, 8);
+  rateLimit = bounded(rateLimit ?? env.RECEIPT_AI_RPM, 30, 120);
   const config = safeConfig(env);
   const rates = new Map(), cache = new Map(), pending = new Map();
   let active = 0, requests = 0;
@@ -197,7 +203,7 @@ function createReceiptCheck({ sessionUser, env = process.env, publicOrigin = 'ht
         if (req.method !== 'GET') return sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持 GET' } }, { Allow: 'GET' });
         return sendJson(res, 200, { configured: config.configured, model: config.model,
           maxBodyBytes: MAX_BODY_BYTES, maxImageBytes: MAX_IMAGE_BYTES, maxConcurrency: maxConcurrent,
-          requestsPerMinute: rateLimit, loginUrl: '/sso/login' });
+          requestsPerMinute: rateLimit, requestIntervalMs: Math.ceil(66000 / rateLimit), loginUrl: '/sso/login' });
       }
       if (pathname !== '/api/receipt-check/recognize') return sendJson(res, 404, { error: { code: 'NOT_FOUND', message: '接口不存在' } });
       if (req.method !== 'POST') return sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持 POST' } }, { Allow: 'POST' });
