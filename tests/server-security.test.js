@@ -19,6 +19,7 @@ before(async () => {
   const src = path.resolve(__dirname, '..');
   for (const name of fs.readdirSync(src).filter(n => /\.(js|css|html)$/.test(n))) fs.copyFileSync(path.join(src, name), path.join(root, name));
   fs.cpSync(path.join(src, 'lib'), path.join(root, 'lib'), { recursive: true });
+  fs.cpSync(path.join(src, 'server'), path.join(root, 'server'), { recursive: true });
   fs.mkdirSync(path.join(root, 'suite', '_cfg'), { recursive: true });
   fs.writeFileSync(path.join(root, 'suite', '_cfg', 'probe.txt'), 'NON_SECRET_PROBE');
   const port = await new Promise(resolve => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
@@ -105,7 +106,7 @@ test('page references change when deployed assets change even if the CDN caches 
   } finally { fs.writeFileSync(file, original); }
 });
 test('internal files and encoded paths are denied without exposing fixture content', async () => {
-  for (const p of ['/suite/_cfg/probe.txt','/suite/%5fcfg/probe.txt','/suite/_out/probe.txt','/.git/config','/.env','/server.js','/sync_api.py','/promo-fetch/config.js','/Dockerfile.web','/suite/_cfg-other/probe.txt']) {
+  for (const p of ['/suite/_cfg/probe.txt','/suite/%5fcfg/probe.txt','/suite/_out/probe.txt','/.git/config','/.env','/server.js','/server/receipt-check.js','/sync_api.py','/promo-fetch/config.js','/Dockerfile.web','/suite/_cfg-other/probe.txt']) {
     const r = await fetch(base + p); assert.equal(r.status, 403, p); assert(!((await r.text()).includes('NON_SECRET_PROBE')));
   }
 });

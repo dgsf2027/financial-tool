@@ -53,6 +53,7 @@ before(async () => {
   }));
   fs.writeFileSync(fakeLog, '');
   fs.copyFileSync(path.join(__dirname, '..', 'server.js'), path.join(root, 'server.js'));
+  fs.cpSync(path.join(__dirname, '..', 'server'), path.join(root, 'server'), { recursive: true });
 
   // This fake Python executable delays reads and mail attachment inspection so
   // fixed Date.now() filenames would deterministically collide across jobs.

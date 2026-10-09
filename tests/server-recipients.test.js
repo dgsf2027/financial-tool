@@ -17,6 +17,7 @@ const get = () => fetch(`${base}/api/t4/recipients`, {headers:{Cookie:cookie()}}
 before(async () => {
   root=fs.mkdtempSync(path.join(os.tmpdir(),'finance-contacts-')); cfg=path.join(root,'suite','_cfg');
   fs.copyFileSync(path.join(__dirname,'..','server.js'),path.join(root,'server.js'));
+  fs.cpSync(path.join(__dirname, '..', 'server'), path.join(root, 'server'), { recursive: true });
   const preload=path.join(root,'fail-rename.js');
   fs.writeFileSync(preload, `const fs=require('fs');const rename=fs.renameSync;fs.renameSync=(from,to)=>{if(fs.existsSync(${JSON.stringify(path.join(root,'fail-save'))})&&to.endsWith('recipients.json'))throw new Error('simulated disk failure');return rename(from,to)};`);
   const port=await new Promise(resolve=>{const server=net.createServer();server.listen(0,'127.0.0.1',()=>{const p=server.address().port;server.close(()=>resolve(p));});});

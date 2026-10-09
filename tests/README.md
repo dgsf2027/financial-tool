@@ -35,3 +35,7 @@ T4 渠道导入回归覆盖：表头和列顺序变化、横向清单、多工�
 `t4-source-roster.test.js` 覆盖销售门店独立编辑、改名链与归集迁移、下载重导、别名可见、基础行去重和多人保存冲突。`t4-channel-roster.browser.test.js` 验证实际 xlsx 上传、默认名单、刷新与另一客户端读取、单店编辑、新增及失败时保留输入。
 
 可用 `FINANCE_CHANNEL_ROSTER_XLSX` 指定真实渠道表、`FINANCE_CHANNEL_METADATA` 指定只含渠道配置的核查 JSON，运行对应浏览器验收；这两类业务样本不纳入仓库。未提供样本时会明确跳过真实文件用例，通用工作簿用例仍运行。
+
+支付凭证核对：`receipt-api.test.js` 使用独立假中台，验证鉴权、同源、费用参数、限流、缓存、超时及严格结果解析；`receipt-rules.test.js` 验证精确金额和保守回填规则。`receipt-workbook.browser.test.js` 验证 WPS/浮动图片与 ZIP 原包保留；`receipt-check.browser.test.js` 通过模拟识别响应验证金额差异、待收款、重复凭证、月份选择、暂停重试、桌面/手机及真实导出，不调用生产模型。
+
+可设置 `RECEIPT_TEST_XLSX=/本地/含图片的.xlsx` 运行真实大文件导入与导出保留检查（文件不会上传，也不入仓库）；`RECEIPT_TEST_OUTPUT_DIR` 可指定临时导出目录。浏览器及服务器测试均使用隔离会话和数据。

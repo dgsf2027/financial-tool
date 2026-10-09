@@ -13,6 +13,7 @@ const PUBLIC_FILES = new Set([
   'index.html', 'app.css', 'app.js', 'acct.js', 'rpt.js', 'inv.js', 'base.js',
   'cons.js', 'dash.js', 'fa.js', 'pay.js', 'rec.js', 't1.js', 't3.js',
   't4.js', 't4-sync.js', 't4-allocation.js', 't4-returns.js', 'lib/xlsx-lite.js', 'lib/xlsx-write.js',
+  'receipt-check.js', 'receipt-check.css', 'lib/receipt-rules.js', 'lib/receipt-workbook.js',
 ]);
 
 function versionPageAssets(html) {
@@ -338,6 +339,7 @@ async function handleApi(req, res, urlPath) {
   sendText(res, 404, 'Not found');
 }
 
+const receiptCheck = require('./server/receipt-check').createReceiptCheck({ sessionUser });
 const server = http.createServer((req, res) => {
   let urlPath;
   try {
@@ -370,6 +372,14 @@ const server = http.createServer((req, res) => {
   }
 
   // T4 套表 / 邮件接口
+  if (urlPath.startsWith('/api/receipt-check/')) {
+    receiptCheck.handle(req, res, urlPath).catch(() => {
+      if (!res.headersSent) sendJson(res, 500, { error: { code: 'internal', message: '凭证识别服务暂不可用，请稍后重试' } });
+      else res.end();
+    });
+    return;
+  }
+
   if (urlPath.startsWith('/api/t4/')) {
     handleApi(req, res, urlPath).catch(e => { try { sendText(res, 500, '接口错误：' + e.message); } catch (_) {} });
     return;
