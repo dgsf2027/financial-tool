@@ -45,9 +45,11 @@ function validateResult(value) {
   if (!['success', 'pending', 'refunded', 'failed', 'unknown'].includes(value.payment_status)) throw invalid();
   if (value.payment_date !== null && !validDate(value.payment_date)) throw invalid();
   if (typeof value.multiple_transactions !== 'boolean' || typeof value.needs_review !== 'boolean') throw invalid();
-  if (typeof value.reason !== 'string' || value.reason.length > 2000) throw invalid();
+  // Some Flash responses use null for an optional explanation. It is not
+  // payment evidence; keep all monetary/status/date/uncertainty checks strict.
+  if (value.reason !== null && (typeof value.reason !== 'string' || value.reason.length > 2000)) throw invalid();
   // Copy only our schema. Never expose arbitrary provider/model fields.
-  return Object.fromEntries(fields.map(key => [key, value[key]]));
+  return Object.fromEntries(fields.map(key => [key, key === 'reason' && value[key] === null ? '' : value[key]]));
 }
 function validateImage(value) {
   if (typeof value !== 'string') throw apiError(400, 'INVALID_IMAGE', '请提供一张 PNG、JPEG 或 WebP 图片');

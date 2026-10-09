@@ -116,6 +116,21 @@ test('paid recognition requires a server session and exact allowed Origin before
   assert.equal(app.calls.length, 0);
 });
 
+test('Flash null explanation is accepted without relaxing payment evidence or inventing a reason', async t => {
+  const app = await fixture(t, { onHub: async (_req, res) => reply(res, goodResult({ reason: null })) });
+  const response = await app.post({ imageDataUrl: image(), expectedAmount: '2.50' });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.result.reason, '');
+  assert.equal(body.result.eligible_for_write, true);
+  for (const invalid of [{ amount: null }, { payment_status: 'pending' }, { needs_review: true }]) {
+    const other = await fixture(t, { onHub: async (_req, res) => reply(res, goodResult({ reason: null, ...invalid })) });
+    const result = await (await other.post({ imageDataUrl: image(), expectedAmount: '2.50' })).json();
+    assert.equal(result.result.eligible_for_write, false);
+  }
+  assert.throws(() => validateResult(goodResult({ reason: {} })));
+});
+
 test('request uses the fixed model/hub feature, never sends expected amount, and returns validated facts and accounting ids', async t => {
   const app = await fixture(t);
   const response = await app.post({ imageDataUrl: image(), expectedAmount: '987654321.01' });
@@ -173,7 +188,7 @@ test('pending, refunded, missing date, multiple transactions and uncertain resul
 test('model response schema rejects malformed amounts, dates, flags, missing fields and interrupted completions', async t => {
   for (const patch of [{ amount: 2.5 }, { amount: '-2.50' }, { amount: '2.500' }, { currency: 100 },
     { payment_date: '2026-02-29' }, { payment_date: '0000-01-01' }, { payment_date: '2026-04-31' },
-    { payment_status: ['success'] }, { needs_review: 'false' }, { multiple_transactions: 0 }, { reason: null }]) {
+    { payment_status: ['success'] }, { needs_review: 'false' }, { multiple_transactions: 0 }, { reason: 123 }]) {
     assert.throws(() => validateResult(goodResult(patch)));
   }
   assert.equal(validateResult(goodResult({ payment_date: '2024-02-29' })).payment_date, '2024-02-29');
