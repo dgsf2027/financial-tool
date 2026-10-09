@@ -60,6 +60,42 @@ function fixture(options = {}) {
   }
   return files;
 }
+const styledCell = (ref, value, style) => cell(ref, value).replace('<c ', `<c s="${style}" `);
+const targetXf = fill => `<xf numFmtId="164" fontId="1" fillId="${fill}" borderId="1" xfId="0" quotePrefix="1" applyNumberFormat="1" applyAlignment="1" applyProtection="1"${fill === 2 ? ' applyFill="1"' : ''}><alignment horizontal="left" wrapText="1"/><protection locked="0" hidden="1"/></xf>`;
+function colorFixture({ references = [{ row: 6, month: '2609', monthStyle: 2, statusStyle: 2 }], reuse = false, targets = true } = {}) {
+  const files = fixture();
+  const xfs = [
+    '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>', targetXf(0),
+    '<xf numFmtId="165" fontId="2" fillId="2" borderId="2" xfId="0" applyFill="1"><alignment horizontal="center"/></xf>',
+    '<xf numFmtId="165" fontId="2" fillId="4" borderId="2" xfId="0" applyFill="1"><alignment horizontal="center"/></xf>',
+    '<xf numFmtId="166" fontId="3" fillId="0" borderId="3" xfId="0"><alignment vertical="top"/></xf>',
+    '<xf numFmtId="164" fontId="1" fillId="0" borderId="3" xfId="0"><alignment vertical="bottom"/><protection locked="0"/></xf>',
+  ];
+  if (reuse) xfs.push(targetXf(2));
+  files['xl/styles.xml'] = `<?xml version="1.0"?><styleSheet xmlns="${ns}"><numFmts count="3"><numFmt numFmtId="164" formatCode="0.00"/><numFmt numFmtId="165" formatCode="@"/><numFmt numFmtId="166" formatCode="yyyy-mm"/></numFmts><fonts count="4">${[12, 11, 10, 9].map(size => `<font><sz val="${size}"/><name val="Arial"/></font>`).join('')}</fonts><fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>${['FF92D04F', 'FFFFFF00', 'FF00B0F0'].map(rgb => `<fill><patternFill patternType="solid"><fgColor rgb="${rgb}"/><bgColor indexed="64"/></patternFill></fill>`).join('')}</fills><borders count="4">${['', 'thin', 'medium', 'double'].map(style => `<border><left${style ? ` style="${style}"` : ''}/><right/><top/><bottom/><diagonal/></border>`).join('')}</borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="${xfs.length}">${xfs.join('')}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles><dxfs count="1"><dxf><fill><patternFill patternType="solid"><fgColor rgb="FFFF0000"/></patternFill></fill></dxf></dxfs></styleSheet>`;
+  files['xl/_rels/workbook.xml.rels'] = files['xl/_rels/workbook.xml.rels'].replace('</Relationships>', `<Relationship Id="styles" Type="${rns}/styles" Target="styles.xml"/></Relationships>`);
+  files['xl/worksheets/custom.xml'] = files['xl/worksheets/custom.xml']
+    .replace('<c r="L3" s="7"/>', targets ? '<c r="L3" s="1"/><c r="M3" s="1"/>' : '')
+    .replace(/<row r="6">[\s\S]*?<\/row>/, '')
+    .replace('</sheetData>', references.map(ref => `<row r="${ref.row}">${cell('C' + ref.row, '已核对样例')}<c r="D${ref.row}"><v>2.5</v></c>${styledCell('L' + ref.row, ref.month, ref.monthStyle)}${styledCell('M' + ref.row, '已核对', ref.statusStyle)}</row>`).join('') + '</sheetData>');
+  return files;
+}
+async function coloredExport(page, month = '2609', sheetId = '7') {
+  return Buffer.from(await page.evaluate(async ({ month, sheetId }) => Array.from(new Uint8Array(await (await book.export([{ sheetId, row: 3, month, status: '已核对' }])).arrayBuffer())), { month, sheetId }));
+}
+async function colorFacts(page, bytes, sheetPath = 'xl/worksheets/custom.xml') {
+  const entries = unzip(bytes);
+  return page.evaluate(({ styles, sheet }) => {
+    const parse = text => new DOMParser().parseFromString(text, 'application/xml');
+    const all = (el, tag) => [...el.getElementsByTagNameNS('*', tag)];
+    const stylesDoc = parse(styles), sheetDoc = parse(sheet), xfs = [...all(stylesDoc, 'cellXfs')[0].children];
+    const facts = xf => ({ attrs: Object.fromEntries([...xf.attributes].filter(a => a.namespaceURI !== 'http://www.w3.org/2000/xmlns/').map(a => [a.name, a.value])), children: [...xf.children].map(c => new XMLSerializer().serializeToString(c)) });
+    const cells = {};
+    for (const ref of ['L3', 'M3']) { const c = all(sheetDoc, 'c').find(c => c.getAttribute('r') === ref); const id = Number(c?.getAttribute('s') || 0); cells[ref] = { id, style: facts(xfs[id]), value: all(c, 't').map(t => t.textContent).join('') }; }
+    return { count: xfs.length, declaredCount: Number(all(stylesDoc, 'cellXfs')[0].getAttribute('count')), xfs: xfs.map(facts), cells };
+  }, { styles: entries.get('xl/styles.xml').content.toString(), sheet: entries.get(sheetPath).content.toString() });
+}
+function withoutFill(style) { const attrs = { ...style.attrs }; delete attrs.fillId; delete attrs.applyFill; return { ...style, attrs }; }
 function imageAlias(files, bytes) {
   files['xl/cellimages.xml'] = files['xl/cellimages.xml'].replace('</etc:cellImages>', '<etc:cellImage><xdr:pic><xdr:cNvPr name="COPY"/><a:blip r:embed="copy"/></xdr:pic></etc:cellImage></etc:cellImages>');
   files['xl/_rels/cellimages.xml.rels'] = files['xl/_rels/cellimages.xml.rels'].replace('</Relationships>', `<Relationship Id="copy" Type="${rns}/image" Target="media/different-name.png"/></Relationships>`);
@@ -124,6 +160,67 @@ test('amount formulas require recalculation review and cannot export cached valu
     assert.equal(await page.evaluate(() => book.sheets[0].rows.some(r => r.row === 7)), false);
   }
 });
+test('review colors only change L/M fills and preserve all target formatting plus original images and formulas', opts, async t => {
+  const input = zip(colorFixture()), page = await load(t, input), output = await coloredExport(page);
+  const facts = await colorFacts(page, output), before = unzip(input), after = unzip(output);
+  assert.equal(facts.count, 7); assert.equal(facts.declaredCount, 7, 'one reusable combined style is appended');
+  for (const ref of ['L3', 'M3']) {
+    assert.equal(facts.cells[ref].style.attrs.fillId, '2'); assert.equal(facts.cells[ref].style.attrs.applyFill, '1');
+    assert.deepEqual(withoutFill(facts.cells[ref].style), withoutFill(facts.xfs[1]), 'font, border, number format, alignment and protection remain the target’s');
+  }
+  assert.equal(facts.cells.L3.id, facts.cells.M3.id); assert.equal(facts.cells.L3.value, '2609'); assert.equal(facts.cells.M3.value, '已核对');
+  const originalFacts = await colorFacts(page, input); assert.deepEqual(facts.xfs.slice(0, 6), originalFacts.xfs, 'existing XF definitions remain unchanged');
+  const stripTargets = xml => xml.replace(/<c\b[^>]*?(?:\/>|>[\s\S]*?<\/c>)/g, value => /\br="[LM]3"/.test(value.slice(0, value.indexOf('>') + 1)) ? '' : value);
+  assert.equal(stripTargets(after.get('xl/worksheets/custom.xml').content.toString()), stripTargets(before.get('xl/worksheets/custom.xml').content.toString()), 'only the two reviewed cells changed');
+  for (const [name, entry] of before) if (!['xl/worksheets/custom.xml', 'xl/styles.xml'].includes(name)) assert.ok(entry.raw.equals(after.get(name).raw), name + ' compressed bytes unchanged');
+  const outsideXfs = xml => xml.replace(/<cellXfs\b[^>]*>[\s\S]*?<\/cellXfs>/, '');
+  assert.equal(outsideXfs(before.get('xl/styles.xml').content.toString()), outsideXfs(after.get('xl/styles.xml').content.toString()), 'fonts, fills, borders and every other style table stay byte-for-byte intact');
+  assert.ok(output.subarray(0, input.length).equals(input));
+});
+test('an existing combined style is reused byte-for-byte and unanimous sheet colors apply when no month sample exists', opts, async t => {
+  const input = zip(colorFixture({ reuse: true, references: [{ row: 6, month: '2608', monthStyle: 2, statusStyle: 2 }] })), page = await load(t, input), output = await coloredExport(page);
+  const facts = await colorFacts(page, output); assert.equal(facts.cells.L3.id, 6); assert.equal(facts.cells.M3.id, 6);
+  assert.ok(unzip(input).get('xl/styles.xml').raw.equals(unzip(output).get('xl/styles.xml').raw), 'no style entry rewrite is needed when both combined styles already exist');
+});
+test('same-month samples take priority per column and repeated exports do not contaminate source style caches', opts, async t => {
+  const files = colorFixture({ references: [{ row: 6, month: '2609', monthStyle: 2, statusStyle: 3 }, { row: 10, month: '2608', monthStyle: 3, statusStyle: 2 }] });
+  const page = await load(t, zip(files)), september = await coloredExport(page, '2609'), august = await coloredExport(page, '2608'), repeated = await coloredExport(page, '2609');
+  const a = await colorFacts(page, september), b = await colorFacts(page, august);
+  assert.equal(a.cells.L3.style.attrs.fillId, '2'); assert.equal(a.cells.M3.style.attrs.fillId, '4');
+  assert.equal(b.cells.L3.style.attrs.fillId, '4'); assert.equal(b.cells.M3.style.attrs.fillId, '2');
+  assert.equal(a.count, 8); assert.equal(b.count, 8); assert.ok(september.equals(repeated), 'exporting a different month never mutates the loaded original workbook');
+});
+test('no reference, conflicting reference colors and conditional formatting preserve existing target colors', opts, async t => {
+  for (const mode of ['none', 'conflicting', 'conditional', 'colored']) {
+    const references = mode === 'none' ? [] : [{ row: 6, month: '2609', monthStyle: 2, statusStyle: 2 }, ...(mode === 'conflicting' ? [{ row: 10, month: '2609', monthStyle: 3, statusStyle: 3 }] : [])];
+    const files = colorFixture({ references });
+    if (mode === 'colored') files['xl/styles.xml'] = files['xl/styles.xml'].replace(targetXf(0), targetXf(3));
+    if (mode === 'conditional') files['xl/worksheets/custom.xml'] = files['xl/worksheets/custom.xml'].replace('</worksheet>', '<conditionalFormatting sqref="L3 M3"><cfRule type="expression" dxfId="0" priority="1"><formula>1=1</formula></cfRule></conditionalFormatting></worksheet>');
+    const input = zip(files), page = await load(t, input), output = await coloredExport(page), facts = await colorFacts(page, output);
+    assert.equal(facts.cells.L3.id, 1, mode); assert.equal(facts.cells.M3.id, 1, mode); assert.equal(facts.cells.L3.style.attrs.fillId, mode === 'colored' ? '3' : '0', mode);
+    assert.ok(unzip(input).get('xl/styles.xml').raw.equals(unzip(output).get('xl/styles.xml').raw), mode + ' does not modify styles');
+  }
+});
+test('missing target cells preserve row or column formats; without explicit defaults they inherit the reviewed reference format', opts, async t => {
+  for (const mode of ['row', 'column', 'reference']) {
+    const files = colorFixture({ targets: false });
+    if (mode === 'row') files['xl/worksheets/custom.xml'] = files['xl/worksheets/custom.xml'].replace('<row r="3">', '<row r="3" s="4" customFormat="1">');
+    if (mode === 'column') files['xl/worksheets/custom.xml'] = files['xl/worksheets/custom.xml'].replace('<sheetData>', '<cols><col min="12" max="13" style="5" width="12" customWidth="1"/></cols><sheetData>');
+    const page = await load(t, zip(files)), facts = await colorFacts(page, await coloredExport(page)), base = mode === 'row' ? 4 : mode === 'column' ? 5 : 2;
+    for (const ref of ['L3', 'M3']) { assert.equal(facts.cells[ref].style.attrs.fillId, '2', mode); assert.deepEqual(withoutFill(facts.cells[ref].style), withoutFill(facts.xfs[base]), mode + ' formatting'); }
+    if (mode === 'reference') { assert.equal(facts.count, 6); assert.equal(facts.cells.L3.id, 2); assert.equal(facts.cells.M3.id, 2); }
+  }
+});
+test('review color samples never leak across different worksheets', opts, async t => {
+  const files = colorFixture();
+  files['xl/workbook.xml'] = files['xl/workbook.xml'].replace('</sheets>', '<sheet name="第二表" sheetId="8" r:id="second"/></sheets>');
+  files['xl/_rels/workbook.xml.rels'] = files['xl/_rels/workbook.xml.rels'].replace('</Relationships>', `<Relationship Id="second" Type="${rns}/worksheet" Target="worksheets/second.xml"/></Relationships>`);
+  files['xl/worksheets/second.xml'] = files['xl/worksheets/custom.xml'].replace('DISPIMG("MAIN",1)', 'DISPIMG("SECOND",1)').replace('s="2" r="L6"', 's="3" r="L6"').replace('s="2" r="M6"', 's="3" r="M6"');
+  files['xl/cellimages.xml'] = files['xl/cellimages.xml'].replace('</etc:cellImages>', '<etc:cellImage><xdr:pic><xdr:cNvPr name="SECOND"/><a:blip r:embed="second"/></xdr:pic></etc:cellImage></etc:cellImages>');
+  files['xl/_rels/cellimages.xml.rels'] = files['xl/_rels/cellimages.xml.rels'].replace('</Relationships>', `<Relationship Id="second" Type="${rns}/image" Target="media/second.png"/></Relationships>`); files['xl/media/second.png'] = Buffer.from([137, 80, 78, 71, 91, 92, 93, 94]);
+  const page = await load(t, zip(files)); const first = await colorFacts(page, await coloredExport(page)), second = await colorFacts(page, await coloredExport(page, '2609', '8'), 'xl/worksheets/second.xml');
+  assert.equal(first.cells.L3.style.attrs.fillId, '2'); assert.equal(first.cells.M3.style.attrs.fillId, '2'); assert.equal(second.cells.L3.style.attrs.fillId, '4'); assert.equal(second.cells.M3.style.attrs.fillId, '4');
+});
 test('export preserves every non-sheet entry compressed bytes, original markup, formats and formulas', opts, async t => {
   const input = zip(fixture()), page = await load(t, input);
   const output = Buffer.from(await page.evaluate(async () => Array.from(new Uint8Array(await (await book.export([{ sheetId: '7', row: 3, month: '2609', status: '已核对' }])).arrayBuffer()))));
@@ -185,9 +282,41 @@ test('optional real local workbook smoke and preservation verification (never up
   assert.equal(summary.length, 2); assert.ok(summary.every(s => s.columns.amount === 'D' && s.columns.image === 'H' && s.columns.month === 'L' && s.columns.status === 'M' && s.canExport));
   const image = await page.evaluate(async () => ({ size: (await book.image(book.sheets[0].rows.find(r => r.row === 5).images[0])).size })); assert.ok(image.size > 1000);
   await page.route('http://receipt.test/export', async route => { await fs.writeFile(path.join(process.env.RECEIPT_TEST_OUTPUT_DIR || process.env.TMPDIR || '/tmp', 'receipt-workbook-preservation-test.xlsx'), route.request().postDataBuffer()); await route.fulfill({ body: 'ok' }); });
-  await page.evaluate(async () => { const clean = book.sheets.find(s => s.id === '1').rows.find(r => r.eligible && !r.issues.length && (!r.month || r.month === '2609')); if (!clean) throw new Error('No clean eligible row'); const output = await book.export([{ sheetId: '1', row: clean.row, month: '2609', status: '已核对' }]); await fetch('/export', { method: 'POST', body: output }); });
+  const patches = await page.evaluate(async () => {
+    const patches = book.sheets.map(sheet => {
+      const clean = sheet.rows.find(r => r.eligible && !r.issues.length && (!r.month || r.month === '2609'));
+      if (!clean) throw new Error('No clean eligible row in ' + sheet.name);
+      return { sheetId: sheet.id, row: clean.row, month: '2609', status: '已核对' };
+    });
+    const output = await book.export(patches); await fetch('/export', { method: 'POST', body: output }); return patches;
+  });
   const outputPath = path.join(process.env.RECEIPT_TEST_OUTPUT_DIR || process.env.TMPDIR || '/tmp', 'receipt-workbook-preservation-test.xlsx'), output = await fs.readFile(outputPath); t.after(() => fs.unlink(outputPath));
   const originalEntries = unzip(input), newEntries = unzip(output); assert.equal(originalEntries.size, newEntries.size);
-  for (const [name, entry] of originalEntries) if (name !== 'xl/worksheets/sheet1.xml') assert.ok(entry.raw.equals(newEntries.get(name).raw), name + ' unchanged');
-  assert.ok(newEntries.get('xl/worksheets/sheet1.xml').content.toString().includes('<t>2609</t>')); console.log('Local workbook summary:', summary);
+  const paths = patches.map(p => 'xl/worksheets/sheet' + p.sheetId + '.xml');
+  for (const [name, entry] of originalEntries) if (!paths.includes(name) && name !== 'xl/styles.xml') assert.ok(entry.raw.equals(newEntries.get(name).raw), name + ' unchanged');
+  for (const patch of patches) {
+    const file = 'xl/worksheets/sheet' + patch.sheetId + '.xml', refs = ['L' + patch.row, 'M' + patch.row];
+    const strip = xml => xml.replace(/<((?:[A-Za-z_][\w.-]*:)?c)\b[^>]*?(?:\/>|>[\s\S]*?<\/\1\s*>)/g, value => {
+      const ref = /\br\s*=\s*["']([^"']+)["']/.exec(value.slice(0, value.indexOf('>') + 1))?.[1]; return refs.includes(ref) ? '' : value;
+    });
+    assert.equal(strip(originalEntries.get(file).content.toString()), strip(newEntries.get(file).content.toString()), file + ': every non-target cell, image formula and extension stays unchanged');
+  }
+  const styleEvidence = await page.evaluate(({ before, after, sheets, patches }) => {
+    const parse = text => new DOMParser().parseFromString(text, 'application/xml'), all = (el, name) => [...el.getElementsByTagNameNS('*', name)], serialize = node => new XMLSerializer().serializeToString(node);
+    const oldDoc = parse(before), newDoc = parse(after), original = [...all(oldDoc, 'cellXfs')[0].children], current = [...all(newDoc, 'cellXfs')[0].children], fills = [...all(newDoc, 'fills')[0].children];
+    const colors = patches.map((patch, i) => {
+      const sheet = parse(sheets[i]); return ['L', 'M'].map(column => {
+        const cell = all(sheet, 'c').find(c => c.getAttribute('r') === column + patch.row), xf = current[Number(cell.getAttribute('s') || 0)], fill = fills[Number(xf.getAttribute('fillId') || 0)];
+        return { pattern: all(fill, 'patternFill')[0]?.getAttribute('patternType') || 'none', rgb: all(fill, 'fgColor')[0]?.getAttribute('rgb') || '', value: all(cell, 't').map(t => t.textContent).join('') };
+      });
+    });
+    return { originalXfs: original.map(serialize), preservedXfs: current.slice(0, original.length).map(serialize), oldFills: serialize(all(oldDoc, 'fills')[0]), newFills: serialize(all(newDoc, 'fills')[0]), colors };
+  }, { before: originalEntries.get('xl/styles.xml').content.toString(), after: newEntries.get('xl/styles.xml').content.toString(), sheets: paths.map(p => newEntries.get(p).content.toString()), patches });
+  assert.deepEqual(styleEvidence.preservedXfs, styleEvidence.originalXfs); assert.equal(styleEvidence.newFills, styleEvidence.oldFills);
+  for (const [index, patch] of patches.entries()) {
+    assert.deepEqual(styleEvidence.colors[index].map(c => c.value), ['2609', '已核对']);
+    if (patch.sheetId === '1') assert.ok(styleEvidence.colors[index].every(c => ['none', 'gray125'].includes(c.pattern)), '楚欣 retains no fill');
+    if (patch.sheetId === '2') assert.ok(styleEvidence.colors[index].every(c => c.pattern === 'solid' && c.rgb === 'FF92D04F'), '牛紫薇 uses the existing green review fill in both target cells');
+  }
+  console.log('Local workbook summary:', summary);
 });
