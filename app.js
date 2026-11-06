@@ -13,7 +13,48 @@ const pill = (t, k) => `<span class="pill p-${k}">${H(t)}</span>`;
 function toast(msg, ms) {
   const el = $('toast'); el.textContent = msg; el.classList.add('on');
   clearTimeout(toast._t); toast._t = setTimeout(() => el.classList.remove('on'), ms || 2600);
+  oplog(oplogKind(msg));
 }
+
+/* ============ 操作上报（门户应用日报的「谁做了什么」） ============
+   只报「动作 · 页面」，不带金额、文件内容；是谁由服务端从门户会话取。上报失败一律静默，不影响业务。
+   三个入口：成功提示（保存/导入/生成）、downloadBlob（导出）、T4 共享保存（T4 同步）。
+   后两者是确定的动作，记过之后 3 秒内的成功提示不再重复记（同一次点击只算一次）。 */
+const OPLOG_NOT_DONE = /失败|请|不能|无法|未|没有|没存|正在|无需|导出|下载|已更新到最新/;
+function oplogKind(msg) {
+  const s = String(msg == null ? '' : msg);
+  if (!s || OPLOG_NOT_DONE.test(s)) return null;
+  if (/已生成/.test(s)) return '生成报表';
+  if (/导入/.test(s)) return '导入';
+  if (/已删除/.test(s)) return '删除';
+  if (/保存|已新增|已更新|已添加/.test(s)) return '保存';
+  return null;
+}
+function oplogFileKind(filename) {
+  const s = String(filename || '');
+  if (/模版|模板/.test(s)) return null;
+  return /套表|报表|损益|日报|申报/.test(s) ? '生成报表' : '导出';
+}
+function oplogPage() {
+  try {
+    for (const d of DOMS) { const it = d.items.find(i => i.length > 1 && i[0] === CURS); if (it) return it[1]; }
+    const d = DOMS.find(x => x.id === CURS);
+    return d ? d.n : String(CURS || '');
+  } catch (_) { return ''; }
+}
+const OPLOG = { action: '', at: 0, sureAt: 0 };
+function oplog(kind, sure) {
+  if (!kind) return;
+  try {
+    const page = oplogPage(), action = page ? `${kind} · ${page}` : kind, now = Date.now();
+    if (!sure && now - OPLOG.sureAt < 3000) return;
+    if (action === OPLOG.action && now - OPLOG.at < 1500) return;
+    Object.assign(OPLOG, { action, at: now }, sure ? { sureAt: now } : null);
+    fetch('/api/oplog', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }),
+      keepalive: true, credentials: 'same-origin' }).catch(() => {});
+  } catch (_) { /* 上报不影响业务 */ }
+}
+window.financeOplog = oplog;
 function kpis(arr) {
   return `<div class="kpis">${arr.map(k => `<div class="kpi ${k.t || ''}">
     <div class="k">${H(k.k)}</div><div class="v">${k.v}${k.u ? `<small>${H(k.u)}</small>` : ''}</div>
@@ -38,6 +79,7 @@ function downloadBlob(filename, blob) {
   a.href = URL.createObjectURL(blob); a.download = filename;
   document.body.appendChild(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+  oplog(oplogFileKind(filename), true);
 }
 function download(filename, content) {
   downloadBlob(filename, new Blob(['﻿' + content], { type: 'text/csv;charset=utf-8' }));
