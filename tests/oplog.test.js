@@ -23,6 +23,7 @@ const lines = () => fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').tr
 before(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'finance-oplog-'));
   fs.copyFileSync(path.join(ROOT, 'server.js'), path.join(root, 'server.js'));
+  fs.copyFileSync(path.join(ROOT, 'heartbeat.js'), path.join(root, 'heartbeat.js'));
   fs.cpSync(path.join(ROOT, 'server'), path.join(root, 'server'), { recursive: true });
   logFile = path.join(root, 'oplog', 'oplog.jsonl');
   const port = await new Promise(resolve => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
@@ -119,4 +120,24 @@ test('one click is reported once and a failed report never reaches the business 
   const broken = loadApp(() => { throw new Error('no fetch'); });
   assert.doesNotThrow(() => vm.runInContext("toast('已保存')", broken));
   await new Promise(r => setTimeout(r, 10));   // 被拒绝的上报不能变成未处理的 rejection
+});
+
+test('heartbeat writes at most one line per person per minute, identity from the portal session', async () => {
+  const hbFile = path.join(path.dirname(logFile), 'heartbeat.jsonl');
+  const hb = (headers = {}) => fetch(`${base}/api/hb`, { method: 'POST', headers: { Cookie: cookie(), ...headers }, body: '{"portalUid":"1"}' });
+  assert.equal((await fetch(`${base}/api/hb`, { method: 'POST' })).status, 401);
+  assert.equal((await hb()).status, 204);
+  assert.equal((await hb()).status, 204);
+  const rows = fs.readFileSync(hbFile, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+  assert.equal(rows.length, 1);
+  assert.deepEqual(Object.keys(rows[0]).sort(), ['at', 'name', 'portalUid', 'tenantId']);
+  assert.equal(rows[0].portalUid, '1042');
+  assert.equal(fs.statSync(hbFile).mode & 0o777, 0o600);
+});
+
+test('heartbeat script is served and loaded on the page', async () => {
+  const r = await fetch(`${base}/heartbeat.js`);
+  assert.equal(r.status, 200);
+  assert.match(await r.text(), /\/api\/hb/);
+  assert.match(fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8'), /<script src="\.\/heartbeat\.js"><\/script>/);
 });

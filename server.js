@@ -13,7 +13,7 @@ const PUBLIC_FILES = new Set([
   'index.html', 'app.css', 'app.js', 'acct.js', 'rpt.js', 'inv.js', 'base.js',
   'cons.js', 'dash.js', 'fa.js', 'pay.js', 'rec.js', 't1.js', 't3.js',
   't4.js', 't4-sync.js', 't4-allocation.js', 't4-returns.js', 'lib/xlsx-lite.js', 'lib/xlsx-write.js',
-  'receipt-check.js', 'receipt-check.css', 'lib/receipt-rules.js', 'lib/receipt-workbook.js',
+  'receipt-check.js', 'receipt-check.css', 'lib/receipt-rules.js', 'lib/receipt-workbook.js', 'heartbeat.js',
 ]);
 
 function versionPageAssets(html) {
@@ -61,6 +61,8 @@ const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const OPLOG_FILE = String(process.env.FINANCE_OPLOG_FILE || '');
 const OPLOG_PER_MINUTE = 120;
 const oplogRate = new Map();
+// 使用时长心跳：同一人一分钟只记一行，写在操作记录旁边的 heartbeat.jsonl
+const heartbeatMinute = new Map();
 
 function requireT4Auth(req, res) {
   if (!SESSION_SECRET) {
@@ -159,6 +161,26 @@ async function handleOplog(req, res) {
       name: String(user.name || ''), action }) + '\n';
     await fs.promises.mkdir(path.dirname(OPLOG_FILE), { recursive: true });
     await fs.promises.appendFile(OPLOG_FILE, line, { mode: 0o600 });
+  }
+  res.writeHead(204, { 'Cache-Control': 'no-store' });
+  res.end();
+}
+
+// 心跳：页面在前台且有操作时每分钟一次；身份只认门户会话，请求体不看。
+async function handleHeartbeat(req, res) {
+  const user = sessionPayload(req);
+  if (!user) return sendText(res, 401, '需要门户登录');
+  const key = `${user.tenantId}:${user.portalUid}`, minute = Math.floor(Date.now() / 60000);
+  if (heartbeatMinute.get(key) !== minute) {
+    heartbeatMinute.set(key, minute);
+    if (heartbeatMinute.size > 1000) for (const [k, v] of heartbeatMinute) if (v !== minute) heartbeatMinute.delete(k);
+    if (OPLOG_FILE) {
+      const line = JSON.stringify({ at: new Date().toISOString(), portalUid: String(user.portalUid), tenantId: String(user.tenantId),
+        name: String(user.name || '') }) + '\n';
+      const file = path.join(path.dirname(OPLOG_FILE), 'heartbeat.jsonl');
+      await fs.promises.mkdir(path.dirname(file), { recursive: true });
+      await fs.promises.appendFile(file, line, { mode: 0o600 });
+    }
   }
   res.writeHead(204, { 'Cache-Control': 'no-store' });
   res.end();
@@ -397,6 +419,11 @@ const server = http.createServer((req, res) => {
   }
   if (urlPath === '/sso/callback' && req.method === 'GET') {
     handleSsoCallback(req, res).catch(e => sendText(res, 500, 'SSO 回调失败：' + e.message));
+    return;
+  }
+
+  if (urlPath === '/api/hb' && req.method === 'POST') {
+    handleHeartbeat(req, res).catch(() => { if (!res.headersSent) sendText(res, 500, '心跳写入失败'); else res.end(); });
     return;
   }
 
