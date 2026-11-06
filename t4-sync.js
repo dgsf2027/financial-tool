@@ -165,7 +165,10 @@
         const { r, x } = await request({ method: 'PUT',
           headers: { 'Content-Type': 'application/json', 'X-T4-User': user || 'portal-user' },
           body: JSON.stringify({ baseVersion: latest.version, changes }) }, 30000);
-        if (r.ok) return accept(x);
+        if (r.ok) {
+          try { if (typeof window.financeOplog === 'function') window.financeOplog('T4 同步', true); } catch (_) {}
+          return accept(x);
+        }
         if (!['field_conflict', 'version_conflict'].includes(x.error)) throw failure(x, r.status);
         // A failed conflict must leave the acknowledged snapshot untouched.
         // Repeated clicks cannot silently turn stale edits into an overwrite.

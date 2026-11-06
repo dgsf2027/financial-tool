@@ -57,6 +57,10 @@ const PORTAL_PUBLIC_URL = String(process.env.T4_PORTAL_PUBLIC_URL || 'https://po
 const SESSION_SECRET = String(process.env.T4_SESSION_SECRET || '');
 const PROXY_SECRET = String(process.env.T4_PROXY_SECRET || '');
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+// 操作记录：业务数据在浏览器里，服务端只记「谁在什么时候做了什么」，给门户应用日报读。未配置则不记。
+const OPLOG_FILE = String(process.env.FINANCE_OPLOG_FILE || '');
+const OPLOG_PER_MINUTE = 120;
+const oplogRate = new Map();
 
 function requireT4Auth(req, res) {
   if (!SESSION_SECRET) {
@@ -133,6 +137,31 @@ function proxyT4Workspace(req, res) {
   const upstream = http.request(opts, r => { res.writeHead(r.statusCode || 502, r.headers); r.pipe(res); });
   upstream.on('error', e => { if (!res.headersSent) sendText(res, 503, 'T4 sync unavailable: ' + e.message); else res.destroy(); });
   req.pipe(upstream);
+}
+
+// 身份只认门户会话；前端只能说做了什么（短文本），不能说是谁。
+async function handleOplog(req, res) {
+  const user = sessionPayload(req);
+  if (!user) return sendText(res, 401, '需要门户登录');
+  if (!/^application\/json\b/i.test(String(req.headers['content-type'] || ''))) return sendText(res, 415, '需要 JSON');
+  let action;
+  try { action = JSON.parse((await readBody(req, 4096)).toString('utf-8') || '{}').action; }
+  catch (_) { return sendText(res, 400, '格式错误'); }
+  action = typeof action === 'string' ? action.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 80) : '';
+  if (!action) return sendText(res, 400, '缺少 action');
+  const key = `${user.tenantId}:${user.portalUid}`, minute = Math.floor(Date.now() / 60000);
+  const rate = oplogRate.get(key);
+  if (rate && rate.minute === minute && rate.count >= OPLOG_PER_MINUTE) return sendText(res, 429, '操作记录过于频繁');
+  oplogRate.set(key, rate && rate.minute === minute ? { minute, count: rate.count + 1 } : { minute, count: 1 });
+  if (oplogRate.size > 1000) for (const [k, v] of oplogRate) if (v.minute !== minute) oplogRate.delete(k);
+  if (OPLOG_FILE) {
+    const line = JSON.stringify({ at: new Date().toISOString(), portalUid: String(user.portalUid), tenantId: String(user.tenantId),
+      name: String(user.name || ''), action }) + '\n';
+    await fs.promises.mkdir(path.dirname(OPLOG_FILE), { recursive: true });
+    await fs.promises.appendFile(OPLOG_FILE, line, { mode: 0o600 });
+  }
+  res.writeHead(204, { 'Cache-Control': 'no-store' });
+  res.end();
 }
 
 function readBody(req, limit = 60 * 1024 * 1024) {
@@ -368,6 +397,11 @@ const server = http.createServer((req, res) => {
   }
   if (urlPath === '/sso/callback' && req.method === 'GET') {
     handleSsoCallback(req, res).catch(e => sendText(res, 500, 'SSO 回调失败：' + e.message));
+    return;
+  }
+
+  if (urlPath === '/api/oplog' && req.method === 'POST') {
+    handleOplog(req, res).catch(() => { if (!res.headersSent) sendText(res, 500, '操作记录写入失败'); else res.end(); });
     return;
   }
 
